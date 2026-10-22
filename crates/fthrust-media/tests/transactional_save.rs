@@ -71,7 +71,7 @@ impl SaveFs for FakeFs {
         let mut f = self.0.borrow_mut();
         f.ops.push(format!("sync_file:{}", name(path)));
         if f.sync_file_fails {
-            return Err(io::Error::new(io::ErrorKind::Other, "io error"));
+            return Err(io::Error::other("io error"));
         }
         Ok(())
     }
