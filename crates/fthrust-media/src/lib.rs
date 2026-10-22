@@ -4,6 +4,7 @@
 #![deny(missing_docs)]
 
 pub mod ffi;
+pub mod replay_interval;
 
 use std::sync::OnceLock;
 
