@@ -9,6 +9,7 @@ pub mod navigation;
 mod paths;
 pub mod presets;
 pub mod settings;
+pub mod theme;
 
 pub use atomic_json::{read_json, write_json_atomic};
 pub use error::{CoreError, Result};
