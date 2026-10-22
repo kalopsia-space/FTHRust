@@ -15,6 +15,7 @@ rusqlite.workspace = true
 zip.workspace = true
 tracing.workspace = true
 time.workspace = true
+uuid.workspace = true
 nix.workspace = true
 
 [dev-dependencies]
