@@ -110,10 +110,13 @@ fn import_unknown_font_family_falls_back_to_oswald() {
     let z = tmp.path().join("t.zip");
     make_zip(
         &z,
-        &[(
-            "theme.json",
-            br#"{"fonts":{"body":"Nonexistent","display":"Kept"},"font_files":{"Kept":"k.ttf"}}"#,
-        )],
+        &[
+            (
+                "theme.json",
+                br#"{"fonts":{"body":"Nonexistent","display":"Kept"},"font_files":{"Kept":"k.ttf"}}"#,
+            ),
+            ("fonts/k.ttf", b"F"),
+        ],
     );
     s.import_zip(&z).unwrap();
     assert_eq!(s.data.fonts["body"], "Oswald");
@@ -145,4 +148,41 @@ fn set_custom_sound_rejects_unknown_key() {
         Err(fthrust_core::CoreError::Invalid(_))
     ));
     assert!(s.data.sounds.is_empty());
+}
+
+#[test]
+fn import_drops_traversal_values() {
+    let (tmp, mut s) = store();
+    let z = tmp.path().join("t.zip");
+    make_zip(
+        &z,
+        &[
+            (
+                "theme.json",
+                br#"{"icons":{"play.png":"../x.svg","pause.png":"ok.svg","close.png":"missing.svg"}}"#,
+            ),
+            ("icons/ok.svg", b"S"),
+        ],
+    );
+    s.import_zip(&z).unwrap();
+    assert_eq!(s.data.icons.len(), 1);
+    assert_eq!(s.data.icons["pause.png"], "ok.svg");
+}
+
+#[test]
+fn custom_paths_never_escape_theme_dir() {
+    let (tmp, mut s) = store();
+    s.data
+        .icons
+        .insert("play.png".into(), "../../etc/passwd".into());
+    s.data
+        .sounds
+        .insert("start".into(), "../../etc/passwd".into());
+    let dir = FthrPaths::new(tmp.path()).theme_icons_dir();
+    if let Some(p) = s.custom_icon_path("play.png") {
+        assert!(p.starts_with(dir));
+    }
+    if let Some(p) = s.custom_sound_path("start") {
+        assert!(p.starts_with(FthrPaths::new(tmp.path()).theme_sounds_dir()));
+    }
 }

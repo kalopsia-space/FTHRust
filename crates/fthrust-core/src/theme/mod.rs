@@ -187,19 +187,15 @@ impl ThemeStore {
 
     /// Existing custom icon file for `logical`, if any.
     pub fn custom_icon_path(&self, logical: &str) -> Option<PathBuf> {
-        let p = self
-            .paths
-            .theme_icons_dir()
-            .join(self.data.icons.get(logical)?);
+        let name = Path::new(self.data.icons.get(logical)?).file_name()?;
+        let p = self.paths.theme_icons_dir().join(name);
         p.exists().then_some(p)
     }
 
     /// Existing custom sound file for `key`, if any.
     pub fn custom_sound_path(&self, key: &str) -> Option<PathBuf> {
-        let p = self
-            .paths
-            .theme_sounds_dir()
-            .join(self.data.sounds.get(key)?);
+        let name = Path::new(self.data.sounds.get(key)?).file_name()?;
+        let p = self.paths.theme_sounds_dir().join(name);
         p.exists().then_some(p)
     }
 

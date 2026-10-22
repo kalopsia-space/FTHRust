@@ -32,12 +32,26 @@ fn classify(name: &str) -> Option<(Folder, String)> {
         "fonts" => Folder::Fonts,
         _ => return None,
     };
-    let bad = file.is_empty()
-        || file == "."
-        || file == ".."
-        || file.contains(['/', '\\', '\0'])
-        || Path::new(file).is_absolute();
-    (!bad).then(|| (folder, file.to_string()))
+    is_plain_file_name(file).then(|| (folder, file.to_string()))
+}
+
+/// True for a bare file name: non-empty, not `.`/`..`, no separators or NUL.
+pub(super) fn is_plain_file_name(name: &str) -> bool {
+    !(name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\', '\0'])
+        || Path::new(name).is_absolute())
+}
+
+/// Keeps only entries whose value is a plain name present in `present`.
+fn retain_present(
+    map: BTreeMap<String, String>,
+    present: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    map.into_iter()
+        .filter(|(_, v)| is_plain_file_name(v) && present.contains(v))
+        .collect()
 }
 
 fn string_map(v: Option<&serde_json::Value>) -> Result<BTreeMap<String, String>> {
@@ -87,18 +101,24 @@ impl ThemeStore {
         zw.start_file("theme.json", opts).map_err(zip_err)?;
         zw.write_all(json.as_bytes())?;
         for name in self.data.icons.values() {
+            let Some(name) = Path::new(name).file_name().map(|n| n.to_string_lossy()) else {
+                continue;
+            };
             add_file(
                 &mut zw,
                 opts,
-                &self.paths.theme_icons_dir().join(name),
+                &self.paths.theme_icons_dir().join(&*name),
                 &format!("icons/{name}"),
             )?;
         }
         for name in self.data.sounds.values() {
+            let Some(name) = Path::new(name).file_name().map(|n| n.to_string_lossy()) else {
+                continue;
+            };
             add_file(
                 &mut zw,
                 opts,
-                &self.paths.theme_sounds_dir().join(name),
+                &self.paths.theme_sounds_dir().join(&*name),
                 &format!("sounds/{name}"),
             )?;
         }
@@ -154,6 +174,7 @@ impl ThemeStore {
             }
         }
         let mut assets: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let mut present: [std::collections::BTreeSet<String>; 3] = Default::default();
         for i in 0..zf.len() {
             let mut entry = zf.by_index(i).map_err(zip_err)?;
             if entry.is_dir() {
@@ -167,6 +188,7 @@ impl ThemeStore {
                 Folder::Sounds => self.paths.theme_sounds_dir(),
                 Folder::Fonts => self.paths.theme_fonts_dir(),
             };
+            present[folder as usize].insert(file.clone());
             let mut body = Vec::new();
             entry.read_to_end(&mut body)?;
             assets.push((dir.join(file), body));
@@ -182,7 +204,7 @@ impl ThemeStore {
         if !obj.contains_key("icon_tints") {
             icon_tints.insert("_global".into(), super::DEFAULT_ICON_TINT.into());
         }
-        let font_files = string_map(obj.get("font_files"))?;
+        let font_files = retain_present(string_map(obj.get("font_files"))?, &present[2]);
         let defaults = default_fonts();
         for (role, default) in &defaults {
             let family = fonts.get(role).cloned().unwrap_or_else(|| default.clone());
@@ -196,8 +218,8 @@ impl ThemeStore {
             palette_version: 4,
             typography_version: 2,
             colors,
-            icons: string_map(obj.get("icons"))?,
-            sounds: string_map(obj.get("sounds"))?,
+            icons: retain_present(string_map(obj.get("icons"))?, &present[0]),
+            sounds: retain_present(string_map(obj.get("sounds"))?, &present[1]),
             icon_tints,
             capture_card,
             fonts,
