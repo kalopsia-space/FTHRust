@@ -84,9 +84,9 @@ impl FthrPaths {
     pub fn app_log(&self) -> PathBuf {
         self.logs_dir().join("fthr.log")
     }
-    /// `logs/crash.log`.
+    /// `logs/fthr-crash.log`.
     pub fn crash_log(&self) -> PathBuf {
-        self.logs_dir().join("crash.log")
+        self.logs_dir().join("fthr-crash.log")
     }
     /// `logs/engine.log`.
     pub fn engine_log(&self) -> PathBuf {

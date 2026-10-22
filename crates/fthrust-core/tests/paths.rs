@@ -47,6 +47,8 @@ fn every_accessor_is_under_root() {
         assert!(path.starts_with(&root), "{path:?} not under {root:?}");
     }
     assert_eq!(p.app_log().file_name().unwrap(), "fthr.log");
+    assert_eq!(p.crash_log().file_name().unwrap(), "fthr-crash.log");
+    assert_eq!(p.engine_log().file_name().unwrap(), "engine.log");
     assert_eq!(
         p.legacy_clips_directory(),
         PathBuf::from("/home/u/FTHR_Clips")
