@@ -20,13 +20,9 @@ pub const MAX_CACHE_ENTRIES: usize = 8192;
 ///
 /// `canonical_path` must already be canonicalised by the caller.
 pub fn thumbnail_key(canonical_path: &Path, size: u64, mtime_ns: i128) -> String {
-    let text = format!(
-        "{}|{}|{}|aspect-v4",
-        canonical_path.display(),
-        size,
-        mtime_ns
-    );
-    hex(&Md5::digest(text.as_bytes()))
+    let mut bytes = canonical_path.as_os_str().as_encoded_bytes().to_vec();
+    bytes.extend_from_slice(format!("|{size}|{mtime_ns}|aspect-v4").as_bytes());
+    hex(&Md5::digest(&bytes))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -64,20 +60,28 @@ impl MetaV3 {
         )
     }
 
-    /// Parse exactly six whitespace-separated fields; `None` on any mismatch.
+    /// Parse exactly six whitespace-separated fields; `None` on any mismatch or
+    /// invalid value (non-finite or non-positive duration, zero size, bad fps).
     pub fn parse(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split_whitespace().collect();
         if parts.len() != 6 {
             return None;
         }
-        Some(Self {
+        let meta = Self {
             duration: parts[0].parse().ok()?,
             width: parts[1].parse().ok()?,
             height: parts[2].parse().ok()?,
             fps: parts[3].parse().ok()?,
             video_bitrate: parts[4].parse().ok()?,
             total_bitrate: parts[5].parse().ok()?,
-        })
+        };
+        let valid = meta.duration.is_finite()
+            && meta.duration > 0.0
+            && meta.width > 0
+            && meta.height > 0
+            && meta.fps.is_finite()
+            && meta.fps >= 0.0;
+        valid.then_some(meta)
     }
 }
 
@@ -181,7 +185,7 @@ pub fn prune_with_limits(
     let mut count = groups.len();
     let mut order: Vec<(String, SystemTime)> =
         groups.iter().map(|(k, g)| (k.clone(), g.newest)).collect();
-    order.sort_by_key(|(_, newest)| *newest);
+    order.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
     for (key, _) in order {
         if total <= max_bytes && count <= max_entries {
             break;

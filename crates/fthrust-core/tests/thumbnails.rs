@@ -24,6 +24,18 @@ fn key_matches_python_md5() {
 }
 
 #[test]
+fn key_uses_raw_path_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let key = thumbnail_key(Path::new(OsStr::from_bytes(b"/a/\xff.mp4")), 10, 20);
+    let expected: String = Md5::digest(b"/a/\xff.mp4|10|20|aspect-v4")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(key, expected);
+}
+
+#[test]
 fn meta_round_trip_six_decimals() {
     let m = MetaV3 {
         duration: 12.5,
@@ -38,6 +50,20 @@ fn meta_round_trip_six_decimals() {
     assert_eq!(MetaV3::parse(&text), Some(m));
     assert_eq!(MetaV3::parse("1.0 2 3"), None);
     assert_eq!(MetaV3::parse("a 1 2 3.0 4 5"), None);
+    for bad in [
+        "0 1 2 3.0 4 5",
+        "-1.0 1 2 3.0 4 5",
+        "inf 1 2 3.0 4 5",
+        "NaN 1 2 3.0 4 5",
+        "1.0 0 2 3.0 4 5",
+        "1.0 1 0 3.0 4 5",
+        "1.0 1 2 -1.0 4 5",
+        "1.0 1 2 inf 4 5",
+        "1.0 1 2 3.0 -4 5",
+        "1.0 1 2 3.0 4 -5",
+    ] {
+        assert_eq!(MetaV3::parse(bad), None, "{bad}");
+    }
 }
 
 #[test]
