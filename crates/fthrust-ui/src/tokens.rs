@@ -320,3 +320,31 @@ pub mod motion {
     /// Smooth-scroll time constant.
     pub const SCROLL_TAU_MS: u64 = 35;
 }
+
+/// Installs the parts of `egui::Style` the shell relies on globally:
+/// no item spacing surprises, no rounding on frames by default, the body
+/// font, selection and tooltip colours.
+pub fn install_style(ctx: &egui::Context, tokens: &Tokens) {
+    ctx.set_theme(egui::Theme::Dark);
+    ctx.all_styles_mut(|style| {
+        style.spacing.item_spacing = egui::Vec2::ZERO;
+        style.spacing.window_margin = egui::Margin::ZERO;
+        style.spacing.button_padding = egui::Vec2::ZERO;
+        style.spacing.interact_size = egui::Vec2::new(0.0, 0.0);
+        style.visuals.dark_mode = true;
+        style.visuals.panel_fill = tokens.color(Color::Bg);
+        style.visuals.window_fill = tokens.color(Color::Bg);
+        style.visuals.extreme_bg_color = tokens.color(Color::Surface2);
+        style.visuals.override_text_color = Some(tokens.color(Color::Text));
+        style.visuals.selection.bg_fill = tokens.color(Color::AccentSoft);
+        style.visuals.selection.stroke = egui::Stroke::new(1.0, tokens.color(Color::Accent));
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.window_shadow = egui::Shadow::NONE;
+        style.visuals.popup_shadow = egui::Shadow::NONE;
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(geom::RADIUS as u8);
+        style.visuals.window_corner_radius = egui::CornerRadius::same(geom::RADIUS as u8);
+        style.visuals.window_stroke = egui::Stroke::new(1.0, tokens.color(Color::BorderHi));
+        style.interaction.tooltip_delay = 0.5;
+        style.interaction.show_tooltips_only_when_still = false;
+    });
+}
