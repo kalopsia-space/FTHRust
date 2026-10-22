@@ -21,5 +21,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 nix = { version = "0.31", features = ["fs", "user"] }
-time = { version = "0.3", features = ["formatting", "macros"] }
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4"] }

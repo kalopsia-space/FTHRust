@@ -7,6 +7,7 @@ pub mod capture_config;
 pub mod capture_health;
 pub mod clip_files;
 pub mod clip_metadata;
+pub mod diagnostics;
 mod error;
 pub mod error_codes;
 pub mod export_presets;
