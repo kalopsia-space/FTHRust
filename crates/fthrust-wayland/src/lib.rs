@@ -4,3 +4,4 @@
 #![deny(missing_docs)]
 
 pub mod dispatch;
+pub mod frame;
