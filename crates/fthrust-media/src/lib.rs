@@ -6,6 +6,7 @@
 pub mod audio_timing;
 pub mod ffi;
 pub mod replay_interval;
+pub mod ring;
 
 use std::sync::OnceLock;
 
