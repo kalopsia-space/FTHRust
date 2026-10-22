@@ -3,9 +3,11 @@
 
 mod atomic_json;
 mod error;
+pub mod export_presets;
 pub mod hotkeys;
 pub mod navigation;
 mod paths;
+pub mod presets;
 pub mod settings;
 
 pub use atomic_json::{read_json, write_json_atomic};
