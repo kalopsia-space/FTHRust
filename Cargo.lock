@@ -54,6 +54,7 @@ dependencies = [
  "futures-util",
  "getrandom",
  "serde",
+ "serde_repr",
  "tokio",
  "zbus",
 ]
@@ -615,6 +616,7 @@ dependencies = [
  "ashpd",
  "fthrust-core",
  "fthrust-wayland",
+ "futures-util",
  "libspa",
  "nix",
  "pipewire",
