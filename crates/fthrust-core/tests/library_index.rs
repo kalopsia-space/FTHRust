@@ -185,3 +185,22 @@ fn sorts_and_filters() {
     assert_eq!(apply(&recs, Filter::Clips, Sort::Newest).len(), 3);
     assert!(apply(&recs, Filter::Imported, Sort::Newest).is_empty());
 }
+
+#[test]
+fn duplicate_import_root_is_ignored() {
+    let d = tempfile::tempdir().unwrap();
+    touch(&d.path().join("a.mp4"), 1);
+    let r = ScanRoots {
+        owned: d.path().to_path_buf(),
+        imported: vec![
+            d.path().to_path_buf(),
+            d.path().join("."),
+            d.path().to_path_buf(),
+        ],
+    };
+    let recs = run(&r);
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].root_ids, vec![0]);
+    assert!(!recs[0].imported);
+    assert_eq!(watched_dirs(&r), vec![d.path().to_path_buf()]);
+}

@@ -104,16 +104,29 @@ enum Event<'a> {
     },
 }
 
-fn all_roots(roots: &ScanRoots) -> Vec<&Path> {
-    std::iter::once(roots.owned.as_path())
+/// Roots with their original indices and canonical paths. A root whose
+/// canonical path equals an earlier one (the owned root always wins) is dropped.
+fn effective_roots(roots: &ScanRoots) -> Vec<(usize, &Path, PathBuf)> {
+    let mut seen: Vec<PathBuf> = vec![];
+    let mut out = vec![];
+    for (id, root) in std::iter::once(roots.owned.as_path())
         .chain(roots.imported.iter().map(PathBuf::as_path))
-        .collect()
+        .enumerate()
+    {
+        let canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if seen.contains(&canon) {
+            continue;
+        }
+        seen.push(canon.clone());
+        out.push((id, root, canon));
+    }
+    out
 }
 
 /// Depth-first walk of every root without following symlinks. `visit`
 /// returns `false` to stop the whole walk.
 fn walk(roots: &ScanRoots, visit: &mut dyn FnMut(Event<'_>) -> bool) {
-    for (root_id, root) in all_roots(roots).into_iter().enumerate() {
+    for (root_id, root, _) in effective_roots(roots) {
         if !root.is_dir() {
             continue;
         }
@@ -172,10 +185,10 @@ pub fn scan(
     cancel: &AtomicBool,
     mut on_batch: impl FnMut(Vec<LibraryRecord>),
 ) -> Result<Vec<LibraryRecord>> {
-    let imported_canon: Vec<PathBuf> = roots
-        .imported
-        .iter()
-        .filter_map(|r| std::fs::canonicalize(r).ok())
+    let imported_canon: Vec<PathBuf> = effective_roots(roots)
+        .into_iter()
+        .filter(|(id, _, _)| *id > 0)
+        .map(|(_, _, canon)| canon)
         .collect();
     let mut records: Vec<LibraryRecord> = vec![];
     let mut index: HashMap<PathBuf, usize> = HashMap::new();

@@ -1,6 +1,7 @@
 use fthrust_core::CoreError;
 use fthrust_core::library_ownership::{
     Ownership, add_import_root, classify_media_path, delete_owned_media, normalize_import_root,
+    remove_import_root,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -112,4 +113,16 @@ fn delete_removes_sidecar_manifest() {
     fs::write(&side, b"{}").unwrap();
     delete_owned_media(&p, &f.owned, &[]).unwrap();
     assert!(!p.exists() && !side.exists());
+}
+
+#[test]
+fn remove_import_root_only_changes_registration() {
+    let f = fx();
+    let mut list = vec![];
+    add_import_root(&mut list, &f.imported);
+    let alias = f.imported.join("..").join("imported");
+    assert!(remove_import_root(&mut list, &alias));
+    assert!(!remove_import_root(&mut list, &f.imported));
+    assert!(list.is_empty());
+    assert!(f.imported.join("a.mp4").exists());
 }

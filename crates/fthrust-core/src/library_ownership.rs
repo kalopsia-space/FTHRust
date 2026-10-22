@@ -2,7 +2,7 @@
 
 use crate::clip_files::audio_manifest_sidecar;
 use crate::error::{CoreError, Result};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Who owns a media file for deletion purposes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,8 +15,24 @@ pub enum Ownership {
     External,
 }
 
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn resolve(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    std::fs::canonicalize(p).unwrap_or_else(|_| lexical(p))
 }
 
 /// Classify `p` after resolving symlinks; imported roots win over the owned root.
@@ -46,9 +62,10 @@ pub fn delete_owned_media(p: &Path, owned_root: &Path, imported_roots: &[PathBuf
     }
 }
 
-/// Resolve an import root to its canonical absolute form.
+/// Resolve an import root to its canonical absolute form; if resolution
+/// fails the lexically normalised path is returned.
 pub fn normalize_import_root(p: &Path) -> Result<PathBuf> {
-    Ok(std::fs::canonicalize(p)?)
+    Ok(resolve(p))
 }
 
 /// Add `p` to `list` unless an equivalent resolved path is present.
@@ -60,4 +77,13 @@ pub fn add_import_root(list: &mut Vec<PathBuf>, p: &Path) -> bool {
     }
     list.push(resolved);
     true
+}
+
+/// Remove the entry equal to `p` (by resolved path) from `list`. Returns
+/// whether something was removed. Never touches files.
+pub fn remove_import_root(list: &mut Vec<PathBuf>, p: &Path) -> bool {
+    let target = resolve(p);
+    let before = list.len();
+    list.retain(|r| resolve(r) != target);
+    list.len() != before
 }
