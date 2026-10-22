@@ -73,9 +73,21 @@ impl AudioRing {
         }
     }
 
-    /// The `duration_ms` window ending at `end_ns` (silence-padded).
+    /// The `duration_ms` window ending at `end_ns` (silence-padded). Only
+    /// blocks that can overlap the window are copied, so a long ring is not
+    /// cloned under the lock the capture callback needs.
     pub fn window(&self, end_ns: i64, duration_ms: u32) -> Vec<f32> {
-        let blocks: Vec<AudioBlock> = self.blocks.iter().cloned().collect();
+        let start_ns = end_ns - i64::from(duration_ms) * 1_000_000 - 100_000_000;
+        let blocks: Vec<AudioBlock> = self
+            .blocks
+            .iter()
+            .filter(|b| {
+                let len_ns =
+                    (b.samples.len() / CHANNELS) as i64 * 1_000_000_000 / SAMPLE_RATE as i64;
+                b.start_ns + len_ns >= start_ns && b.start_ns <= end_ns
+            })
+            .cloned()
+            .collect();
         assemble_window(&blocks, CHANNELS, SAMPLE_RATE, end_ns, duration_ms)
     }
 
@@ -233,6 +245,8 @@ impl AudioProvider for SyntheticAudio {
         let thread = {
             let mut inner = self.inner.lock().unwrap();
             inner.running = false;
+            inner.system = None;
+            inner.microphone = None;
             inner.thread.take()
         };
         if let Some(t) = thread {

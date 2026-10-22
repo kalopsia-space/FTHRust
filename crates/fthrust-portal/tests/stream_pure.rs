@@ -1,4 +1,4 @@
-use fthrust_portal::stream::{FrameLayout, choose_pts, copy_rows, monotonic};
+use fthrust_portal::stream::{FrameLayout, choose_pts, copy_rows, monotonic, next_timestamp};
 use fthrust_wayland::frame::{BgraFrame, PixelLayout};
 
 #[test]
@@ -54,4 +54,19 @@ fn pts_rule_and_monotonic() {
     assert_eq!(monotonic(100, 50), 101);
     assert_eq!(monotonic(100, 100), 101);
     assert_eq!(monotonic(100, 200), 200);
+}
+
+#[test]
+fn repeated_frames_take_the_current_time() {
+    // A fresh frame keeps its (monotonic-clamped) pts; a repeat of the last
+    // frame is stamped now, never last + 1, so the engine's throttle still
+    // sees time advancing on a static screen.
+    assert_eq!(
+        next_timestamp(100, Some(90), 500),
+        101,
+        "fresh but older than last: clamped"
+    );
+    assert_eq!(next_timestamp(100, Some(300), 500), 300);
+    assert_eq!(next_timestamp(100, None, 500), 500);
+    assert_eq!(next_timestamp(600, None, 500), 601);
 }

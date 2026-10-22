@@ -115,7 +115,8 @@ impl OutputTransform {
         })
     }
 
-    fn swaps_axes(self) -> bool {
+    /// Whether the transform swaps width and height.
+    pub fn swaps_axes(self) -> bool {
         matches!(
             self,
             OutputTransform::Rot90
@@ -237,7 +238,10 @@ pub fn normalize(view: &FrameView<'_>, out: &mut BgraFrame) -> Result<(), FrameE
         let sy = if view.y_invert { h - 1 - y } else { y };
         &view.data[sy * view.stride..sy * view.stride + row]
     };
-    if view.layout == PixelLayout::Bgra {
+    // BGRA and BGRX are copied by row: the encoder never reads the fourth
+    // byte, so XRGB's padding byte is left as delivered (a per-pixel pass
+    // at 1440p60 costs more than the encode itself).
+    if view.layout.is_bgra_bytes() {
         for y in 0..h {
             stage.extend_from_slice(src_row(y));
         }

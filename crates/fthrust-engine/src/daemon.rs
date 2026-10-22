@@ -19,6 +19,8 @@ use crate::save::{RecordWorker, SaveRequest, SaveWorker};
 
 /// Heartbeat period.
 pub const HEARTBEAT: Duration = Duration::from_millis(500);
+/// Longest a shutdown waits for a save in flight.
+pub const SHUTDOWN_SAVE_WAIT: Duration = Duration::from_secs(60);
 
 /// Why the service could not run.
 #[derive(Debug, thiserror::Error)]
@@ -38,7 +40,14 @@ enum Internal {
     Signal,
 }
 
+struct ConfigureOutcome {
+    engine: CaptureEngine,
+    result: Result<(Vec<String>, Vec<crate::engine::StartupNotice>), crate::engine::StartupError>,
+    fresh: bool,
+}
+
 struct Service {
+    configuring: Option<tokio::task::JoinHandle<ConfigureOutcome>>,
     deps: Option<EngineDeps>,
     default_override: Option<BackendKind>,
     engine: Option<CaptureEngine>,
@@ -99,65 +108,43 @@ impl Service {
                 if config.backend_override.is_none() {
                     config.backend_override = self.default_override;
                 }
-                match self.engine.as_mut() {
+                if self.configuring.is_some() {
+                    self.emit(
+                        events,
+                        Event::StartupError {
+                            code: "ENGINE_BUSY".into(),
+                            detail: "a Configure is already being applied".into(),
+                        },
+                    );
+                    return None;
+                }
+                // Starting or reconfiguring can take seconds (backend dialogs,
+                // driver init): run it off the loop so heartbeats, signals and
+                // save acknowledgements keep flowing.
+                let job: Box<dyn FnOnce() -> ConfigureOutcome + Send> = match self.engine.take() {
                     None => {
                         let deps = self.deps.take()?;
-                        let mut engine = CaptureEngine::new(config, deps);
-                        let warnings = engine.config().normalized().1;
-                        match engine.start() {
-                            Ok(notices) => {
-                                for n in notices {
-                                    let e = Event::StartupWarning {
-                                        code: n.code,
-                                        detail: n.detail,
-                                    };
-                                    self.startup_events.push(e.clone());
-                                    let _ = events.try_send(e);
-                                }
-                                let handle = engine.handle();
-                                self.save =
-                                    Some(SaveWorker::spawn(handle.clone(), self.worker_tx.clone()));
-                                self.record =
-                                    Some(RecordWorker::new(handle, self.worker_tx.clone()));
-                                let notices = engine.events();
-                                let tx = self.internal_tx.clone();
-                                std::thread::spawn(move || {
-                                    for n in notices {
-                                        if tx.blocking_send(Internal::Notice(n)).is_err() {
-                                            break;
-                                        }
-                                    }
-                                });
-                                self.engine = Some(engine);
-                                let _ = events.try_send(Event::Configured { warnings });
-                                self.dirty = true;
+                        Box::new(move || {
+                            let mut engine = CaptureEngine::new(config, deps);
+                            let warnings = engine.config().normalized().1;
+                            let result = engine.start().map(|n| (warnings, n));
+                            ConfigureOutcome {
+                                engine,
+                                result,
+                                fresh: true,
                             }
-                            Err(e) => {
-                                let event = Event::StartupError {
-                                    code: e.code.to_string(),
-                                    detail: e.detail,
-                                };
-                                self.startup_events.push(event.clone());
-                                let _ = events.try_send(event);
-                                self.engine = Some(engine);
-                                return Some(ExitCode::from(1));
-                            }
-                        }
+                        })
                     }
-                    Some(engine) => match engine.reconfigure(config) {
-                        Ok(warnings) => {
-                            let _ = events.try_send(Event::Configured { warnings });
-                            self.dirty = true;
+                    Some(mut engine) => Box::new(move || {
+                        let result = engine.reconfigure(config);
+                        ConfigureOutcome {
+                            engine,
+                            result,
+                            fresh: false,
                         }
-                        Err(e) => {
-                            let _ = events.try_send(Event::StartupError {
-                                code: e.code.to_string(),
-                                detail: e.detail,
-                            });
-                            self.dirty = true;
-                        }
-                    },
-                }
+                    }),
+                };
+                self.configuring = Some(tokio::task::spawn_blocking(job));
             }
             Command::SaveClip {
                 request_id,
@@ -175,7 +162,12 @@ impl Service {
                 None => {
                     let _ = events.try_send(Event::SaveResult {
                         request_id,
-                        result: Err("Capture is not running".into()),
+                        result: Err(if self.configuring.is_some() {
+                            "Capture is starting"
+                        } else {
+                            "Capture is not running"
+                        }
+                        .into()),
                     });
                 }
             },
@@ -227,11 +219,86 @@ impl Service {
         self.dirty = true;
     }
 
+    /// Finishes a `Configure` job: installs the engine and its workers (first
+    /// time) and emits the reply events. Returns an exit code on a startup
+    /// error of a fresh engine.
+    fn finish_configure(
+        &mut self,
+        outcome: ConfigureOutcome,
+        events: &mpsc::Sender<Event>,
+    ) -> Option<ExitCode> {
+        let ConfigureOutcome {
+            engine,
+            result,
+            fresh,
+        } = outcome;
+        match result {
+            Ok((warnings, notices)) => {
+                for n in notices {
+                    let e = Event::StartupWarning {
+                        code: n.code,
+                        detail: n.detail,
+                    };
+                    if fresh {
+                        self.startup_events.push(e.clone());
+                    }
+                    self.emit(events, e);
+                }
+                if fresh {
+                    let handle = engine.handle();
+                    self.save = Some(SaveWorker::spawn(handle.clone(), self.worker_tx.clone()));
+                    self.record = Some(RecordWorker::new(handle, self.worker_tx.clone()));
+                    let notices = engine.events();
+                    let tx = self.internal_tx.clone();
+                    std::thread::spawn(move || {
+                        for n in notices {
+                            if tx.blocking_send(Internal::Notice(n)).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                self.engine = Some(engine);
+                self.emit(events, Event::Configured { warnings });
+                self.dirty = true;
+                None
+            }
+            Err(e) => {
+                let event = Event::StartupError {
+                    code: e.code.to_string(),
+                    detail: e.detail,
+                };
+                self.engine = Some(engine);
+                self.dirty = true;
+                if fresh {
+                    self.startup_events.push(event.clone());
+                    self.emit(events, event);
+                    Some(ExitCode::from(1))
+                } else {
+                    self.emit(events, event);
+                    None
+                }
+            }
+        }
+    }
+
+    /// Sends an event; a client that is slow to read gets it delivered by a
+    /// task instead of losing it.
+    fn emit(&self, events: &mpsc::Sender<Event>, event: Event) {
+        if let Err(mpsc::error::TrySendError::Full(event)) = events.try_send(event) {
+            let tx = events.clone();
+            tokio::spawn(async move {
+                let _ = tx.send(event).await;
+            });
+        }
+    }
+
     fn shutdown(&mut self) {
-        if let Some(r) = &self.record
-            && r.state() != RecordingState::Idle
-        {
-            r.stop(0);
+        if let Some(r) = &self.record {
+            if r.state() != RecordingState::Idle {
+                r.stop(0);
+            }
+            r.join();
         }
         if let Some(e) = self.engine.as_mut() {
             e.shutdown();
@@ -277,12 +344,14 @@ async fn serve_async(
         });
     }
     {
+        // Registered here, before the socket is bound and the ready line is
+        // printed, so a signal racing the ready line is caught.
+        let mut term =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+        let mut int =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
         let tx = internal_tx.clone();
         tokio::spawn(async move {
-            let mut term =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
-            let mut int =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
             tokio::select! {
                 _ = async { if let Some(t) = term.as_mut() { t.recv().await; } else { std::future::pending::<()>().await } } => {}
                 _ = async { if let Some(i) = int.as_mut() { i.recv().await; } else { std::future::pending::<()>().await } } => {}
@@ -303,6 +372,7 @@ async fn serve_async(
         });
     }
     let mut service = Service {
+        configuring: None,
         deps: Some(deps),
         default_override,
         engine: None,
@@ -356,6 +426,14 @@ async fn serve_async(
                     }
                 }
             }
+            outcome = async { match service.configuring.as_mut() { Some(j) => j.await, None => std::future::pending().await } } => {
+                service.configuring = None;
+                if let Ok(outcome) = outcome
+                    && let Some(code) = service.finish_configure(outcome, &events)
+                {
+                    break code;
+                }
+            }
             internal = internal_rx.recv() => {
                 match internal {
                     Some(Internal::Notice(EngineNotice::StatusChanged)) => service.dirty = true,
@@ -364,7 +442,7 @@ async fn serve_async(
                     | Some(Internal::Notice(EngineNotice::GenerationStarted { .. })) => service.dirty = true,
                     Some(Internal::Worker(e)) => {
                         service.on_worker(&e);
-                        let _ = events.try_send(e);
+                        service.emit(&events, e);
                     }
                     Some(Internal::ParentGone) => {
                         tracing::info!("parent closed our stdin; shutting down");
@@ -379,13 +457,37 @@ async fn serve_async(
             }
             _ = heartbeat.tick() => {
                 if client.is_some() {
-                    let e = if service.dirty { Event::Status(Box::new(service.status())) } else { Event::Heartbeat };
+                    let e = if service.dirty {
+                        Event::Status(Box::new(service.status()))
+                    } else {
+                        Event::Heartbeat
+                    };
                     service.dirty = false;
-                    let _ = events.try_send(e);
+                    service.emit(&events, e);
                 }
             }
         }
     };
+    // A save in flight finishes first (bounded like the UI's completion
+    // timeout), and its events still reach the client.
+    let wait_deadline = tokio::time::Instant::now() + SHUTDOWN_SAVE_WAIT;
+    while service.save.as_ref().is_some_and(|s| s.is_busy())
+        && tokio::time::Instant::now() < wait_deadline
+    {
+        match tokio::time::timeout(Duration::from_millis(50), internal_rx.recv()).await {
+            Ok(Some(Internal::Worker(e))) => {
+                service.on_worker(&e);
+                let events = client
+                    .as_ref()
+                    .map(|c| c.events.clone())
+                    .unwrap_or_else(|| dummy_tx.clone());
+                let _ = events.send(e).await;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
     service.shutdown();
     // Let the writer task flush the last events before the process exits.
     tokio::time::sleep(Duration::from_millis(100)).await;

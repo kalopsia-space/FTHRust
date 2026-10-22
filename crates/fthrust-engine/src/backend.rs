@@ -185,6 +185,10 @@ pub struct KindScript {
     pub capture_error_after: Option<(u64, CaptureError)>,
     /// Outputs the backend "sees" (empty = one unnamed output).
     pub outputs: Vec<String>,
+    /// Outputs for successive opens, consumed one entry per `create`; when
+    /// exhausted, `outputs` applies. Lets a test change what the second open
+    /// sees without racing the engine.
+    pub outputs_sequence: VecDeque<Vec<String>>,
 }
 
 /// What the synthetic backend does.
@@ -202,6 +206,9 @@ pub struct SyntheticScript {
     pub short_stride: bool,
     /// Deliver black frames.
     pub black: bool,
+    /// Output transform the frames arrive with (the buffer is in output
+    /// orientation; `native_size` reports the upright size).
+    pub transform: OutputTransform,
 }
 
 impl SyntheticScript {
@@ -214,6 +221,7 @@ impl SyntheticScript {
             kinds: HashMap::new(),
             short_stride: false,
             black: false,
+            transform: OutputTransform::Normal,
         }
     }
 
@@ -270,9 +278,13 @@ impl BackendFactory for SyntheticFactory {
                 retry_pointless: false,
             });
         }
+        let outputs = k
+            .outputs_sequence
+            .pop_front()
+            .unwrap_or_else(|| k.outputs.clone());
         let selected = if cfg.monitor.is_empty() {
-            k.outputs.first().cloned().unwrap_or_default()
-        } else if k.outputs.contains(&cfg.monitor) {
+            outputs.first().cloned().unwrap_or_default()
+        } else if outputs.contains(&cfg.monitor) {
             cfg.monitor.clone()
         } else if strict_output {
             return Err(BackendFailure {
@@ -281,7 +293,7 @@ impl BackendFactory for SyntheticFactory {
                 retry_pointless: false,
             });
         } else {
-            k.outputs.first().cloned().unwrap_or_default()
+            outputs.first().cloned().unwrap_or_default()
         };
         Ok(Box::new(SyntheticBackend {
             kind,
@@ -320,7 +332,7 @@ impl CaptureBackend for SyntheticBackend {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(CaptureError::Cancelled);
         }
-        let (interval, short_stride, black, error) = {
+        let (interval, short_stride, black, error, transform) = {
             let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
             let k = s.kinds.get(&self.kind);
             (
@@ -328,6 +340,7 @@ impl CaptureBackend for SyntheticBackend {
                 s.short_stride,
                 s.black,
                 k.and_then(|k| k.capture_error_after.clone()),
+                s.transform,
             )
         };
         if let Some((after, err)) = error
@@ -369,13 +382,22 @@ impl CaptureBackend for SyntheticBackend {
             height: self.height,
             layout: PixelLayout::Bgra,
             y_invert: false,
-            transform: OutputTransform::Normal,
+            transform,
             timestamp_ns: ts,
         })
     }
 
     fn native_size(&self) -> (u32, u32) {
-        (self.width, self.height)
+        let t = self
+            .script
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .transform;
+        if t.swaps_axes() {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        }
     }
 
     fn selected_output(&self) -> String {

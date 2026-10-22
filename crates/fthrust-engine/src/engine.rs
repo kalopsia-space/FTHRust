@@ -139,6 +139,7 @@ struct Inner {
     config: Mutex<EngineConfig>,
     audio: Arc<dyn AudioProvider>,
     keyframe_request: AtomicBool,
+    record_overflow: AtomicBool,
 }
 
 impl Inner {
@@ -192,6 +193,7 @@ impl CaptureEngine {
             config: Mutex::new(config.clone()),
             audio: deps.audio.clone(),
             keyframe_request: AtomicBool::new(false),
+            record_overflow: AtomicBool::new(false),
         });
         Self {
             config,
@@ -247,9 +249,10 @@ impl CaptureEngine {
                 notices.push(StartupNotice { code, detail });
             }
         }
+        let outcome = self.arm_first_outcome();
         self.spawn_capture_thread();
         self.started = true;
-        match self.first_outcome() {
+        match Self::wait_first_outcome(outcome) {
             FirstOutcome::Started => Ok(notices),
             FirstOutcome::Failed(e) => {
                 eprintln!("FTHR_STARTUP_ERROR: {}: {}", e.code, e.detail);
@@ -258,16 +261,46 @@ impl CaptureEngine {
         }
     }
 
-    fn first_outcome(&mut self) -> FirstOutcome {
+    /// Installs the first-outcome channel before the capture thread exists,
+    /// so an instant failure cannot be lost.
+    fn arm_first_outcome(&mut self) -> std::sync::mpsc::Receiver<FirstOutcome> {
         let (tx, rx) = std::sync::mpsc::channel();
         *self
             .inner
             .first_outcome
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = Some(tx);
+        rx
+    }
+
+    fn wait_first_outcome(rx: std::sync::mpsc::Receiver<FirstOutcome>) -> FirstOutcome {
         match rx.recv_timeout(START_DEADLINE) {
             Ok(o) => o,
             Err(_) => FirstOutcome::Started,
+        }
+    }
+
+    fn start_audio(&self, notices: &mut Vec<StartupNotice>) {
+        if self.config.capture.audio_enabled
+            || !self.config.capture.microphone_endpoint_id.is_empty()
+        {
+            let cfg = AudioConfig {
+                system: self.config.capture.audio_enabled.then(|| {
+                    if self.config.capture.playback_endpoint_id.is_empty() {
+                        AudioTarget::DefaultSinkMonitor
+                    } else {
+                        AudioTarget::SinkMonitor(self.config.capture.playback_endpoint_id.clone())
+                    }
+                }),
+                microphone: (!self.config.capture.microphone_endpoint_id.is_empty()).then(|| {
+                    AudioTarget::Source(self.config.capture.microphone_endpoint_id.clone())
+                }),
+                keep_seconds: self.config.capture.buffer_seconds,
+            };
+            for (code, detail) in self.audio.start(&cfg) {
+                eprintln!("FTHR_STARTUP_WARNING: {code}: {detail}");
+                notices.push(StartupNotice { code, detail });
+            }
         }
     }
 
@@ -374,10 +407,17 @@ impl CaptureEngine {
         }
     }
 
-    /// Restarts capture with a new configuration (audio keeps running).
-    pub fn reconfigure(&mut self, config: EngineConfig) -> Result<Vec<String>, StartupError> {
+    /// Restarts capture and audio with a new configuration; returns the
+    /// normalisation warnings and the audio startup notices.
+    pub fn reconfigure(
+        &mut self,
+        config: EngineConfig,
+    ) -> Result<(Vec<String>, Vec<StartupNotice>), StartupError> {
         let (config, warnings) = config.normalized();
         self.stop_capture();
+        if self.started {
+            self.audio.stop();
+        }
         self.config = config;
         *self.inner.config.lock().unwrap_or_else(|p| p.into_inner()) = self.config.clone();
         *self.inner.ring.lock().unwrap_or_else(|p| p.into_inner()) = make_ring(&self.config);
@@ -392,9 +432,13 @@ impl CaptureEngine {
                 ..Status::default()
             }
         });
+        let mut notices = Vec::new();
+        self.start_audio(&mut notices);
+        self.started = true;
+        let outcome = self.arm_first_outcome();
         self.spawn_capture_thread();
-        match self.first_outcome() {
-            FirstOutcome::Started => Ok(warnings),
+        match Self::wait_first_outcome(outcome) {
+            FirstOutcome::Started => Ok((warnings, notices)),
             FirstOutcome::Failed(e) => Err(e),
         }
     }
@@ -493,12 +537,19 @@ impl EngineHandle {
     pub fn set_packet_tap(&self, tap: Option<Sender<EncodedPacket>>) {
         if tap.is_some() {
             self.inner.keyframe_request.store(true, Ordering::SeqCst);
+            self.inner.record_overflow.store(false, Ordering::SeqCst);
         }
         *self
             .inner
             .packet_tap
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = tap;
+    }
+
+    /// Whether the packet tap overflowed since it was installed (cleared on
+    /// read).
+    pub fn take_record_overflow(&self) -> bool {
+        self.inner.record_overflow.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -559,6 +610,32 @@ enum GenerationEnd {
 }
 
 fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
+    let guarded = inner.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_capture_inner(inner, config)
+    }));
+    if let Err(panic) = result {
+        let reason = match panic.downcast_ref::<&str>() {
+            Some(s) => format!("capture thread panicked: {s}"),
+            None => match panic.downcast_ref::<String>() {
+                Some(s) => format!("capture thread panicked: {s}"),
+                None => "capture thread panicked".to_string(),
+            },
+        };
+        tracing::error!("{reason}");
+        terminal_failure(&guarded, &reason);
+        report_first(
+            &guarded,
+            FirstOutcome::Failed(StartupError {
+                code: "CAPTURE_BACKEND_UNAVAILABLE",
+                detail: reason,
+            }),
+        );
+        guarded.running.store(false, Ordering::SeqCst);
+    }
+}
+
+fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     let cfg = &config.capture;
     let fps = cfg.fps;
     let candidates: Vec<BackendKind> = match config.backend_override {
@@ -642,10 +719,14 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
             continue;
         };
 
-        // Generation start.
+        // Generation start. The backend that opened is pinned at once: recovery
+        // retries it first and, when the user named an output and this is
+        // it, insists on that output (`capture_engine.cpp:198-204`).
         let kind = backend.kind();
         let native = backend.native_size();
         let selected = backend.selected_output();
+        strict_output = !cfg.monitor.is_empty() && selected == cfg.monitor;
+        order = recovery_order(kind, &candidates);
         let (ew, eh) = encode_size(native, (cfg.width, cfg.height), cfg.scaling);
         if encoder
             .as_ref()
@@ -694,9 +775,8 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                 }
                 Err(e) => {
                     let reason = format!("no usable encoder: {e}");
-                    terminal_failure(&inner, &reason);
                     if !first_reported {
-                        first_reported = true;
+                        terminal_failure(&inner, &reason);
                         report_first(
                             &inner,
                             FirstOutcome::Failed(StartupError {
@@ -704,9 +784,23 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                                 detail: reason,
                             }),
                         );
+                        break 'generations;
                     }
-                    let _ = first_reported;
-                    break 'generations;
+                    drop(backend);
+                    if !handle_failure(
+                        &inner,
+                        &mut recovery,
+                        &mut order,
+                        &candidates,
+                        0,
+                        false,
+                        &reason,
+                        &mut first_reported,
+                        &mut ever_produced,
+                    ) {
+                        break 'generations;
+                    }
+                    continue;
                 }
             }
         }
@@ -830,8 +924,10 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                         .unwrap_or_else(|p| p.into_inner())
                         .clone();
                     for p in packets.drain(..) {
-                        if let Some(tap) = &tap {
-                            let _ = tap.try_send(p.clone());
+                        if let Some(tap) = &tap
+                            && tap.try_send(p.clone()).is_err()
+                        {
+                            inner.record_overflow.store(true, Ordering::SeqCst);
                         }
                         ring.push(p);
                     }
@@ -868,10 +964,6 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                     s.encoder_open = false;
                     s.active_codec.clear();
                 });
-                if produced > 0 {
-                    strict_output = !cfg.monitor.is_empty() && selected == cfg.monitor;
-                    order = recovery_order(kind, &candidates);
-                }
                 if !handle_failure(
                     &inner,
                     &mut recovery,
@@ -887,10 +979,6 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                 }
             }
             GenerationEnd::BackendFailed { transient, reason } => {
-                if produced > 0 {
-                    strict_output = !cfg.monitor.is_empty() && selected == cfg.monitor;
-                    order = recovery_order(kind, &candidates);
-                }
                 if !handle_failure(
                     &inner,
                     &mut recovery,
@@ -954,10 +1042,9 @@ fn handle_failure(
                 "retry budget spent; falling through to the next backend"
             );
             *recovery = CaptureRecoveryPolicy::new(recovery_reset_frames(inner), 3);
-            let next = recovery.on_generation_failed(0, false);
             return wait_recovering(
                 inner,
-                next.backoff,
+                CaptureRecoveryPolicy::BACKOFFS[0],
                 &format!("{reason} (trying {})", order[0].name()),
             );
         }

@@ -7,14 +7,14 @@ use std::time::Duration;
 use fthrust_ipc::BackendKind;
 use fthrust_wayland::dispatch::WaitResult;
 
-/// First-time selection order on Wayland: the protocol backends before the
-/// portal because they need no dialog. Without Wayland there is nothing
-/// (no X11 fallback).
+/// First-time selection order on Wayland: ext-image-copy-capture (the spec's
+/// preference), then wlr-screencopy, then the portal because it needs a
+/// dialog. Without Wayland there is nothing (no X11 fallback).
 pub fn backend_candidates(has_wayland: bool) -> Vec<BackendKind> {
     if has_wayland {
         vec![
-            BackendKind::WlrScreencopy,
             BackendKind::ExtImageCopy,
+            BackendKind::WlrScreencopy,
             BackendKind::PortalScreenCast,
         ]
     } else {

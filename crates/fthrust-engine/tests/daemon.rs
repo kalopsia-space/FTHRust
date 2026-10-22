@@ -331,3 +331,40 @@ async fn heartbeat_cadence() {
     client.send(Command::Shutdown).await.unwrap();
     assert_eq!(wait_exit(&mut d.child, Duration::from_secs(3)).await, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_waits_for_a_save_in_flight() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut d = spawn(&[], false).await;
+    let mut client = connect(&d.socket).await;
+    client.send(Command::Configure(config())).await.unwrap();
+    next_event(
+        &mut client,
+        Duration::from_secs(5),
+        |e| matches!(e, Event::Status(s) if s.health_flags == flags::ACTIVE),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let clip = d._tmp.path().join("last.mp4");
+    client
+        .send(Command::SaveClip {
+            request_id: 8,
+            path: clip.clone(),
+            seconds: 2,
+        })
+        .await
+        .unwrap();
+    client.send(Command::Shutdown).await.unwrap();
+    let e = next_event(&mut client, Duration::from_secs(20), |e| {
+        matches!(e, Event::SaveResult { request_id: 8, .. })
+    })
+    .await;
+    assert!(
+        matches!(e, Event::SaveResult { result: Ok(_), .. }),
+        "{e:?}"
+    );
+    assert_eq!(wait_exit(&mut d.child, Duration::from_secs(10)).await, 0);
+    assert!(clip.exists());
+}

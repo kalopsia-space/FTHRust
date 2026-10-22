@@ -41,6 +41,7 @@ struct Rig {
     save: SaveWorker,
     record: RecordWorker,
     events: crossbeam_channel::Receiver<Event>,
+    events_tx: crossbeam_channel::Sender<Event>,
     script: Arc<Mutex<SyntheticScript>>,
 }
 
@@ -95,12 +96,13 @@ fn rig_with(
     let engine = CaptureEngine::new(cfg, deps);
     let (tx, rx) = crossbeam_channel::unbounded();
     let save = SaveWorker::spawn(engine.handle(), tx.clone());
-    let record = RecordWorker::new(engine.handle(), tx);
+    let record = RecordWorker::new(engine.handle(), tx.clone());
     Rig {
         engine,
         save,
         record,
         events: rx,
+        events_tx: tx,
         script,
     }
 }
@@ -491,5 +493,41 @@ fn record_start_stop_produces_fragmented_mp4_and_refuses_existing() {
         unreachable!()
     };
     assert!(message.contains("exists"), "{message}");
+    r.engine.shutdown();
+}
+
+#[test]
+fn record_backlog_overflow_ends_the_recording_with_an_error() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // A slow audio provider stalls the recorder; with a one-packet backlog the
+    // tap overflows and the recording must end with RecordingError instead of
+    // silently dropping packets.
+    let r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(SlowAudio(SyntheticAudio::new())),
+        Duration::from_millis(16),
+    );
+    let mut r = r;
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 5);
+    let record = RecordWorker::with_backlog(r.engine.handle(), r.events_tx.clone(), 0);
+    let tmp = tempfile::tempdir().unwrap();
+    record.start(21, tmp.path().join("overflow.mp4"));
+    next_event(&r.events, Duration::from_secs(5), |e| {
+        matches!(e, Event::RecordingStarted { request_id: 21, .. })
+    });
+    let e = next_event(&r.events, Duration::from_secs(15), |e| {
+        matches!(
+            e,
+            Event::RecordingError { .. } | Event::RecordingStopped { .. }
+        )
+    });
+    let Event::RecordingError { message, .. } = e else {
+        panic!("expected an error, got {e:?}")
+    };
+    assert!(message.contains("behind"), "{message}");
+    assert_eq!(record.state(), RecordingState::Idle);
     r.engine.shutdown();
 }

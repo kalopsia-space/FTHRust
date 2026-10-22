@@ -86,6 +86,13 @@ pub fn monotonic(last_ns: i64, candidate_ns: i64) -> i64 {
     candidate_ns.max(last_ns + 1)
 }
 
+/// The timestamp of the frame being returned: a fresh frame keeps its pts
+/// (clamped monotonic); a repeat of the last frame is stamped `now` so time
+/// keeps advancing on a static screen.
+pub fn next_timestamp(last_ns: i64, fresh_pts_ns: Option<i64>, now_ns: i64) -> i64 {
+    monotonic(last_ns, fresh_pts_ns.unwrap_or(now_ns))
+}
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -314,9 +321,9 @@ impl PipeWireVideoStream {
                 shared = guard;
             }
         };
-        match taken {
-            Some(frame) => {
-                self.last = Some(frame);
+        match &taken {
+            Some(_) => {
+                self.last = taken.clone();
                 self.last_delivery = Some(Instant::now());
             }
             None if self.last.is_some() => {
@@ -324,14 +331,12 @@ impl PipeWireVideoStream {
             }
             None => return Err(CaptureFailure::Timeout),
         }
+        let fresh = taken.is_some();
         let last = self.last.as_mut().expect("set above");
-        let ts = monotonic(
+        let ts = next_timestamp(
             self.last_timestamp_ns,
-            if taken_is_fresh(last) {
-                last.timestamp_ns
-            } else {
-                monotonic_ns()
-            },
+            fresh.then_some(last.timestamp_ns),
+            monotonic_ns(),
         );
         self.last_timestamp_ns = ts;
         last.timestamp_ns = ts;
@@ -355,10 +360,6 @@ impl PipeWireVideoStream {
             .unwrap_or_else(|p| p.into_inner())
             .frames
     }
-}
-
-fn taken_is_fresh(frame: &BgraFrame) -> bool {
-    frame.timestamp_ns > 0
 }
 
 impl Drop for PipeWireVideoStream {

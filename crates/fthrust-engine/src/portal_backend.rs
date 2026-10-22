@@ -15,8 +15,19 @@ use crate::backend::{BackendFailure, CaptureBackend, CaptureError, FailureKind};
 
 struct PortalBackend {
     stream: PipeWireVideoStream,
-    _runtime: tokio::runtime::Runtime,
-    _session: ScreenCastSession,
+    session: ScreenCastSession,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl Drop for PortalBackend {
+    /// Closes the portal session (the screen-sharing indicator goes out)
+    /// while the runtime is still alive.
+    fn drop(&mut self) {
+        let session = &mut self.session;
+        let _ = self.runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), session.close()).await
+        });
+    }
 }
 
 impl CaptureBackend for PortalBackend {
@@ -108,7 +119,7 @@ pub fn open(
     })?;
     Ok(Box::new(PortalBackend {
         stream,
-        _runtime: runtime,
-        _session: session,
+        session,
+        runtime,
     }))
 }

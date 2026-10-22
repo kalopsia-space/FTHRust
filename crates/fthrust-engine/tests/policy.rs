@@ -16,8 +16,8 @@ fn candidates_and_recovery_order() {
     assert_eq!(
         cands,
         [
-            BackendKind::WlrScreencopy,
             BackendKind::ExtImageCopy,
+            BackendKind::WlrScreencopy,
             BackendKind::PortalScreenCast
         ]
     );
@@ -34,8 +34,8 @@ fn candidates_and_recovery_order() {
         recovery_order(BackendKind::PortalScreenCast, &cands),
         [
             BackendKind::PortalScreenCast,
-            BackendKind::WlrScreencopy,
-            BackendKind::ExtImageCopy
+            BackendKind::ExtImageCopy,
+            BackendKind::WlrScreencopy
         ]
     );
     assert_eq!(

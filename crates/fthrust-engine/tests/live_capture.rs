@@ -71,8 +71,11 @@ fn live_wayland_capture_saves_a_real_clip() {
     );
     assert!(
         s.frames_captured >= 200,
-        "{} frames in 5 s",
-        s.frames_captured
+        "{} frames in 5 s; backend {:?} generation {} encoder {}",
+        s.frames_captured,
+        s.backend,
+        s.capture_generation,
+        s.active_codec
     );
     assert!(
         matches!(

@@ -223,9 +223,15 @@ impl WlrScreencopy {
         Ok(this)
     }
 
-    /// Source size learned from the probe frame.
+    /// Source size learned from the probe frame, upright (a 90°/270° output
+    /// transform swaps the buffer's axes).
     pub fn native_size(&self) -> (u32, u32) {
-        self.native
+        let (w, h) = self.native;
+        if self.output_transform().unwrap_or_default().swaps_axes() {
+            (h, w)
+        } else {
+            (w, h)
+        }
     }
 
     /// The `wl_output.name` being captured.

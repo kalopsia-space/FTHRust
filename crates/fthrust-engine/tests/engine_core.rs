@@ -452,3 +452,121 @@ fn startup_without_wayland_is_coded() {
     assert_eq!(err.code, "WAYLAND_UNAVAILABLE");
     engine.shutdown();
 }
+
+#[test]
+fn rotated_output_sizes_encoder_from_the_upright_frame() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut script = wlr_ok(320, 180);
+    script.transform = fthrust_wayland::frame::OutputTransform::Rot90;
+    let mut h = harness(config(|_| {}), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.frames_captured >= 2
+    });
+    let snap = h.engine.encoder_snapshot().unwrap();
+    assert_eq!(
+        (snap.width, snap.height),
+        (180, 320),
+        "the buffer is 320x180, the upright frame is 180x320"
+    );
+    assert_eq!((s.native_width, s.native_height), (180, 320));
+    h.engine.shutdown();
+}
+
+#[test]
+fn backend_and_output_are_pinned_at_open_even_before_a_frame() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The first open sees DP-9 and dies before its first frame; every later
+    // open sees only DP-1. Recovery must insist on DP-9 (OutputAbsent waits),
+    // never fall back to DP-1.
+    let mut script = SyntheticScript::new(320, 180);
+    script.kinds.insert(
+        BackendKind::WlrScreencopy,
+        KindScript {
+            outputs: vec!["DP-1".into()],
+            outputs_sequence: VecDeque::from(vec![vec!["DP-9".to_string()]]),
+            capture_error_after: Some((0, CaptureError::Failed("died early".into()))),
+            ..KindScript::default()
+        },
+    );
+    let mut h = harness(config(|c| c.monitor = "DP-9".into()), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.health_flags & flags::RECOVERING != 0 && s.recovery_reason.contains("DP-9")
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let s = h.engine.status();
+    assert_ne!(
+        s.selected_output, "DP-1",
+        "never silently captures another monitor: {s:?}"
+    );
+    assert_eq!(s.capture_generation, 1);
+    {
+        let mut sc = h.script.lock().unwrap();
+        let k = sc.kinds.get_mut(&BackendKind::WlrScreencopy).unwrap();
+        k.outputs = vec!["DP-9".into()];
+        k.capture_error_after = None;
+    }
+    let s = wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.health_flags == flags::ACTIVE && s.frames_captured > 0
+    });
+    assert_eq!(s.selected_output, "DP-9");
+    h.engine.shutdown();
+}
+
+#[test]
+fn reconfigure_restarts_audio_with_the_new_settings() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut h = harness(config(|c| c.audio_enabled = true), wlr_ok(320, 180));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.audio.system == fthrust_ipc::SourceStatus::Streaming
+    });
+    let (warnings, notices) = h
+        .engine
+        .reconfigure(config(|c| c.audio_enabled = false))
+        .unwrap();
+    assert!(warnings.is_empty() && notices.is_empty());
+    let s = wait_for(&h.engine, Duration::from_secs(5), |s| s.frames_captured > 0);
+    assert_eq!(s.audio.system, fthrust_ipc::SourceStatus::Disabled);
+    h.engine
+        .reconfigure(config(|c| c.audio_enabled = true))
+        .unwrap();
+    wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.audio.system == fthrust_ipc::SourceStatus::Streaming
+    });
+    h.engine.shutdown();
+}
+
+#[test]
+fn startup_failure_is_reported_even_when_instant() {
+    // Every candidate fails at once (no backoff hook delay): the first
+    // outcome must still reach start().
+    for _ in 0..5 {
+        let mut script = SyntheticScript::new(320, 180);
+        for kind in [BackendKind::WlrScreencopy, BackendKind::ExtImageCopy] {
+            script.kinds.insert(
+                kind,
+                KindScript {
+                    fail_inits: VecDeque::from(vec![FailureKind::Error; 8]),
+                    ..KindScript::default()
+                },
+            );
+        }
+        let mut h = harness(config(|_| {}), script);
+        let started = Instant::now();
+        let err = h.engine.start().unwrap_err();
+        assert_eq!(err.code, "CAPTURE_BACKEND_UNAVAILABLE");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "start() waited for a lost outcome"
+        );
+        h.engine.shutdown();
+    }
+}

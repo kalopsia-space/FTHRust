@@ -290,9 +290,15 @@ impl ExtImageCopy {
         Ok(this)
     }
 
-    /// Source size learned from the session's buffer constraints.
+    /// Source size learned from the session's buffer constraints, upright
+    /// (a 90°/270° transform swaps the buffer's axes).
     pub fn native_size(&self) -> (u32, u32) {
-        self.native
+        let (w, h) = self.native;
+        if self.last_transform.swaps_axes() {
+            (h, w)
+        } else {
+            (w, h)
+        }
     }
 
     /// The `wl_output.name` being captured.

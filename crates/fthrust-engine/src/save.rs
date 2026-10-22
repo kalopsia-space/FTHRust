@@ -225,6 +225,7 @@ pub struct RecordWorker {
     state: Arc<Mutex<RecordingState>>,
     stop: Arc<AtomicBool>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    backlog_seconds: u64,
 }
 
 /// Packets queued for the recorder before it is considered stalled.
@@ -237,12 +238,19 @@ const RECORD_AUDIO_LAG_NS: i64 = 200_000_000;
 impl RecordWorker {
     /// Creates an idle controller.
     pub fn new(engine: EngineHandle, events: Sender<Event>) -> Self {
+        Self::with_backlog(engine, events, RECORD_BACKLOG_SECONDS)
+    }
+
+    /// Creates an idle controller with a custom packet backlog (seconds of
+    /// frames the recorder may fall behind before the recording fails).
+    pub fn with_backlog(engine: EngineHandle, events: Sender<Event>, backlog_seconds: u64) -> Self {
         Self {
             engine,
             events,
             state: Arc::new(Mutex::new(RecordingState::Idle)),
             stop: Arc::new(AtomicBool::new(false)),
             thread: Mutex::new(None),
+            backlog_seconds,
         }
     }
 
@@ -293,9 +301,10 @@ impl RecordWorker {
             Ok(r) => r,
             Err(e) => return error(e.to_string()),
         };
-        let capacity = (u64::from(enc.fps) * RECORD_BACKLOG_SECONDS) as usize;
+        let capacity = (u64::from(enc.fps) * self.backlog_seconds) as usize;
+        let backlog_seconds = self.backlog_seconds;
         let (tx, rx): (Sender<EncodedPacket>, Receiver<EncodedPacket>) =
-            crossbeam_channel::bounded(capacity.max(64));
+            crossbeam_channel::bounded(capacity.max(1));
         self.engine.set_packet_tap(Some(tx));
         self.stop.store(false, Ordering::SeqCst);
         *self.state.lock().unwrap_or_else(|p| p.into_inner()) = RecordingState::Recording {
@@ -349,6 +358,18 @@ impl RecordWorker {
                             audio_cursor_ns = now;
                         }
                     }
+                    if engine.take_record_overflow() {
+                        failure = Some(format!(
+                            "the recorder fell more than {backlog_seconds} s behind; the file keeps every committed fragment"
+                        ));
+                        break;
+                    }
+                    if engine.take_record_overflow() {
+                        failure = Some(format!(
+                            "the recorder fell more than {backlog_seconds} s behind; the file keeps every committed fragment"
+                        ));
+                        break;
+                    }
                     if stop.load(Ordering::Relaxed) {
                         stop_request = Some(STOP_REQUEST.load(Ordering::Relaxed));
                         break;
@@ -379,18 +400,27 @@ impl RecordWorker {
         *self.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(thread);
     }
 
-    /// Stops recording; answers with `RecordingStopped` or `RecordingError`.
+    /// Asks the recorder to stop; the answer (`RecordingStopped` or
+    /// `RecordingError`) comes from the record thread, so this never blocks.
     pub fn stop(&self, request_id: u64) {
-        if self.state() == RecordingState::Idle {
-            let _ = self.events.send(Event::RecordingError {
-                request_id,
-                message: "No recording is in progress".into(),
-            });
-            return;
+        {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if !matches!(*state, RecordingState::Recording { .. }) {
+                drop(state);
+                let _ = self.events.send(Event::RecordingError {
+                    request_id,
+                    message: "No recording is in progress".into(),
+                });
+                return;
+            }
+            *state = RecordingState::Stopping;
         }
-        *self.state.lock().unwrap_or_else(|p| p.into_inner()) = RecordingState::Stopping;
         STOP_REQUEST.store(request_id, Ordering::Relaxed);
         self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Waits for the record thread to finish (shutdown).
+    pub fn join(&self) {
         let thread = self.thread.lock().unwrap_or_else(|p| p.into_inner()).take();
         if let Some(t) = thread {
             let _ = t.join();
