@@ -17,6 +17,7 @@ mod paths;
 pub mod presets;
 pub mod settings;
 pub mod theme;
+pub mod thumbnails;
 pub mod transactional_output;
 
 pub use atomic_json::{read_json, write_json_atomic};
