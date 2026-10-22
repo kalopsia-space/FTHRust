@@ -7,8 +7,10 @@
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
+pub mod motion;
 pub mod theme;
 pub mod tokens;
+pub mod widgets;
 
 /// Crate version, printed by `fthrust --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

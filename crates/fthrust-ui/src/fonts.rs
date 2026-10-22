@@ -47,9 +47,11 @@ impl Weight {
 
     /// The weight matching a Qt numeric weight (nearest).
     pub fn from_qt(w: u32) -> Weight {
+        // Qt resolves a requested 500 (Medium) to Oswald Regular: weights at or
+        // below Medium prefer the nearest lighter face.
         if w >= 650 {
             Weight::W700
-        } else if w >= 500 {
+        } else if w > 500 {
             Weight::W600
         } else {
             Weight::W400

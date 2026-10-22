@@ -37,12 +37,16 @@ pub fn harness<'a>(
     tokens: &Tokens,
     app: impl FnMut(&mut egui::Ui) + 'a,
 ) -> Harness<'a> {
+    let tokens = tokens.clone();
     let mut h = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(ppp)
+        .with_step_dt(1.0 / 60.0)
+        .with_context_setup(move |ctx| {
+            fonts::install(ctx, &tokens);
+            fthrust_ui::tokens::install_style(ctx, &tokens);
+        })
         .build_ui(app);
-    fonts::install(&h.ctx, tokens);
-    fthrust_ui::tokens::install_style(&h.ctx, tokens);
     h.run_steps(2);
     h
 }
