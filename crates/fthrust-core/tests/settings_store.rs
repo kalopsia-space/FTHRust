@@ -118,6 +118,7 @@ fn clips_directory_expands_env_and_tilde() {
 
 #[test]
 fn unknown_env_var_is_left_untouched() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (_t, p) = setup();
     let mut s = SettingsStore::load(p).unwrap();
     s.set("clips_directory", json!("/a/$FTHR_SURELY_UNSET_9/b"));
@@ -163,4 +164,44 @@ fn prepare_clips_storage_creates_five_subdirs() {
         assert!(root.join(d).is_dir(), "{d}");
     }
     assert_eq!(clips_subdirectories().len(), 5);
+}
+
+#[test]
+fn get_or_default_path_keys_are_absolute() {
+    let (tmp, p) = setup();
+    let mut s = SettingsStore::load(p).unwrap();
+    s.remove("clips_directory");
+    assert_eq!(
+        s.get_or_default("clips_directory"),
+        &json!(tmp.path().join("Videos/FTHR Clips").to_string_lossy())
+    );
+}
+
+#[test]
+fn quarantine_rename_failure_still_loads_defaults() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, p) = setup();
+    std::fs::write(p.settings_file(), "{not json").unwrap();
+    let root = p.root();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let writable = std::fs::write(root.join("probe"), "").is_ok();
+    if writable {
+        std::fs::remove_file(root.join("probe")).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return; // running as root: mode is ignored
+    }
+    let r = SettingsStore::load(p.clone());
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let s = r.unwrap();
+    assert_eq!(s.data(), &defaults(&p));
+}
+
+#[test]
+fn non_utf8_file_is_quarantined() {
+    let (_t, p) = setup();
+    std::fs::write(p.settings_file(), [0xff, 0xfe, 0x7b]).unwrap();
+    let s = SettingsStore::load(p.clone()).unwrap();
+    let q = p.root().join("settings.json.corrupt");
+    assert_eq!(std::fs::read(q).unwrap(), vec![0xff, 0xfe, 0x7b]);
+    assert_eq!(s.data(), &defaults(&p));
 }

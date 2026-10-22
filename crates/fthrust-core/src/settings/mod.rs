@@ -14,6 +14,8 @@ use std::path::{Component, Path, PathBuf};
 pub struct SettingsStore {
     paths: FthrPaths,
     data: Map<String, Value>,
+    /// Built-in defaults for this home, used by `get_or_default`.
+    defaults: Map<String, Value>,
     dirty: bool,
 }
 
@@ -50,20 +52,29 @@ impl SettingsStore {
         let file = paths.settings_file();
         let base = defaults(&paths);
         let (mut data, existed) = match read_json(&file) {
-            Ok(Some(Value::Object(loaded))) => (merge_one_level(base, loaded), true),
-            Ok(None) => (base, false),
-            Ok(Some(_)) | Err(CoreError::Json { .. }) => {
+            Ok(Some(Value::Object(loaded))) => (merge_one_level(base.clone(), loaded), true),
+            Ok(None) => (base.clone(), false),
+            // Non-object content and any read/parse failure (including
+            // invalid UTF-8) are quarantined, as the reference does.
+            Ok(Some(_)) | Err(_) => {
                 let mut name = file.as_os_str().to_owned();
                 name.push(".corrupt");
-                std::fs::rename(&file, PathBuf::from(name))?;
-                (base, false)
+                let target = PathBuf::from(name);
+                if let Err(e) = std::fs::rename(&file, &target) {
+                    tracing::warn!(
+                        "could not quarantine {} as {}: {e}",
+                        file.display(),
+                        target.display()
+                    );
+                }
+                (base.clone(), false)
             }
-            Err(e) => return Err(e),
         };
         let changed = migrate::migrate(&mut data, &paths, existed);
         let mut store = Self {
             paths,
             data,
+            defaults: base,
             dirty: false,
         };
         if changed {
@@ -113,9 +124,7 @@ impl SettingsStore {
         if let Some(v) = self.data.get(key) {
             return v;
         }
-        static DEFAULTS: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
-        let table = DEFAULTS.get_or_init(|| defaults(&FthrPaths::new("")));
-        table
+        self.defaults
             .get(key)
             .unwrap_or_else(|| panic!("unknown settings key: {key}"))
     }
