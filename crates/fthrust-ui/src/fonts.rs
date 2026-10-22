@@ -23,6 +23,39 @@ pub const MONO_FAMILY: &str = "qt-monospace";
 
 /// Candidate system monospace files, in Qt's fontconfig preference order
 /// on this platform.
+/// System CJK fallbacks (fontconfig's usual choices), tried in order.
+const CJK_CANDIDATES: [&str; 5] = [
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Light.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+    "/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
+];
+/// Named family for the CJK fallback face.
+pub const CJK_FAMILY: &str = "system-cjk";
+
+/// The first CJK fallback font present on this system.
+pub fn cjk_fallback_path() -> Option<std::path::PathBuf> {
+    CJK_CANDIDATES
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.is_file())
+}
+
+/// True when `bytes` start like a TrueType/OpenType font or collection and
+/// carry the tables egui's parser needs; a corrupt theme font is skipped
+/// instead of panicking inside epaint.
+pub fn is_font_file(bytes: &[u8]) -> bool {
+    let Some(magic) = bytes.get(0..4) else {
+        return false;
+    };
+    match magic {
+        b"ttcf" => bytes.len() > 12,
+        [0, 1, 0, 0] | b"OTTO" | b"true" => face_metrics(bytes).is_some(),
+        _ => false,
+    }
+}
+
 const MONO_CANDIDATES: [&str; 4] = [
     "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
@@ -177,6 +210,13 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
     let mut custom: Vec<(String, String)> = Vec::new();
     for (family, path) in &tokens.font_files {
         if let Ok(bytes) = std::fs::read(path) {
+            if !is_font_file(&bytes) {
+                tracing::warn!(
+                    "theme font {} is not a usable font file; skipped",
+                    path.display()
+                );
+                continue;
+            }
             let key = theme_family(family);
             remember_metrics(&key, &bytes);
             defs.font_data
@@ -192,6 +232,16 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
         .iter()
         .find(|(f, _)| *f == tokens.body_family)
         .map(|(_, k)| k.clone());
+    // Qt falls back through fontconfig for scripts Oswald lacks; load the
+    // system CJK face once so titles, paths and device names never show tofu.
+    let cjk_loaded = cjk_fallback_path()
+        .and_then(|p| std::fs::read(p).ok())
+        .filter(|b| is_font_file(b))
+        .map(|bytes| {
+            defs.font_data
+                .insert(CJK_FAMILY.to_owned(), Arc::new(FontData::from_owned(bytes)));
+        })
+        .is_some();
     for (weight, file) in [
         (Weight::W400, "Oswald-Regular.ttf"),
         (Weight::W600, "Oswald-SemiBold.ttf"),
@@ -211,6 +261,9 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
             chain.push(c.clone());
         }
         chain.push(key);
+        if cjk_loaded {
+            chain.push(CJK_FAMILY.to_owned());
+        }
         // Keep egui's defaults as glyph fallback (symbols, emoji).
         chain.extend(
             defs.families

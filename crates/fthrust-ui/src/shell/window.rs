@@ -110,6 +110,25 @@ pub fn saved_geometry(settings: &SettingsStore) -> SavedGeometry {
         .unwrap_or_default()
 }
 
+/// Clamps a saved size to the monitor it opened on (an oversized geometry
+/// saved on a removed monitor must not exceed the current screen).
+pub fn clamp_to_monitor(saved: GRect, monitor: Vec2) -> GRect {
+    let max_w = monitor
+        .x
+        .floor()
+        .max(window_geometry::MIN_VISIBLE_WIDTH as f32) as u32;
+    let max_h = monitor
+        .y
+        .floor()
+        .max(window_geometry::MIN_VISIBLE_HEIGHT as f32) as u32;
+    GRect {
+        x: saved.x,
+        y: saved.y,
+        width: saved.width.min(max_w),
+        height: saved.height.min(max_h),
+    }
+}
+
 /// Where to place the window: the saved geometry clamped onto a visible
 /// screen, else 1100×720 centred and maximised (the reference defaults).
 pub fn restore_geometry(settings: &SettingsStore, screens: &[Screen]) -> Placement {
@@ -143,18 +162,24 @@ pub fn restore_geometry(settings: &SettingsStore, screens: &[Screen]) -> Placeme
 }
 
 /// Writes the window's normal geometry (even while maximised) to settings.
-pub fn persist_geometry(
-    settings: &mut SettingsStore,
-    normal: GRect,
-    maximized: bool,
-    screen_name: &str,
-) {
+pub fn persist_geometry(settings: &mut SettingsStore, size: (u32, u32), maximized: bool) {
+    // winit on Wayland has no window position: keep the saved x/y and screen.
+    let previous = saved_geometry(settings);
+    let (x, y) = previous
+        .normal_geometry
+        .map(|g| (g.x, g.y))
+        .unwrap_or((0, 0));
     let saved = SavedGeometry {
-        normal_geometry: Some(normal),
-        screen_name: Some(screen_name.to_owned()),
+        normal_geometry: Some(GRect {
+            x,
+            y,
+            width: size.0,
+            height: size.1,
+        }),
+        screen_name: previous.screen_name.clone(),
         maximized: Some(Some(maximized)),
-        saved_dpr: None,
-        saved_logical_dpi: None,
+        saved_dpr: previous.saved_dpr,
+        saved_logical_dpi: previous.saved_logical_dpi,
     };
     if let Ok(v) = serde_json::to_value(&saved) {
         settings.set("main_window_geometry", v);

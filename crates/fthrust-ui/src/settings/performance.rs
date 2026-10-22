@@ -278,7 +278,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     .changed()
     {
         state.set_setting("audio_capture_enabled", json!(audio));
-        state.restart_pending = true;
+        state.engine_restart_requested = true;
     }
     space(ui, 8.0);
     // Video encoding (NVIDIA preset) only when the active encoder supports presets.

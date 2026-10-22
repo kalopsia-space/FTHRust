@@ -241,7 +241,7 @@ pub fn message_body(ui: &mut Ui, t: &Tokens, message: &str, width: f32) -> Rect 
     );
     fidelity::mark(
         ui,
-        format!("QLabel[{}]", &message[..message.len().min(40)]),
+        format!("QLabel[{}]", crate::fidelity::marker_label(message)),
         rect,
     )
     .text(message, size::BODY_L, Weight::W400)

@@ -97,10 +97,20 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, t.color(Color::Bg));
     // Keyboard: Shift+Right / Shift+Left cycle categories.
+    if state.settings_tab != Tab::Shortcuts && state.shortcut_recording.is_some() {
+        // The reference stops recording when the selector loses focus or hides.
+        state.shortcut_recording = None;
+        state.shortcut_pending.clear();
+        state.shortcut_down.clear();
+    }
+    let keys_owned = state.shortcut_recording.is_some()
+        || state.hotkey_recording.is_some()
+        || !state.dialogs.modal.is_empty()
+        || ui.ctx().egui_wants_keyboard_input();
     let (right, left) = ui.ctx().input(|i| {
         (
-            i.key_pressed(egui::Key::ArrowRight) && i.modifiers.shift,
-            i.key_pressed(egui::Key::ArrowLeft) && i.modifiers.shift,
+            !keys_owned && i.key_pressed(egui::Key::ArrowRight) && i.modifiers.shift,
+            !keys_owned && i.key_pressed(egui::Key::ArrowLeft) && i.modifiers.shift,
         )
     });
     if right {

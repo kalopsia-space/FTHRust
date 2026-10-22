@@ -167,7 +167,7 @@ fn checkbox_setting(
         label,
         true,
         true,
-        &format!("QCheckBox[{}]", &label[..label.len().min(40)]),
+        &format!("QCheckBox[{}]", crate::fidelity::marker_label(label)),
     )
     .changed()
     {

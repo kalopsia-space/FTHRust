@@ -36,6 +36,9 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         };
     }
     let resp = frame(ui, state);
+    if let Some(action) = resp.action {
+        state.error_action_requested = Some(action);
+    }
     if resp.close {
         state.window.close_requested = true;
     }

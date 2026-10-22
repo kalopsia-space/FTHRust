@@ -52,15 +52,17 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
     );
     let name = format!("_DropdownCombo[{}]", combo.current());
     if combo.ui(&mut body, &t, &mut state.icons, &name).changed() {
+        let window = combo.selected == 1;
         state.set_setting(
             "capture_mode",
-            json!(if combo.selected == 1 {
-                "window"
-            } else {
-                "desktop"
-            }),
+            json!(if window { "window" } else { "desktop" }),
         );
-        state.restart_pending = true;
+        if !window {
+            // `_on_mode_changed`: desktop clears the window target.
+            state.set_setting("target_hwnd", json!(0));
+            state.set_setting("target_window_name", json!(""));
+        }
+        state.source_restart_pending = true;
     }
     if mode == "window" {
         // Window row: combo (min 240) + 28×28 refresh button, spacing 8.
@@ -84,7 +86,15 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
         let name = format!("_DropdownCombo[{}]", wc.current());
         if wc.ui(&mut c, &t, &mut state.icons, &name).changed() {
             state.running_window_index = wc.selected;
-            state.restart_pending = true;
+            // `_on_window_selected`: the choice is persisted (no hwnd on Wayland).
+            let chosen = state
+                .running_windows
+                .get(wc.selected)
+                .cloned()
+                .unwrap_or_default();
+            state.set_setting("target_window_name", json!(chosen));
+            state.set_setting("target_hwnd", json!(0));
+            state.source_restart_pending = true;
         }
         let brect = Rect::from_min_size(
             Pos2::new(top.x + combo_w + 8.0, top.y + 5.0),
@@ -134,8 +144,22 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
         let name = format!("_DropdownCombo[{}]", mc.current());
         if mc.ui(&mut body, &t, &mut state.icons, &name).changed() {
             state.set_setting("capture_monitor", json!(items[mc.selected].1));
-            state.restart_pending = true;
+            state.source_restart_pending = true;
         }
+    }
+    // Apply row (`restart_btn`, hidden until a change): right-aligned primary button.
+    if state.source_restart_pending {
+        let top = body.cursor().min;
+        let mut row = body.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_size(top, Vec2::new(w, 41.0)))
+                .layout(egui::Layout::right_to_left(egui::Align::Min)),
+        );
+        if crate::widgets::buttons::primary(&mut row, &t, "Apply", "QPushButton[Apply]").clicked() {
+            state.source_restart_pending = false;
+            state.engine_restart_requested = true;
+        }
+        body.allocate_exact_size(Vec2::new(w, 41.0), egui::Sense::hover());
     }
     let bottom = body.cursor().min.y - SPACING + MARGINS.3;
     ui.allocate_rect(

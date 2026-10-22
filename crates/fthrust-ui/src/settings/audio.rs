@@ -16,6 +16,30 @@ use crate::widgets::buttons::{self, IconButtonStyle, icon_button};
 use crate::widgets::combo::Combo;
 use crate::widgets::{check, galley, lerp, paint_text, section, slider};
 
+/// Settings key of the selected playback (desktop audio) device id.
+pub const PLAYBACK_ID_KEY: &str = "playback_device_id";
+/// Settings key of its display name (shown when the device is unplugged).
+pub const PLAYBACK_NAME_KEY: &str = "playback_device_name";
+
+/// The playback combo entries: `System default`, every live device, and
+/// the saved device as "<name> (unavailable; using the default output)"
+/// when it is not in the list (`_apply_playback_devices`).
+pub fn playback_items(
+    saved_id: &str,
+    saved_name: &str,
+    devices: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut items = vec![("System default".to_owned(), String::new())];
+    items.extend(devices.iter().cloned());
+    if !saved_id.is_empty() && !items.iter().any(|(_, id)| id == saved_id) {
+        items.push((
+            format!("{saved_name} (unavailable; using the default output)"),
+            saved_id.to_owned(),
+        ));
+    }
+    items
+}
+
 const SOUNDS: [(&str, &str); 7] = [
     ("master", "Master volume"),
     ("clip", "Clip captured"),
@@ -68,9 +92,13 @@ pub fn mic_refresh_button(
 fn cell_label(ui: &mut Ui, t: &Tokens, rect: Rect, text: &str, color: Color, align: Align) {
     let g = galley(ui, text, size::BODY_L, Weight::W400, t.color(color));
     paint_text(ui, g, rect, align, 0.0, t.color(color));
-    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
-        .text(text, size::BODY_L, Weight::W400)
-        .done();
+    fidelity::mark(
+        ui,
+        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
+        rect,
+    )
+    .text(text, size::BODY_L, Weight::W400)
+    .done();
 }
 
 /// `_MicLevelMeter`: 36 px tall; a 10 px bar (BG, 1 px HAIRLINE frame)
@@ -304,7 +332,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     .changed()
     {
         state.set_setting("audio_capture_enabled", json!(on));
-        state.restart_pending = true;
+        state.engine_restart_requested = true;
     }
     space(&mut full, 12.0);
     let rtop = full.cursor().min;
@@ -345,18 +373,23 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     )));
     let saved = state
         .settings
-        .get_str("audio_capture_device")
+        .get_str(PLAYBACK_ID_KEY)
         .unwrap_or("")
         .to_owned();
-    let mut items = vec![("System default".to_owned(), String::new())];
-    items.extend(state.audio_devices.iter().cloned());
+    let saved_name = state
+        .settings
+        .get_str(PLAYBACK_NAME_KEY)
+        .unwrap_or("Selected device")
+        .to_owned();
+    let items = playback_items(&saved, &saved_name, &state.audio_devices);
     let sel = items.iter().position(|(_, id)| *id == saved).unwrap_or(0);
     let mut combo =
         Combo::new(items.iter().map(|(l, _)| l.clone()).collect(), sel).with_width(combo_w);
     let name = format!("QComboBox[{}]", combo.current());
     if combo.ui(&mut c, &t, &mut state.icons, &name).changed() {
-        state.set_setting("audio_capture_device", json!(items[combo.selected].1));
-        state.restart_pending = true;
+        state.set_setting(PLAYBACK_ID_KEY, json!(items[combo.selected].1));
+        state.set_setting(PLAYBACK_NAME_KEY, json!(items[combo.selected].0));
+        state.engine_restart_requested = true;
     }
     let mut rb = full.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
         Pos2::new(rtop.x + w - refresh_w, rtop.y),
@@ -397,7 +430,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             "audio_capture_mode",
             json!(if separate { "separated" } else { "combined" }),
         );
-        state.restart_pending = true;
+        state.engine_restart_requested = true;
     }
     space(&mut full, 4.0);
     section::label_wrapped_fit(
@@ -465,7 +498,7 @@ fn left_column(ui: &mut Ui, state: &mut AppState) {
                 json!(id)
             },
         );
-        state.restart_pending = true;
+        state.engine_restart_requested = true;
     }
     if mic_refresh_button(
         ui,

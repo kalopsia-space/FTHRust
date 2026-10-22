@@ -67,6 +67,42 @@ fn divider(ui: &mut Ui, state: &AppState) {
     );
 }
 
+/// `_add_running_window`: adds a title rule (the Wayland form of the
+/// reference's exe rule) to the custom games or the blacklist, normalised
+/// and de-duplicated. Returns whether a rule was added.
+pub fn add_rule(state: &mut AppState, title: &str, blacklist: bool) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    let key = if blacklist {
+        "game_detection_blacklist"
+    } else {
+        "game_detection_custom_games"
+    };
+    let mut rules = state
+        .settings
+        .get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let exists = rules.iter().any(|r| {
+        r.get("title_contains")
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case(title))
+    });
+    if exists {
+        return false;
+    }
+    rules.push(if blacklist {
+        json!({"title_contains": title, "exe_name": ""})
+    } else {
+        json!({"title_contains": title, "exe_name": "", "exe_path": "", "folder_path": ""})
+    });
+    state.set_setting(key, Value::Array(rules));
+    true
+}
+
 /// The popup body.
 pub fn content(ui: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
@@ -256,28 +292,12 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
     if clicked[1]
         && let Some(win) = &selected_window
     {
-        let mut rules = state
-            .settings
-            .get("game_detection_custom_games")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        rules.push(
-            json!({"title_contains": win, "exe_name": "", "exe_path": "", "folder_path": ""}),
-        );
-        state.set_setting("game_detection_custom_games", Value::Array(rules));
+        add_rule(state, win, false);
     }
     if clicked[2]
         && let Some(win) = &selected_window
     {
-        let mut rules = state
-            .settings
-            .get("game_detection_blacklist")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        rules.push(json!({"title_contains": win, "exe_name": ""}));
-        state.set_setting("game_detection_blacklist", Value::Array(rules));
+        add_rule(state, win, true);
     }
     // Rules (spacing 4).
     let rules = state

@@ -141,6 +141,12 @@ impl MarkerBuilder<'_> {
     }
 }
 
+/// The first 40 characters of a label, as the Qt extractor truncates names
+/// (character-based, so multi-byte text never splits a code point).
+pub fn marker_label(text: &str) -> String {
+    text.chars().take(40).collect()
+}
+
 /// Starts a marker for `name` covering `rect`.
 pub fn mark<'a>(ui: &'a Ui, name: impl Into<String>, rect: Rect) -> MarkerBuilder<'a> {
     MarkerBuilder {

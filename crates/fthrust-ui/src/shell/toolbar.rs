@@ -314,7 +314,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> ToolbarResponse {
             Vec2::new(widths[i + 1], geom::CAPTURE_CONTROL_H),
         );
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        let marker = format!("TopBarButton[{}]", &texts[i][..texts[i].len().min(40)]);
+        let marker = format!("TopBarButton[{}]", crate::fidelity::marker_label(&texts[i]));
         let r = top_bar_button(
             &mut child,
             &t,

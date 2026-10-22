@@ -641,7 +641,7 @@ fn options_column(ui: &mut Ui, state: &mut AppState) {
     paint_text(ui, g, frect, Align::Min, 12.0, t.color(Color::Text));
     fidelity::mark(
         ui,
-        format!("QLineEdit[{}]", &shown[..shown.len().min(40)]),
+        format!("QLineEdit[{}]", crate::fidelity::marker_label(&shown)),
         frect,
     )
     .sample(

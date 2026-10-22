@@ -28,7 +28,7 @@ pub fn label(
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("QLabel[{}]", &text[..text.len().min(40)]));
+        .unwrap_or_else(|| format!("QLabel[{}]", crate::fidelity::marker_label(text)));
     fidelity::mark(ui, name, rect).text(text, px, weight).done();
     resp
 }
@@ -50,7 +50,7 @@ pub fn label_in(
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("QLabel[{}]", &text[..text.len().min(40)]));
+        .unwrap_or_else(|| format!("QLabel[{}]", crate::fidelity::marker_label(text)));
     fidelity::mark(ui, name, rect).text(text, px, weight).done();
 }
 
@@ -79,9 +79,13 @@ pub fn label_wrapped(
     let y = rect.min.y + padding_top + ((text_h - g.size().y) / 2.0).floor().max(0.0);
     ui.painter()
         .galley(Pos2::new(rect.min.x, y), g, t.color(color));
-    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
-        .text(text, px, weight)
-        .done();
+    fidelity::mark(
+        ui,
+        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
+        rect,
+    )
+    .text(text, px, weight)
+    .done();
     rect
 }
 
@@ -110,9 +114,13 @@ pub fn label_wrapped_fit(
     let y = rect.min.y + ((h - g.size().y) / 2.0).floor().max(0.0);
     ui.painter()
         .galley(Pos2::new(rect.min.x, y), g, t.color(color));
-    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
-        .text(text, px, weight)
-        .done();
+    fidelity::mark(
+        ui,
+        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
+        rect,
+    )
+    .text(text, px, weight)
+    .done();
     rect
 }
 
@@ -135,7 +143,7 @@ pub fn label_wide(
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("QLabel[{}]", &text[..text.len().min(40)]));
+        .unwrap_or_else(|| format!("QLabel[{}]", crate::fidelity::marker_label(text)));
     fidelity::mark(ui, name, rect).text(text, px, weight).done();
     resp
 }

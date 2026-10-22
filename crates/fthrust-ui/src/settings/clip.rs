@@ -42,7 +42,7 @@ fn folder_field(ui: &mut Ui, t: &Tokens, rect: Rect, text: &str) {
     ui.set_clip_rect(clip);
     fidelity::mark(
         ui,
-        format!("QLineEdit[{}]", &text[..text.len().min(40)]),
+        format!("QLineEdit[{}]", crate::fidelity::marker_label(text)),
         rect,
     )
     .sample(
@@ -583,7 +583,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             text,
             true,
             true,
-            &format!("QCheckBox[{}]", &text[..text.len().min(40)]),
+            &format!("QCheckBox[{}]", crate::fidelity::marker_label(text)),
         )
         .changed()
         {

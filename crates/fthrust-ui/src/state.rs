@@ -338,6 +338,10 @@ pub struct AppState {
     pub capture_profile: CaptureProfile,
     /// A capture setting changed that needs an engine restart (Apply shows).
     pub restart_pending: bool,
+    /// A capture-source change awaiting the Source popup's Apply.
+    pub source_restart_pending: bool,
+    /// An error-bar action button was pressed (its id; plan 5 consumes).
+    pub error_action_requested: Option<String>,
     /// Apply clicked: restart the engine (plan 5 consumes).
     pub engine_restart_requested: bool,
     /// Refresh the running-window list (plan 5 consumes).
@@ -518,6 +522,8 @@ impl AppState {
             running_window_index: 0,
             capture_profile: CaptureProfile::Clips,
             restart_pending: false,
+            source_restart_pending: false,
+            error_action_requested: None,
             engine_restart_requested: false,
             refresh_windows_requested: false,
             open_desktop_shortcuts_requested: false,

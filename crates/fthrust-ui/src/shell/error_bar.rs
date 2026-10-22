@@ -226,10 +226,14 @@ fn bar_label(
     let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(g.size().x.round() + 6.0, h));
     crate::widgets::rule_h(ui, rect.min.x, rect.max.x, rect.min.y, t.color(line));
     paint_text(ui, g, rect, Align::Center, 0.0, t.color(color));
-    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
-        .text(text, px, weight)
-        .top(line)
-        .done();
+    fidelity::mark(
+        ui,
+        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
+        rect,
+    )
+    .text(text, px, weight)
+    .top(line)
+    .done();
     rect
 }
 

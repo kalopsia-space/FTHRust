@@ -145,7 +145,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                 &label,
                 enabled,
                 true,
-                &format!("QCheckBox[{}]", &label[..label.len().min(40)]),
+                &format!("QCheckBox[{}]", crate::fidelity::marker_label(&label)),
             )
             .changed()
             {

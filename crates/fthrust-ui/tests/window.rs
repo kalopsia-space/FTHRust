@@ -63,20 +63,16 @@ fn geometry_restore_defaults_and_clamps_to_monitor() {
     );
     assert_eq!((p.rect.width, p.rect.height), (1300, 800));
     // Persist round-trips through the settings key the reference uses.
-    let (_tmp, mut s) = state(serde_json::json!({}));
-    window::persist_geometry(
-        &mut s.settings,
-        GRect {
-            x: 10,
-            y: 20,
-            width: 1200,
-            height: 800,
-        },
-        true,
-        "DP-1",
-    );
+    let (_tmp, mut s) = state(serde_json::json!({"main_window_geometry": {
+        "normal_geometry": {"x": 10, "y": 20, "width": 900, "height": 700},
+        "screen_name": "DP-1", "maximized": false}}));
+    window::persist_geometry(&mut s.settings, (1200, 800), true);
     let saved = s.settings.get("main_window_geometry").cloned().unwrap();
     assert_eq!(saved["normal_geometry"]["width"], 1200);
+    assert_eq!(
+        saved["normal_geometry"]["x"], 10,
+        "position is kept (Wayland has none)"
+    );
     assert_eq!(saved["maximized"], true);
     assert_eq!(saved["screen_name"], "DP-1");
 }

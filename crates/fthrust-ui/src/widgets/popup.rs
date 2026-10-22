@@ -217,11 +217,13 @@ impl<'a> Panel<'a> {
             state.last_size = Some(size);
             ctx.request_repaint();
         }
+        // A combo list opened from inside the panel may hang below it.
+        let list = crate::widgets::combo::open_list_rect(&ctx).unwrap_or(Rect::NOTHING);
         let pressed_outside = ctx.input(|i| {
             i.pointer.any_pressed()
-                && i.pointer
-                    .interact_pos()
-                    .is_some_and(|p| !rect.contains(p) && !self.anchor.contains(p))
+                && i.pointer.interact_pos().is_some_and(|p| {
+                    !rect.contains(p) && !self.anchor.contains(p) && !list.contains(p)
+                })
         });
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if pressed_outside || escape {

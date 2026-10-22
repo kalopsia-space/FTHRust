@@ -34,8 +34,13 @@ pub fn draw_all(ui: &mut Ui, state: &mut AppState) {
         state.draft_generation = state.dialogs.generation;
         clear_drafts(state);
     }
+    // Enter/Escape are read once and handed to the topmost dialog only:
+    // messages stack above the modal, so the last message owns the keys.
+    let keys = Keys::read(&ctx);
+    let message_count = state.dialogs.messages.len();
     if let Some(kind) = state.dialogs.modal.front().cloned() {
-        let outcome = draw_centered(&ctx, state, &kind, true);
+        let modal_keys = if message_count == 0 { keys } else { Keys::NONE };
+        let outcome = draw_centered(&ctx, state, &kind, true, modal_keys);
         if let Outcome::Done(result) = outcome {
             state.dialogs.modal.pop_front();
             clear_drafts(state);
@@ -46,9 +51,16 @@ pub fn draw_all(ui: &mut Ui, state: &mut AppState) {
     }
     let messages = state.dialogs.messages.clone();
     let mut keep = Vec::new();
-    for kind in messages {
-        if draw_centered(&ctx, state, &kind, false) == Outcome::Open {
-            keep.push(kind);
+    for (i, kind) in messages.iter().enumerate() {
+        // A message pushed this frame (i >= message_count) never sees the
+        // keys that opened it.
+        let k = if i + 1 == message_count {
+            keys
+        } else {
+            Keys::NONE
+        };
+        if draw_centered(&ctx, state, kind, false, k) == Outcome::Open {
+            keep.push(kind.clone());
         }
     }
     state.dialogs.messages = keep;
@@ -60,16 +72,40 @@ fn clear_drafts(state: &mut AppState) {
     state.export_preset_draft = None;
 }
 
+/// The keys a dialog may act on this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Keys {
+    /// Escape pressed.
+    pub escape: bool,
+    /// Enter pressed.
+    pub enter: bool,
+}
+
+impl Keys {
+    /// No keys.
+    pub const NONE: Keys = Keys {
+        escape: false,
+        enter: false,
+    };
+
+    fn read(ctx: &egui::Context) -> Keys {
+        ctx.input(|i| Keys {
+            escape: i.key_pressed(egui::Key::Escape),
+            enter: i.key_pressed(egui::Key::Enter),
+        })
+    }
+}
+
 fn draw_centered(
     ctx: &egui::Context,
     state: &mut AppState,
     kind: &DialogKind,
     modal: bool,
+    keys: Keys,
 ) -> Outcome {
     let t = state.tokens.clone();
     let mut outcome = Outcome::Open;
-    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-    let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+    let Keys { escape, enter } = keys;
     let title = title_of(kind);
     let width = width_of(kind);
     let mut icons = std::mem::take(&mut state.icons);

@@ -21,6 +21,17 @@ pub const HEIGHT: f32 = 38.0;
 /// List item height.
 pub const ITEM_H: f32 = 26.0;
 
+/// Where the currently open combo list is painted (read by popup panels).
+fn open_list_id() -> egui::Id {
+    egui::Id::unique("fthrust-open-combo-list")
+}
+
+/// Returns the rect of the open combo list, if any (`None` once closed).
+pub fn open_list_rect(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data_mut(|d| d.get_temp::<Option<Rect>>(open_list_id()))
+        .flatten()
+}
+
 /// A combo's items and selection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Combo {
@@ -150,6 +161,9 @@ impl Combo {
             } else {
                 list_rect
             };
+            // Popup panels must not close on a press inside this list.
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(open_list_id(), Some(list_rect)));
             let bg_token = self.background;
             let items = self.items.clone();
             let selected = self.selected;
@@ -214,6 +228,13 @@ impl Combo {
             let escape = ui.ctx().input(|inp| inp.key_pressed(egui::Key::Escape));
             if (pressed_outside && !clicked_inside) || escape {
                 open = false;
+            }
+        }
+        if !open {
+            let mine = open_list_rect(ui.ctx());
+            if mine.is_some_and(|r| r.min.x == rect.min.x && r.width() == rect.width()) {
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp::<Option<Rect>>(open_list_id(), None));
             }
         }
         ui.ctx().data_mut(|d| d.insert_temp(popup_id, open));

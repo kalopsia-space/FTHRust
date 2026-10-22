@@ -22,7 +22,8 @@ pub mod widgets;
 pub struct App {
     /// Shared state.
     pub state: state::AppState,
-    screen_name: String,
+    /// The first-frame monitor clamp has run.
+    clamped: bool,
 }
 
 impl App {
@@ -32,13 +33,40 @@ impl App {
         tokens::install_style(&cc.egui_ctx, &state.tokens);
         App {
             state,
-            screen_name: String::new(),
+            clamped: false,
         }
     }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.clamped {
+            // Review Focus 3: a geometry saved on a removed monitor is clamped
+            // to the monitor the window actually opened on.
+            let (monitor, inner) = ui.ctx().input(|i| {
+                (
+                    i.viewport().monitor_size,
+                    i.viewport().inner_rect.map(|r| r.size()),
+                )
+            });
+            if let (Some(m), Some(size)) = (monitor, inner) {
+                let saved = fthrust_core::window_geometry::Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.x.round() as u32,
+                    height: size.y.round() as u32,
+                };
+                let clamped = shell::window::clamp_to_monitor(saved, m);
+                if (clamped.width, clamped.height) != (saved.width, saved.height) {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            clamped.width as f32,
+                            clamped.height as f32,
+                        )));
+                }
+                self.clamped = true;
+            }
+        }
         shell::ui(ui, &mut self.state);
     }
 
@@ -48,9 +76,8 @@ impl eframe::App for App {
         if rect.width > 0 && rect.height > 0 {
             shell::window::persist_geometry(
                 &mut self.state.settings,
-                rect,
+                (rect.width, rect.height),
                 self.state.window.maximized,
-                &self.screen_name,
             );
         }
     }

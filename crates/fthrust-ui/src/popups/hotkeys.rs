@@ -558,7 +558,7 @@ fn instructions_label(body: &mut Ui, t: &Tokens, text: &str, w: f32) {
     );
     fidelity::mark(
         body,
-        format!("QLabel[{}]", &text[..text.len().min(40)]),
+        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
         rect,
     )
     .text(text, size::MICRO, Weight::W400)
