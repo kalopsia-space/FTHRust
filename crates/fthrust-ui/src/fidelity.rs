@@ -127,7 +127,17 @@ impl MarkerBuilder<'_> {
 
     /// Stores the marker.
     pub fn done(self) {
-        registry(self.ctx).0.lock().unwrap().push(self.marker);
+        // Markers belong to one pass: a new pass drops the previous pass's set.
+        let pass = self.ctx.cumulative_pass_nr();
+        let pass_id = Id::unique("fthrust-fidelity-pass");
+        let last: Option<u64> = self.ctx.data_mut(|d| d.get_temp(pass_id));
+        let reg = registry(self.ctx);
+        let mut markers = reg.0.lock().unwrap();
+        if last != Some(pass) {
+            markers.clear();
+            self.ctx.data_mut(|d| d.insert_temp(pass_id, pass));
+        }
+        markers.push(self.marker);
     }
 }
 

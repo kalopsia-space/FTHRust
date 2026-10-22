@@ -196,11 +196,14 @@ pub struct DialogQueue {
     pub messages: Vec<DialogKind>,
     /// Results produced this frame.
     pub results: Vec<DialogResult>,
+    /// Bumped on every modal push so drafts are reset per dialog.
+    pub generation: u64,
 }
 
 impl DialogQueue {
     /// Queues a modal dialog.
     pub fn push_modal(&mut self, kind: DialogKind) {
+        self.generation += 1;
         self.modal.push_back(kind);
     }
 
@@ -411,6 +414,14 @@ pub struct AppState {
     pub shortcut_pending: Vec<String>,
     /// Keys currently held.
     pub shortcut_down: std::collections::BTreeSet<String>,
+    /// Text being edited in an input dialog.
+    pub input_draft: Option<String>,
+    /// Minutes being edited in the custom clip length dialog.
+    pub clip_length_draft: Option<f64>,
+    /// Export preset form draft.
+    pub export_preset_draft: Option<crate::dialogs::export_preset::Draft>,
+    /// The dialog generation the drafts belong to.
+    pub draft_generation: u64,
 }
 
 /// An overlay rect as canvas fractions `(x, y, w, h)`.
@@ -545,6 +556,10 @@ impl AppState {
             shortcut_recording: None,
             shortcut_pending: Vec::new(),
             shortcut_down: std::collections::BTreeSet::new(),
+            input_draft: None,
+            clip_length_draft: None,
+            export_preset_draft: None,
+            draft_generation: 0,
         })
     }
 

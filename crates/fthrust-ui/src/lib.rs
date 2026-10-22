@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod dialogs;
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
