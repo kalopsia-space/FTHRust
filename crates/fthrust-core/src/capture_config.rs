@@ -171,7 +171,7 @@ pub fn bitrate_preset_kbps(resolution: &str, level: BitrateLevel) -> Option<u32>
 }
 
 /// Video codec preference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Codec {
     /// Let the engine choose.
     #[default]
@@ -207,7 +207,7 @@ impl Codec {
 }
 
 /// How a scaled capture is fitted to the target size.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Scaling {
     /// Stretch to the target size.
     #[default]
@@ -235,7 +235,7 @@ impl Scaling {
 }
 
 /// Encoder backend preference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EncoderPref {
     /// Let the engine choose.
     #[default]
@@ -277,7 +277,7 @@ impl EncoderPref {
 }
 
 /// Normalised crop rectangle (fractions of the source frame).
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 pub struct CropRect {
     /// Left edge, 0..1.
     pub x: f64,
@@ -290,7 +290,7 @@ pub struct CropRect {
 }
 
 /// The configuration handed to the capture engine.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct CaptureConfig {
     /// Capture frame rate.
     pub fps: u32,
