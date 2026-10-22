@@ -55,6 +55,7 @@ pub struct Encoder {
     pts_epoch_ns: Option<i64>,
     last_input_pts: i64,
     last_forced_keyframe_pts: i64,
+    keyframe_requested: bool,
     pending: VecDeque<FrameTiming>,
     generation: u64,
 }
@@ -176,6 +177,7 @@ impl Encoder {
             pts_epoch_ns: None,
             last_input_pts: -1,
             last_forced_keyframe_pts: -1,
+            keyframe_requested: false,
             pending: VecDeque::new(),
             generation: 0,
         })
@@ -235,6 +237,12 @@ impl Encoder {
     /// The render node in use, when the VA-API path is active.
     pub fn vaapi_device(&self) -> Option<&str> {
         self.raw.vaapi().map(|v| v.device_path.as_str())
+    }
+
+    /// Makes the next frame an IDR frame (a recording can start at once
+    /// instead of waiting for the next scheduled keyframe).
+    pub fn request_keyframe(&mut self) {
+        self.keyframe_requested = true;
     }
 
     /// Stamps every subsequent packet with `generation`.
@@ -307,7 +315,8 @@ impl Encoder {
         let frame_pts = frame_pts.max(self.last_input_pts + 1);
         self.last_input_pts = frame_pts;
         let force_key = self.last_forced_keyframe_pts < 0
-            || frame_pts - self.last_forced_keyframe_pts >= fps * 2;
+            || frame_pts - self.last_forced_keyframe_pts >= fps * 2
+            || std::mem::take(&mut self.keyframe_requested);
         self.sw_frame.set_pts(frame_pts);
         self.sw_frame.set_forced_keyframe(force_key);
 

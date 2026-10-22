@@ -157,8 +157,10 @@ impl Muxer {
     /// Adds an AAC audio stream described by `aac` and returns its index.
     /// The stream is only created once the parameters were built, so a
     /// failure here never leaves an empty stream in the container.
-    pub fn add_audio_stream(&mut self, aac: &AacEncoder) -> Result<usize> {
+    pub fn add_audio_stream(&mut self, aac: &AacEncoder, title: &str) -> Result<usize> {
         let par = aac.parameters()?;
+        let ctitle =
+            CString::new(title).map_err(|_| MediaError::Invalid("stream title has NUL".into()))?;
         // SAFETY: fmt valid; par is owned until freed below; the new stream's
         // codecpar receives a copy.
         let result = unsafe {
@@ -170,11 +172,21 @@ impl Muxer {
             } else {
                 match super::check(ffi::avcodec_parameters_copy((*stream).codecpar, par)) {
                     Ok(_) => {
-                        (*stream).id = 1;
+                        (*stream).id = (*stream).index;
                         (*stream).time_base = ffi::AVRational {
                             num: 1,
                             den: aac.sample_rate() as i32,
                         };
+                        if !title.is_empty() {
+                            for key in [c"title", c"handler_name"] {
+                                ffi::av_dict_set(
+                                    &mut (*stream).metadata,
+                                    key.as_ptr(),
+                                    ctitle.as_ptr(),
+                                    0,
+                                );
+                            }
+                        }
                         Ok((*stream).index as usize)
                     }
                     Err(e) => Err(MediaError::Invalid(format!(

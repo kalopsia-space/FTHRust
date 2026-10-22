@@ -173,12 +173,14 @@ impl AacEncoder {
             (*self.frame).nb_samples = n as i32;
             (*self.frame).pts = self.next_pts;
             let src = self.pending.as_ptr().add(offset) as *const u8;
-            let src_data: [*const u8; 1] = [src];
+            // FFmpeg 6.1 declares the plane arrays as `*mut`, 7.0+ as
+            // `*const`; the inferred casts fit either binding.
+            let mut src_data: [*const u8; 1] = [src];
             let converted = ffi::swr_convert(
                 self.swr,
-                (*self.frame).data.as_mut_ptr(),
+                (*self.frame).data.as_mut_ptr() as _,
                 n as i32,
-                src_data.as_ptr(),
+                src_data.as_mut_ptr() as _,
                 n as i32,
             );
             super::check(converted)?;

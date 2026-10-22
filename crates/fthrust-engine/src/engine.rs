@@ -136,6 +136,9 @@ struct Inner {
     backoff: BackoffHook,
     packet_tap: Mutex<Option<Sender<EncodedPacket>>>,
     first_outcome: Mutex<Option<std::sync::mpsc::Sender<FirstOutcome>>>,
+    config: Mutex<EngineConfig>,
+    audio: Arc<dyn AudioProvider>,
+    keyframe_request: AtomicBool,
 }
 
 impl Inner {
@@ -186,6 +189,9 @@ impl CaptureEngine {
             backoff: deps.backoff,
             packet_tap: Mutex::new(None),
             first_outcome: Mutex::new(None),
+            config: Mutex::new(config.clone()),
+            audio: deps.audio.clone(),
+            keyframe_request: AtomicBool::new(false),
         });
         Self {
             config,
@@ -358,11 +364,19 @@ impl CaptureEngine {
             .unwrap_or_else(|p| p.into_inner()) = tap;
     }
 
+    /// A cloneable handle for the save and record workers.
+    pub fn handle(&self) -> EngineHandle {
+        EngineHandle {
+            inner: self.inner.clone(),
+        }
+    }
+
     /// Restarts capture with a new configuration (audio keeps running).
     pub fn reconfigure(&mut self, config: EngineConfig) -> Result<Vec<String>, StartupError> {
         let (config, warnings) = config.normalized();
         self.stop_capture();
         self.config = config;
+        *self.inner.config.lock().unwrap_or_else(|p| p.into_inner()) = self.config.clone();
         *self.inner.ring.lock().unwrap_or_else(|p| p.into_inner()) = make_ring(&self.config);
         *self
             .inner
@@ -397,6 +411,91 @@ impl CaptureEngine {
             self.audio.stop();
             self.started = false;
         }
+    }
+}
+
+/// Read access to the engine's state from worker threads.
+#[derive(Clone)]
+pub struct EngineHandle {
+    inner: Arc<Inner>,
+}
+
+impl EngineHandle {
+    /// Current capture status (no save fields).
+    pub fn status(&self) -> StatusSnapshot {
+        let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
+        StatusSnapshot {
+            frames_captured: s.frames_captured,
+            bytes_written: 0,
+            encoder_open: s.encoder_open,
+            active_codec: s.active_codec.clone(),
+            health_flags: s.health_flags,
+            capture_generation: s.capture_generation,
+            encoder_generation: s.encoder_generation,
+            content_sample_sequence: s.content_sample_sequence,
+            content_suspicious_streak: s.content_suspicious_streak,
+            content_luma_mean: s.content_luma_mean,
+            content_luma_variance: s.content_luma_variance,
+            capture_failure_detail: s.capture_failure_detail.clone(),
+            recovery_reason: s.recovery_reason.clone(),
+            paused: self.inner.paused.load(Ordering::Relaxed),
+            recording: RecordingState::Idle,
+            backend: s.backend,
+            selected_output: s.selected_output.clone(),
+            native_width: s.native_width,
+            native_height: s.native_height,
+            audio: self.inner.audio.status(),
+            last_save: None,
+        }
+    }
+
+    /// Whether the capture thread is alive.
+    pub fn is_capturing(&self) -> bool {
+        self.inner.running.load(Ordering::Relaxed)
+    }
+
+    /// The encoded ring.
+    pub fn ring(&self) -> Arc<EncodedRing> {
+        self.inner
+            .ring
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// The open encoder's parameters.
+    pub fn encoder_snapshot(&self) -> Option<EncoderSnapshot> {
+        self.inner
+            .encoder_snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// The audio provider.
+    pub fn audio(&self) -> Arc<dyn AudioProvider> {
+        self.inner.audio.clone()
+    }
+
+    /// The normalised configuration.
+    pub fn config(&self) -> EngineConfig {
+        self.inner
+            .config
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Installs or removes the packet tap.
+    pub fn set_packet_tap(&self, tap: Option<Sender<EncodedPacket>>) {
+        if tap.is_some() {
+            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        }
+        *self
+            .inner
+            .packet_tap
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = tap;
     }
 }
 
@@ -701,6 +800,9 @@ fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
                         });
                     }
                     packets.clear();
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
                     enc.encode(
                         &bgra.data,
                         bgra.stride,

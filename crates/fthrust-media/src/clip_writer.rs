@@ -41,6 +41,8 @@ pub struct ClipAudio<'a> {
     pub sample_rate: u32,
     /// Channel count.
     pub channels: u32,
+    /// Stream title (`title` and `handler_name` tags), e.g. `Default Mix`.
+    pub title: &'a str,
 }
 
 /// What a successful write produced.
@@ -52,8 +54,10 @@ pub struct ClipWriteResult {
     pub bytes_written: u64,
     /// Whether an audio track was written.
     pub audio_included: bool,
-    /// Why audio was dropped, when it was requested but failed to set up.
+    /// Why a track was dropped, when one was requested but failed to set up.
     pub audio_error: Option<String>,
+    /// Titles of the tracks written, in stream order.
+    pub audio_tracks: Vec<String>,
 }
 
 /// Writes the clip to `final_path` transactionally. `progress` receives the
@@ -61,7 +65,7 @@ pub struct ClipWriteResult {
 pub fn write_clip(
     final_path: &Path,
     video: &ClipVideo<'_>,
-    audio: Option<&ClipAudio<'_>>,
+    tracks: &[ClipAudio<'_>],
     progress: Option<&dyn Fn(u64)>,
 ) -> Result<ClipWriteResult, SaveError> {
     let mut outcome = ClipWriteResult {
@@ -69,9 +73,10 @@ pub fn write_clip(
         bytes_written: 0,
         audio_included: false,
         audio_error: None,
+        audio_tracks: Vec::new(),
     };
     let result = transactional_save::run(final_path, |temporary| {
-        write_temporary(temporary, video, audio, progress, &mut outcome).map_err(|e| e.to_string())
+        write_temporary(temporary, video, tracks, progress, &mut outcome).map_err(|e| e.to_string())
     });
     result.map(|path| ClipWriteResult { path, ..outcome })
 }
@@ -79,7 +84,7 @@ pub fn write_clip(
 fn write_temporary(
     path: &Path,
     video: &ClipVideo<'_>,
-    audio: Option<&ClipAudio<'_>>,
+    tracks: &[ClipAudio<'_>],
     progress: Option<&dyn Fn(u64)>,
     outcome: &mut ClipWriteResult,
 ) -> crate::Result<()> {
@@ -115,21 +120,29 @@ fn write_temporary(
         video.extradata,
     )?;
 
-    let mut aac: Option<(AacEncoder, usize)> = None;
-    if let Some(a) = audio.filter(|a| !a.samples.is_empty()) {
-        match AacEncoder::new(a.sample_rate, a.channels, mux.wants_global_header()) {
-            Ok(enc) => match mux.add_audio_stream(&enc) {
-                Ok(index) => aac = Some((enc, index)),
-                Err(e) => {
-                    tracing::warn!("audio stream setup failed; saving video only: {e}");
-                    outcome.audio_error = Some(e.to_string());
-                }
-            },
+    // Every track's encoder and stream are set up before the header; a
+    // track that fails is skipped and named, the others are still written.
+    let mut encoders: Vec<(AacEncoder, usize, &ClipAudio<'_>)> = Vec::new();
+    let mut errors = Vec::new();
+    for track in tracks.iter().filter(|t| !t.samples.is_empty()) {
+        let setup = AacEncoder::new(track.sample_rate, track.channels, mux.wants_global_header())
+            .and_then(|enc| {
+                mux.add_audio_stream(&enc, track.title)
+                    .map(|index| (enc, index))
+            });
+        match setup {
+            Ok((enc, index)) => encoders.push((enc, index, track)),
             Err(e) => {
-                tracing::warn!("AAC setup failed; saving video only: {e}");
-                outcome.audio_error = Some(e.to_string());
+                tracing::warn!(
+                    track = track.title,
+                    "audio track setup failed; skipping it: {e}"
+                );
+                errors.push(format!("{}: {e}", track.title));
             }
         }
+    }
+    if !errors.is_empty() {
+        outcome.audio_error = Some(errors.join("; "));
     }
 
     mux.write_header()?;
@@ -160,7 +173,7 @@ fn write_temporary(
     }
     outcome.bytes_written = bytes_out;
 
-    if let (Some((mut enc, index)), Some(a)) = (aac, audio) {
+    for (mut enc, index, track) in encoders {
         let rate = enc.sample_rate() as i32;
         let mut write_err: Option<crate::MediaError> = None;
         let mut sink = |pkt: crate::ffi::codec::RawPacket| {
@@ -171,7 +184,7 @@ fn write_temporary(
                 write_err = Some(e);
             }
         };
-        enc.encode(a.samples, &mut sink).map_err(|e| {
+        enc.encode(track.samples, &mut sink).map_err(|e| {
             crate::MediaError::Invalid(format!(
                 "Failed while encoding audio for the temporary clip: {e}"
             ))
@@ -187,6 +200,7 @@ fn write_temporary(
             )));
         }
         outcome.audio_included = true;
+        outcome.audio_tracks.push(track.title.to_string());
     }
 
     mux.finish()?;

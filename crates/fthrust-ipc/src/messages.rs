@@ -107,9 +107,10 @@ pub enum RecordingState {
 }
 
 /// One audio source's state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum SourceStatus {
     /// Not configured.
+    #[default]
     Disabled,
     /// Opening.
     Connecting,

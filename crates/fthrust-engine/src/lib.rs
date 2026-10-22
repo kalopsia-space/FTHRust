@@ -10,6 +10,7 @@ pub mod devices;
 pub mod engine;
 pub mod policy;
 pub mod portal_backend;
+pub mod save;
 pub mod watchdog;
 
 /// Crate version, printed by `fthrust-engine --version`.
