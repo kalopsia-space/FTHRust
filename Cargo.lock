@@ -562,6 +562,7 @@ name = "fthrust-engine"
 version = "2.0.0-alpha.1"
 dependencies = [
  "crossbeam-channel",
+ "ffmpeg-next",
  "fthrust-core",
  "fthrust-ipc",
  "fthrust-media",

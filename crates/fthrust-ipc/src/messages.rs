@@ -7,7 +7,7 @@ use fthrust_core::capture_config::CaptureConfig;
 use serde::{Deserialize, Serialize};
 
 /// A capture backend.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BackendKind {
     /// `zwlr_screencopy_manager_v1`.
     WlrScreencopy,

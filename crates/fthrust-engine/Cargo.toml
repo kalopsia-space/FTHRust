@@ -8,6 +8,7 @@ description = "The FTHRust capture daemon"
 [dependencies]
 fthrust-core = { path = "../fthrust-core" }
 fthrust-media = { path = "../fthrust-media" }
+ffmpeg-next.workspace = true
 fthrust-ipc = { path = "../fthrust-ipc" }
 fthrust-wayland = { path = "../fthrust-wayland" }
 fthrust-portal = { path = "../fthrust-portal" }
