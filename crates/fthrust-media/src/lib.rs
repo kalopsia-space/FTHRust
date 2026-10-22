@@ -1,5 +1,24 @@
 //! FFmpeg-backed media layer for FTHRust: encoding, the encoded replay ring,
 //! transactional clip saves, continuous recording, probing and thumbnails.
+//!
+//! | Module | Ports | Purpose |
+//! |---|---|---|
+//! | [`replay_interval`] | `replay_interval.cpp` | Which packets a replay window needs and where presentation starts |
+//! | [`audio_timing`] | `audio_timing.cpp` | 48 kHz chunk clock, gap fill, ring capacity, window assembly |
+//! | [`ring`] | `ring_buffer.cpp` | The encoded GOP ring: time and byte-budget trims, snapshots, publish waits |
+//! | [`transactional_save`] | `transactional_save.cpp` | `.partial` write, fsync, no-replace rename with link fallback |
+//! | [`encoder_policy`] | `encoder_policy.cpp` | Candidate encoder order per codec and backend, preset option tables |
+//! | [`encoder`] | `encoder.cpp` | BGRA in, packets out: hardware candidates, BT.709, wall-clock pts, forced IDR |
+//! | [`clip_writer`] | `save_clip.cpp` | Plain MP4 with negative pre-roll pts and native AAC, saved transactionally |
+//! | [`recorder`] | `continuous_recording_writer.cpp` | Recoverable fragmented MP4 that commits a fragment at every keyframe |
+//! | [`probe`] | `core/media_metadata.py` | ffprobe-rule parsing, configured-tag overrides, CFR evidence |
+//! | [`thumbnail`] | `ui/clip_grid.py` | Poster frames fitted into 640×360 |
+//! | [`capabilities`] | `core/encoder_capabilities.py` | Working-backend discovery by a one-frame encode, and its cache |
+//! | [`combined_audio`] | `core/combined_audio_policy.py` | Which native streams a combined track mixes, and the `amix` filter |
+//! | [`ffi`] | — | The only `unsafe` in the crate: thin wrappers over FFmpeg APIs ffmpeg-next lacks |
+//!
+//! Every module above the `ffi` row is safe Rust. Call [`init`] once (any
+//! entry point does it for you) before touching FFmpeg.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 

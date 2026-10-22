@@ -19,3 +19,14 @@
 - Export presets this version cannot parse are carried through rewrites untouched instead of being deleted.
 - `hotkeys.json` that cannot be read loads defaults instead of blocking startup.
 - Diagnostic events and exported log tails replace the home directory with `%USERPROFILE%`, so the export's `paths_redacted` attestation is true.
+- Saving a clip on a filesystem without `renameat2(RENAME_NOREPLACE)` (overlayfs, some NFS and FUSE mounts) falls back to `link` + `unlink`, so the no-replace guarantee holds instead of failing the save.
+- When the AAC encoder cannot be set up the clip is still written video-only, as before, but the caller is now told (`ClipWriteResult::audio_error`) instead of silently producing a silent clip.
+- Continuous recording to a recoverable fragmented MP4 is available on Linux; the reference only built it for Windows. A crash loses at most the group of pictures in progress.
+- The encoder validates the source stride and buffer length and rebuilds its scaler when the source size changes, instead of reading past a short buffer or feeding a stale geometry.
+- VA-API device selection tries `FTHR_VAAPI_DEVICE`, then `/dev/dri/renderD128`, then every other render node, so a machine whose first node is not the VA-API-capable GPU still gets hardware encoding.
+- Media metadata treats bitrates or dimensions at or above 2^63 as unknown instead of wrapping.
+- Encoder capability discovery runs the one-frame probe in-process and keys its cache on the loaded libavcodec, since FTHRust links FFmpeg instead of shelling out to an `ffmpeg` executable.
+
+## Added
+
+- `fthrust-media` crate: FFmpeg encoder with hardware candidates, encoded GOP ring, transactional MP4 writer, fragmented recorder, probe, thumbnails, capability cache and combined-audio policy, tested against reference fixtures and synthetic frames.
