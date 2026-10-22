@@ -2,6 +2,8 @@
 //! `-ss 0 -frames:v 1 -vf scale=w='min(640,iw)':h='min(360,ih)':
 //! force_original_aspect_ratio=decrease`, in-process.
 
+pub mod library;
+
 use std::path::Path;
 
 use fast_image_resize::images::Image;

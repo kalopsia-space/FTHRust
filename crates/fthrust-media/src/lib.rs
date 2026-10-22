@@ -23,6 +23,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod audio_decode;
 pub mod audio_timing;
 pub mod capabilities;
 pub mod clip_writer;
