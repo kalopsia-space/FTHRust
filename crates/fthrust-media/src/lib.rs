@@ -4,6 +4,8 @@
 #![deny(missing_docs)]
 
 pub mod audio_timing;
+pub mod encoder;
+pub mod encoder_policy;
 pub mod ffi;
 pub mod replay_interval;
 pub mod ring;
