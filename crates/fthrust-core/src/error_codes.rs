@@ -159,17 +159,28 @@ pub const APP_FAILURE_CODES: [AppFailureCode; 23] = [
     },
 ];
 
-/// Returns the registry entry whose title matches `title` exactly.
+/// Trims and ASCII-upper-cases a title, matching the reference normalisation.
+fn normalize_title(title: &str) -> String {
+    title.trim().to_ascii_uppercase()
+}
+
+/// Returns the registry entry whose title matches `title` after trimming and
+/// ASCII upper-casing.
 pub fn code_for_title(title: &str) -> Option<&'static AppFailureCode> {
-    APP_FAILURE_CODES.iter().find(|code| code.title == title)
+    let normalized = normalize_title(title);
+    APP_FAILURE_CODES
+        .iter()
+        .find(|code| code.title == normalized)
 }
 
 /// Formats a failure title as `[Error NNN] TITLE` when it is documented.
 ///
-/// Unknown titles are returned unchanged.
+/// The title is trimmed and upper-cased first. Unknown titles are returned in
+/// that normalised form.
 pub fn format_error_title(title: &str) -> String {
-    match code_for_title(title) {
+    let normalized = normalize_title(title);
+    match code_for_title(&normalized) {
         Some(code) => format!("[{}] {}", code.code, code.title),
-        None => title.to_string(),
+        None => normalized,
     }
 }

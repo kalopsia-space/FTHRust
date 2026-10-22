@@ -37,7 +37,20 @@ fn format_known_title() {
 }
 
 #[test]
-fn format_unknown_title_unchanged() {
+fn format_unknown_title_is_normalised() {
+    assert_eq!(format_error_title("unknown thing"), "UNKNOWN THING");
     assert_eq!(format_error_title("NOT A REAL TITLE"), "NOT A REAL TITLE");
     assert!(code_for_title("NOT A REAL TITLE").is_none());
+}
+
+#[test]
+fn format_normalises_case_and_whitespace() {
+    assert_eq!(
+        format_error_title("  capture failed "),
+        "[Error 001] CAPTURE FAILED"
+    );
+    assert_eq!(
+        code_for_title("  capture failed ").map(|c| c.code),
+        Some("Error 001")
+    );
 }
