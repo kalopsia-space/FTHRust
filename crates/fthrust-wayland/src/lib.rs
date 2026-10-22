@@ -3,8 +3,10 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod backend;
 pub mod connection;
 pub mod dispatch;
 pub mod frame;
 pub mod outputs;
+pub mod screencopy;
 pub mod shm;
