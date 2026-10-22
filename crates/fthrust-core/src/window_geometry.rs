@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const MIN_WIDTH: u32 = 1100;
 /// Minimum window height in logical pixels.
 pub const MIN_HEIGHT: u32 = 720;
-/// Minimum width of a saved rectangle for it to count as present.
+/// Minimum width of a saved rectangle for it to count as present (also the
+/// reference's minimum useful visible width).
 pub const MIN_VISIBLE_WIDTH: u32 = 64;
 /// Minimum height of a saved rectangle for it to count as present.
 pub const MIN_VISIBLE_HEIGHT: u32 = 40;
@@ -142,16 +143,29 @@ pub fn restore(saved: &SavedGeometry, screens: &[Screen]) -> Option<Placement> {
     })
 }
 
-/// Position a popup of `popup` (width, height) 8 px below `anchor`, shifted
-/// as needed to stay fully inside `screen`. Returns the top-left corner.
+/// Position a popup of `popup` (width, height) just below `anchor`, inside
+/// `screen` shrunk by an 8 px margin on every side. Mirrors the reference:
+/// if the popup overflows the right edge it is right-aligned to the anchor,
+/// if it overflows the bottom edge it is flipped above the anchor, and the
+/// result is finally clamped into the margined area. Returns the top-left.
 pub fn popup_anchor(anchor: Rect, popup: (u32, u32), screen: Rect) -> (i32, i32) {
-    let y = i64::from(anchor.y) + i64::from(anchor.height) + POPUP_MARGIN;
-    let x = clamp_axis(anchor.x, popup.0, screen.x, screen.width);
-    let y = clamp_axis(
-        y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
-        popup.1,
-        screen.y,
-        screen.height,
+    let m = POPUP_MARGIN;
+    let (sx, sy) = (i64::from(screen.x) + m, i64::from(screen.y) + m);
+    let (sw, sh) = (
+        i64::from(screen.width) - 2 * m,
+        i64::from(screen.height) - 2 * m,
     );
-    (x, y)
+    let width = i64::from(popup.0).max(1).min(sw.max(1));
+    let height = i64::from(popup.1).max(1).min(sh.max(1));
+    let mut x = i64::from(anchor.x);
+    let mut y = i64::from(anchor.y) + i64::from(anchor.height);
+    if x + width > sx + sw {
+        x = i64::from(anchor.x) + i64::from(anchor.width) - width;
+    }
+    if y + height > sy + sh {
+        y = i64::from(anchor.y) - height;
+    }
+    let x = x.max(sx).min(sx + sw - width);
+    let y = y.max(sy).min(sy + sh - height);
+    (x as i32, y as i32)
 }
