@@ -274,7 +274,18 @@ pub fn compare(
         };
         report.compared += 1;
         let [qx, qy, qw, qh] = w.rect.map(|v| v as f32);
-        let got = [m.rect.min.x, m.rect.min.y, m.rect.width(), m.rect.height()];
+        // The extractor records widgets clipped to the window; clip ours too.
+        let screen = Rect::from_min_size(
+            Pos2::ZERO,
+            egui::Vec2::new(qt.size[0] as f32, qt.size[1] as f32),
+        );
+        let clipped = m.rect.intersect(screen);
+        let got = [
+            clipped.min.x,
+            clipped.min.y,
+            clipped.width(),
+            clipped.height(),
+        ];
         for (i, (g, q)) in got.iter().zip([qx, qy, qw, qh]).enumerate() {
             if (g - q).abs() > 1.0 {
                 let edge = ["x", "y", "w", "h"][i];
@@ -284,6 +295,9 @@ pub fn compare(
             }
         }
         for s in &m.samples {
+            if !screen.contains(s.at) {
+                continue; // clipped away in the Qt capture as well
+            }
             let want = tokens.color(s.expect);
             match pixel(s.at) {
                 Some(got) if got.r() == want.r() && got.g() == want.g() && got.b() == want.b() => {}

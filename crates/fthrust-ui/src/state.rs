@@ -341,6 +341,47 @@ pub struct AppState {
     pub refresh_windows_requested: bool,
     /// Open the desktop's shortcut settings (plan 5 consumes).
     pub open_desktop_shortcuts_requested: bool,
+    /// Settings category slide.
+    pub tab_slide: crate::settings::TabSlide,
+    /// Encoder capabilities (`None` while detecting).
+    pub encoder_capabilities: Option<Vec<fthrust_media::capabilities::EncoderCapability>>,
+    /// Capabilities came from the saved device profile.
+    pub encoder_from_cache: bool,
+    /// Encoder the engine reports as active.
+    pub active_encoder: Option<String>,
+    /// Encoder settings changed since the last Apply.
+    pub encoder_dirty: bool,
+    /// Redetect encoders (plan 5 consumes).
+    pub redetect_encoders_requested: bool,
+    /// A folder picker was requested (plan 5 opens the portal).
+    pub browse_requested: Option<BrowseKind>,
+    /// Scan imported folders (plan 5 consumes).
+    pub scan_clips_requested: bool,
+    /// Clips directory changed (plan 5 reloads the library).
+    pub clips_directory_changed: bool,
+    /// Imported folders changed (plan 5 refreshes the library).
+    pub imported_folders_changed: bool,
+    /// Export a diagnostic report (Task 15 / plan 5 consumes).
+    pub diagnostic_export_requested: bool,
+    /// The last exported diagnostic ZIP (shown as a draggable file).
+    pub diagnostic_report_zip: Option<std::path::PathBuf>,
+    /// Selected export preset id.
+    pub export_preset_selected: String,
+    /// Selected settings preset name.
+    pub settings_preset_selected: String,
+    /// A transient status hint (plan 5 shows it on the capture card).
+    pub status_hint: Option<String>,
+}
+
+/// Which folder a BROWSE button asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowseKind {
+    /// Clips storage folder.
+    ClipsFolder,
+    /// Manual recording folder.
+    RecordingFolder,
+    /// A folder to import clips from.
+    ImportFolder,
 }
 
 /// Capture settings profile.
@@ -410,6 +451,21 @@ impl AppState {
             engine_restart_requested: false,
             refresh_windows_requested: false,
             open_desktop_shortcuts_requested: false,
+            tab_slide: Default::default(),
+            encoder_capabilities: None,
+            encoder_from_cache: false,
+            active_encoder: None,
+            encoder_dirty: false,
+            redetect_encoders_requested: false,
+            browse_requested: None,
+            scan_clips_requested: false,
+            clips_directory_changed: false,
+            imported_folders_changed: false,
+            diagnostic_export_requested: false,
+            diagnostic_report_zip: None,
+            export_preset_selected: String::new(),
+            settings_preset_selected: String::new(),
+            status_hint: None,
         })
     }
 

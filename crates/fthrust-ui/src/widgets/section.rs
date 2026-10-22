@@ -85,6 +85,37 @@ pub fn label_wrapped(
     rect
 }
 
+/// A word-wrapped label laid out at its real `width` (labels inside
+/// `widgetResizable` scroll pages: Qt uses `heightForWidth`, not the
+/// trial-width hint).
+pub fn label_wrapped_fit(
+    ui: &mut Ui,
+    t: &Tokens,
+    text: &str,
+    px: f32,
+    weight: Weight,
+    color: Color,
+    width: f32,
+) -> Rect {
+    let line = fonts::qt_wrapped_line_height(px, weight);
+    let g = ui.painter().layout(
+        text.to_owned(),
+        fonts::id(px, weight),
+        t.color(color),
+        width,
+    );
+    let rows = g.rows.len().max(1) as f32;
+    let h = rows * line;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
+    let y = rect.min.y + ((h - g.size().y) / 2.0).floor().max(0.0);
+    ui.painter()
+        .galley(Pos2::new(rect.min.x, y), g, t.color(color));
+    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
+        .text(text, px, weight)
+        .done();
+    rect
+}
+
 /// A label that takes the available width (Qt expanding label), text left.
 pub fn label_wide(
     ui: &mut Ui,

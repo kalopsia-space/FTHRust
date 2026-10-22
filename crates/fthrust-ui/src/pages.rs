@@ -1,5 +1,5 @@
-//! Page bodies. The clips page is plan 5; the settings page body is filled
-//! by the `settings` module (Task 12).
+//! Page bodies. The clips page is plan 5; the settings page lives in the
+//! `settings` module.
 
 use egui::Ui;
 
@@ -18,10 +18,5 @@ pub fn clips_placeholder(ui: &mut Ui, state: &mut AppState) {
 
 /// Settings page.
 pub fn settings_page(ui: &mut Ui, state: &mut AppState) {
-    let rect = ui.max_rect();
-    ui.painter()
-        .rect_filled(rect, 0.0, state.tokens.color(Color::Bg));
-    crate::fidelity::mark(ui, "settingsPage", rect)
-        .fill(Color::Bg)
-        .done();
+    crate::settings::ui(ui, state);
 }
