@@ -47,8 +47,12 @@ impl Muxer {
             if fmt.is_null() {
                 return Err(MediaError::Invalid("MP4 output context is null".into()));
             }
-            if !fragmented {
-                (*fmt).avoid_negative_ts = AVOID_NEG_TS_DISABLED;
+            (*fmt).avoid_negative_ts = AVOID_NEG_TS_DISABLED;
+            if fragmented {
+                // Bounded interleave buffering so completed fragments reach
+                // the filesystem even while one stream is quiet.
+                (*fmt).max_interleave_delta = 1_000_000;
+                (*fmt).flags |= ffi::AVFMT_FLAG_FLUSH_PACKETS;
             }
         }
         Ok(Self {
@@ -79,14 +83,17 @@ impl Muxer {
         }
     }
 
-    /// Adds the video stream (time base `1/fps`, BT.709 studio range,
-    /// extradata copied with padding) and returns its index.
+    /// Adds the video stream (time base `1/time_base_den`, frame rate `fps`,
+    /// BT.709 studio range, extradata copied with padding) and returns its
+    /// index.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_video_stream(
         &mut self,
         codec_id: ffi::AVCodecID,
         width: u32,
         height: u32,
         fps: u32,
+        time_base_den: i32,
         bitrate_bps: i64,
         extradata: &[u8],
     ) -> Result<usize> {
@@ -102,7 +109,7 @@ impl Muxer {
             (*stream).id = 0;
             (*stream).time_base = ffi::AVRational {
                 num: 1,
-                den: fps as i32,
+                den: time_base_den,
             };
             (*stream).avg_frame_rate = ffi::AVRational {
                 num: fps as i32,
@@ -193,16 +200,25 @@ impl Muxer {
                 })?;
             }
             let mut opts: *mut ffi::AVDictionary = ptr::null_mut();
+            // frag_custom lets the recorder close a fragment explicitly at
+            // every keyframe; empty_moov writes the recovery metadata up
+            // front instead of only at the trailer.
             let flags = if self.fragmented {
-                c"use_metadata_tags+frag_keyframe+empty_moov+default_base_moof"
+                c"empty_moov+frag_custom+default_base_moof+omit_tfhd_offset+use_metadata_tags"
             } else {
                 c"use_metadata_tags"
             };
             ffi::av_dict_set(&mut opts, c"movflags".as_ptr(), flags.as_ptr(), 0);
+            if self.fragmented {
+                ffi::av_dict_set(&mut opts, c"flush_packets".as_ptr(), c"1".as_ptr(), 0);
+            }
             let ret = ffi::avformat_write_header(self.fmt, &mut opts);
             ffi::av_dict_free(&mut opts);
             super::check(ret)
                 .map_err(|e| MediaError::Invalid(format!("Failed to write the MP4 header: {e}")))?;
+            if self.fragmented && !(*self.fmt).pb.is_null() {
+                ffi::avio_flush((*self.fmt).pb);
+            }
         }
         self.header_written = true;
         Ok(())
@@ -262,10 +278,39 @@ impl Muxer {
         }
     }
 
-    /// Writes the trailer and closes the file.
-    pub fn finish(mut self) -> Result<()> {
+    /// Drains the interleave queue and closes the current fragment so
+    /// everything written so far is on disk and decodable (fragmented
+    /// output only).
+    pub fn flush_fragment(&mut self) -> Result<()> {
+        if !self.fragmented || !self.header_written {
+            return Err(MediaError::Invalid(
+                "flush_fragment needs a fragmented, started muxer".into(),
+            ));
+        }
+        // SAFETY: fmt and pb are valid; null packets are the documented way
+        // to drain the queue and (with frag_custom) end a fragment.
+        unsafe {
+            if (*self.fmt).pb.is_null() {
+                return Err(MediaError::Invalid("recording file is closed".into()));
+            }
+            super::check(ffi::av_interleaved_write_frame(self.fmt, ptr::null_mut()))?;
+            super::check(ffi::av_write_frame(self.fmt, ptr::null_mut()))?;
+            ffi::avio_flush((*self.fmt).pb);
+            let err = (*(*self.fmt).pb).error;
+            if err < 0 {
+                return Err(MediaError::Ffmpeg(ffmpeg_next::Error::from(err)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the trailer and closes the file. Later calls are no-ops.
+    pub fn finish(&mut self) -> Result<()> {
         if !self.header_written {
             return Err(MediaError::Invalid("finish before write_header".into()));
+        }
+        if self.finished {
+            return Ok(());
         }
         // SAFETY: fmt valid; the trailer is written once.
         let trailer = unsafe { super::check(ffi::av_write_trailer(self.fmt)) };

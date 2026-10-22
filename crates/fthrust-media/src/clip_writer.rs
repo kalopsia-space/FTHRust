@@ -110,6 +110,7 @@ fn write_temporary(
         video.width,
         video.height,
         fps,
+        fps as i32,
         i64::from(video.bitrate_kbps) * 1000,
         video.extradata,
     )?;

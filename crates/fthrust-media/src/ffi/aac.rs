@@ -18,6 +18,8 @@ pub struct AacEncoder {
     channels: usize,
     sample_rate: u32,
     next_pts: i64,
+    /// Interleaved samples waiting for a full frame.
+    pending: Vec<f32>,
 }
 
 // SAFETY: every pointer is exclusively owned.
@@ -50,6 +52,7 @@ impl AacEncoder {
                 channels: channels as usize,
                 sample_rate,
                 next_pts: 0,
+                pending: Vec::new(),
             };
             if this.ctx.is_null() {
                 return Err(MediaError::Invalid(
@@ -151,38 +154,54 @@ impl AacEncoder {
     }
 
     /// Encodes interleaved float32 samples; packets carry pts in samples.
+    /// Samples are buffered until a full encoder frame is available (the
+    /// AAC encoder only accepts a short frame as the last one).
     pub fn encode(&mut self, interleaved: &[f32], mut sink: impl FnMut(RawPacket)) -> Result<()> {
-        let total = interleaved.len() / self.channels;
+        self.pending.extend_from_slice(interleaved);
+        let frame_samples = self.frame_size * self.channels;
         let mut offset = 0;
-        while offset < total {
-            let n = self.frame_size.min(total - offset);
-            // SAFETY: frame and swr are valid; the source slice covers n
-            // frames of `channels` samples each.
-            unsafe {
-                super::check(ffi::av_frame_make_writable(self.frame))?;
-                (*self.frame).nb_samples = n as i32;
-                (*self.frame).pts = self.next_pts;
-                let src = interleaved.as_ptr().add(offset * self.channels) as *const u8;
-                let src_data: [*const u8; 1] = [src];
-                let converted = ffi::swr_convert(
-                    self.swr,
-                    (*self.frame).data.as_mut_ptr(),
-                    n as i32,
-                    src_data.as_ptr(),
-                    n as i32,
-                );
-                super::check(converted)?;
-                super::check(ffi::avcodec_send_frame(self.ctx, self.frame))?;
-            }
+        while self.pending.len() - offset >= frame_samples {
+            self.send_frame(offset, self.frame_size)?;
             self.receive(&mut sink)?;
-            offset += n;
-            self.next_pts += n as i64;
+            offset += frame_samples;
         }
+        self.pending.drain(..offset);
         Ok(())
     }
 
-    /// Drains the encoder at the end of the track.
+    /// Sends `n` frames starting at `offset` samples into `pending`.
+    fn send_frame(&mut self, offset: usize, n: usize) -> Result<()> {
+        // SAFETY: frame and swr are valid; the source slice covers n frames
+        // of `channels` samples each (checked by the callers).
+        unsafe {
+            super::check(ffi::av_frame_make_writable(self.frame))?;
+            (*self.frame).nb_samples = n as i32;
+            (*self.frame).pts = self.next_pts;
+            let src = self.pending.as_ptr().add(offset) as *const u8;
+            let src_data: [*const u8; 1] = [src];
+            let converted = ffi::swr_convert(
+                self.swr,
+                (*self.frame).data.as_mut_ptr(),
+                n as i32,
+                src_data.as_ptr(),
+                n as i32,
+            );
+            super::check(converted)?;
+            super::check(ffi::avcodec_send_frame(self.ctx, self.frame))?;
+        }
+        self.next_pts += n as i64;
+        Ok(())
+    }
+
+    /// Encodes the buffered remainder as the last (short) frame and drains
+    /// the encoder at the end of the track.
     pub fn flush(&mut self, mut sink: impl FnMut(RawPacket)) -> Result<()> {
+        let rest = self.pending.len() / self.channels;
+        if rest > 0 {
+            self.send_frame(0, rest)?;
+            self.pending.clear();
+            self.receive(&mut sink)?;
+        }
         // SAFETY: ctx is valid; a null frame starts draining.
         let ret = unsafe { ffi::avcodec_send_frame(self.ctx, ptr::null()) };
         if ret < 0 && ret != ffi::AVERROR_EOF {
