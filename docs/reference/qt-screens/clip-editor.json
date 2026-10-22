@@ -737,7 +737,7 @@
    ]
   },
   {
-   "name": "timelineTool",
+   "name": "timelineTool#2",
    "class": "IconButton",
    "rect": [
     200,
@@ -833,7 +833,7 @@
    }
   },
   {
-   "name": "timelineTool",
+   "name": "timelineTool#3",
    "class": "IconButton",
    "rect": [
     282,
@@ -873,7 +873,7 @@
    ]
   },
   {
-   "name": "timelineTool",
+   "name": "timelineTool#4",
    "class": "IconButton",
    "rect": [
     314,
@@ -1715,7 +1715,7 @@
    }
   },
   {
-   "name": "detailsPanel",
+   "name": "detailsPanel#2",
    "class": "QFrame",
    "rect": [
     1174,
@@ -1755,7 +1755,7 @@
    ]
   },
   {
-   "name": "panelHeader",
+   "name": "panelHeader#2",
    "class": "ThemedDropdownButton",
    "rect": [
     1175,
@@ -1812,7 +1812,7 @@
    }
   },
   {
-   "name": "panelBody",
+   "name": "panelBody#2",
    "class": "QFrame",
    "rect": [
     1175,
@@ -2172,7 +2172,7 @@
    ]
   },
   {
-   "name": "detailsPanel",
+   "name": "detailsPanel#3",
    "class": "QFrame",
    "rect": [
     1174,
@@ -2212,7 +2212,7 @@
    ]
   },
   {
-   "name": "panelHeader",
+   "name": "panelHeader#3",
    "class": "ThemedDropdownButton",
    "rect": [
     1175,
@@ -2269,7 +2269,7 @@
    }
   },
   {
-   "name": "panelBody",
+   "name": "panelBody#3",
    "class": "QFrame",
    "rect": [
     1175,
@@ -2541,7 +2541,7 @@
    ]
   },
   {
-   "name": "detailsPanel",
+   "name": "detailsPanel#4",
    "class": "QFrame",
    "rect": [
     1174,
@@ -2581,7 +2581,7 @@
    ]
   },
   {
-   "name": "panelHeader",
+   "name": "panelHeader#4",
    "class": "ThemedDropdownButton",
    "rect": [
     1175,
@@ -2638,7 +2638,7 @@
    }
   },
   {
-   "name": "detailsPanel",
+   "name": "detailsPanel#5",
    "class": "QFrame",
    "rect": [
     1174,
@@ -2678,7 +2678,7 @@
    ]
   },
   {
-   "name": "panelHeader",
+   "name": "panelHeader#5",
    "class": "ThemedDropdownButton",
    "rect": [
     1175,
@@ -2735,7 +2735,7 @@
    }
   },
   {
-   "name": "detailsPanel",
+   "name": "detailsPanel#6",
    "class": "QFrame",
    "rect": [
     1174,
@@ -2775,7 +2775,7 @@
    ]
   },
   {
-   "name": "panelHeader",
+   "name": "panelHeader#6",
    "class": "ThemedDropdownButton",
    "rect": [
     1175,

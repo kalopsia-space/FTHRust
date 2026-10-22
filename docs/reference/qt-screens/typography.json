@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     1336,
@@ -1793,7 +1793,7 @@
    ]
   },
   {
-   "name": "qt_scrollarea_viewport",
+   "name": "qt_scrollarea_viewport#2",
    "class": "QWidget",
    "rect": [
     118,
@@ -2481,7 +2481,7 @@
    }
   },
   {
-   "name": "WheelSafeComboBox[Oswald]",
+   "name": "WheelSafeComboBox[Oswald]#2",
    "class": "WheelSafeComboBox",
    "rect": [
     287,
@@ -2537,7 +2537,7 @@
    }
   },
   {
-   "name": "QPushButton[Import font]",
+   "name": "QPushButton[Import font]#2",
    "class": "QPushButton",
    "rect": [
     1281,
@@ -2705,7 +2705,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#2",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2745,7 +2745,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#2",
    "class": "QPushButton",
    "rect": [
     119,
@@ -2897,7 +2897,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#3",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2937,7 +2937,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#3",
    "class": "QPushButton",
    "rect": [
     119,
@@ -3089,7 +3089,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#4",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -3129,7 +3129,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#4",
    "class": "QPushButton",
    "rect": [
     119,
@@ -3281,7 +3281,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#5",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -3321,7 +3321,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#5",
    "class": "QPushButton",
    "rect": [
     119,
@@ -3473,7 +3473,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#6",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -3513,7 +3513,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#6",
    "class": "QPushButton",
    "rect": [
     119,

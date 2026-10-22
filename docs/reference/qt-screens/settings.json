@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     1336,
@@ -696,8 +696,8 @@
       1371,
       68
      ],
-     "rgb": "#101512",
-     "token": "CARD_BG"
+     "rgb": "#151a17",
+     "token": null
     },
     {
      "role": "edge",
@@ -722,7 +722,7 @@
     "matched_family": "Oswald",
     "matched_weight": 400,
     "matched_px": 14,
-    "content": "Connecting",
+    "content": "Starting capture",
     "px": 14,
     "weight": 400,
     "family": "Oswald",
@@ -732,7 +732,7 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
-    "advance": 57
+    "advance": 83
    }
   },
   {
@@ -1489,7 +1489,7 @@
    ]
   },
   {
-   "name": "qt_scrollarea_viewport",
+   "name": "qt_scrollarea_viewport#2",
    "class": "QWidget",
    "rect": [
     118,

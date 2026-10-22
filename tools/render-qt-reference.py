@@ -122,8 +122,10 @@ def _text_info(w: QWidget):
 
 
 def dump_widgets(root: QWidget, image: QImage, palette: dict) -> list:
-    """Every visible, named-or-textual descendant of `root`, in paint order."""
+    """Every visible, named-or-textual descendant of `root`, in paint order.
+    Repeated names get `#2`, `#3`, ... so each entry can be addressed."""
     out = []
+    seen = {}
     root_rect = QRect(0, 0, QWidget.width(root), QWidget.height(root))
     for w in root.findChildren(QWidget):
         if not QWidget.isVisible(w) or QWidget.width(w) <= 0 or QWidget.height(w) <= 0:
@@ -133,6 +135,9 @@ def dump_widgets(root: QWidget, image: QImage, palette: dict) -> list:
         name = _widget_name(w)
         if name is None:
             continue
+        seen[name] = seen.get(name, 0) + 1
+        if seen[name] > 1:
+            name = f'{name}#{seen[name]}'
         top_left = QWidget.mapTo(w, root, QPoint(0, 0))
         rect = QRect(top_left, QWidget.size(w)).intersected(root_rect)
         if rect.isEmpty():

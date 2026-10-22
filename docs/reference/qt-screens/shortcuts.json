@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     1336,
@@ -1489,7 +1489,7 @@
    ]
   },
   {
-   "name": "qt_scrollarea_viewport",
+   "name": "qt_scrollarea_viewport#2",
    "class": "QWidget",
    "rect": [
     118,
@@ -2091,7 +2091,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#2",
    "class": "QPushButton",
    "rect": [
     1335,
@@ -2259,7 +2259,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#3",
    "class": "QPushButton",
    "rect": [
     1335,
@@ -2427,7 +2427,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#4",
    "class": "QPushButton",
    "rect": [
     1335,
@@ -2595,7 +2595,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#5",
    "class": "QPushButton",
    "rect": [
     1335,
@@ -2876,7 +2876,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#6",
    "class": "QPushButton",
    "rect": [
     1335,
@@ -3044,7 +3044,7 @@
    }
   },
   {
-   "name": "QPushButton[Clear]",
+   "name": "QPushButton[Clear]#7",
    "class": "QPushButton",
    "rect": [
     1335,

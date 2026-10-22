@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     1336,
@@ -2621,7 +2621,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#2",
    "class": "QLabel",
    "rect": [
     1374,
@@ -2733,7 +2733,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#3",
    "class": "QLabel",
    "rect": [
     1374,
@@ -2845,7 +2845,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#4",
    "class": "QLabel",
    "rect": [
     1374,
@@ -2957,7 +2957,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#5",
    "class": "QLabel",
    "rect": [
     1374,
@@ -3069,7 +3069,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#6",
    "class": "QLabel",
    "rect": [
     1374,
@@ -3181,7 +3181,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#7",
    "class": "QLabel",
    "rect": [
     1374,
@@ -3293,7 +3293,7 @@
    }
   },
   {
-   "name": "QLabel[100%]",
+   "name": "QLabel[100%]#8",
    "class": "QLabel",
    "rect": [
     1374,

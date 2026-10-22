@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     3736,
@@ -1793,7 +1793,7 @@
    ]
   },
   {
-   "name": "qt_scrollarea_viewport",
+   "name": "qt_scrollarea_viewport#2",
    "class": "QWidget",
    "rect": [
     118,
@@ -2121,7 +2121,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#2",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2161,7 +2161,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#2",
    "class": "QPushButton",
    "rect": [
     119,
@@ -2313,7 +2313,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#3",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2353,7 +2353,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#3",
    "class": "QPushButton",
    "rect": [
     119,
@@ -2505,7 +2505,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#4",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2545,7 +2545,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#4",
    "class": "QPushButton",
    "rect": [
     119,
@@ -2697,7 +2697,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#5",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2737,7 +2737,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#5",
    "class": "QPushButton",
    "rect": [
     119,
@@ -2889,7 +2889,7 @@
    }
   },
   {
-   "name": "accordionSection",
+   "name": "accordionSection#6",
    "class": "_AccordionSection",
    "rect": [
     118,
@@ -2929,7 +2929,7 @@
    ]
   },
   {
-   "name": "accordionHeader",
+   "name": "accordionHeader#6",
    "class": "QPushButton",
    "rect": [
     119,

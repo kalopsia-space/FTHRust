@@ -545,7 +545,7 @@
    }
   },
   {
-   "name": "presetStepper",
+   "name": "presetStepper#2",
    "class": "_PresetSpinBox",
    "rect": [
     108,
@@ -585,7 +585,7 @@
    ]
   },
   {
-   "name": "qt_spinbox_lineedit",
+   "name": "qt_spinbox_lineedit#2",
    "class": "QLineEdit",
    "rect": [
     108,
@@ -641,7 +641,7 @@
    }
   },
   {
-   "name": "presetStepDown",
+   "name": "presetStepDown#2",
    "class": "IconButton",
    "rect": [
     169,
@@ -681,7 +681,7 @@
    ]
   },
   {
-   "name": "presetStepUp",
+   "name": "presetStepUp#2",
    "class": "IconButton",
    "rect": [
     197,
@@ -777,7 +777,7 @@
    }
   },
   {
-   "name": "presetStepper",
+   "name": "presetStepper#3",
    "class": "_PresetSpinBox",
    "rect": [
     286,
@@ -817,7 +817,7 @@
    ]
   },
   {
-   "name": "qt_spinbox_lineedit",
+   "name": "qt_spinbox_lineedit#3",
    "class": "QLineEdit",
    "rect": [
     286,
@@ -873,7 +873,7 @@
    }
   },
   {
-   "name": "presetStepDown",
+   "name": "presetStepDown#3",
    "class": "IconButton",
    "rect": [
     347,
@@ -913,7 +913,7 @@
    ]
   },
   {
-   "name": "presetStepUp",
+   "name": "presetStepUp#3",
    "class": "IconButton",
    "rect": [
     375,
@@ -1066,7 +1066,7 @@
    }
   },
   {
-   "name": "presetStepper",
+   "name": "presetStepper#4",
    "class": "_PresetDoubleSpinBox",
    "rect": [
     108,
@@ -1106,7 +1106,7 @@
    ]
   },
   {
-   "name": "qt_spinbox_lineedit",
+   "name": "qt_spinbox_lineedit#4",
    "class": "QLineEdit",
    "rect": [
     108,
@@ -1162,7 +1162,7 @@
    }
   },
   {
-   "name": "presetStepDown",
+   "name": "presetStepDown#4",
    "class": "IconButton",
    "rect": [
     347,
@@ -1202,7 +1202,7 @@
    ]
   },
   {
-   "name": "presetStepUp",
+   "name": "presetStepUp#4",
    "class": "IconButton",
    "rect": [
     375,
@@ -1410,7 +1410,7 @@
    }
   },
   {
-   "name": "presetStepper",
+   "name": "presetStepper#5",
    "class": "_PresetSpinBox",
    "rect": [
     108,
@@ -1450,7 +1450,7 @@
    ]
   },
   {
-   "name": "qt_spinbox_lineedit",
+   "name": "qt_spinbox_lineedit#5",
    "class": "QLineEdit",
    "rect": [
     108,
@@ -1506,7 +1506,7 @@
    }
   },
   {
-   "name": "presetStepDown",
+   "name": "presetStepDown#5",
    "class": "IconButton",
    "rect": [
     347,
@@ -1546,7 +1546,7 @@
    ]
   },
   {
-   "name": "presetStepUp",
+   "name": "presetStepUp#5",
    "class": "IconButton",
    "rect": [
     375,

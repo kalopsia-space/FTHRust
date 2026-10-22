@@ -200,7 +200,7 @@
    ]
   },
   {
-   "name": "winBtn",
+   "name": "winBtn#2",
    "class": "QPushButton",
    "rect": [
     1336,
@@ -1489,7 +1489,7 @@
    ]
   },
   {
-   "name": "qt_scrollarea_viewport",
+   "name": "qt_scrollarea_viewport#2",
    "class": "QWidget",
    "rect": [
     118,
@@ -2732,7 +2732,7 @@
    }
   },
   {
-   "name": "micRefreshBtn",
+   "name": "micRefreshBtn#2",
    "class": "IconButton",
    "rect": [
     460,
