@@ -207,18 +207,64 @@ fn alias(lower: &str) -> Option<&'static str> {
     })
 }
 
-fn title_case(token: &str) -> String {
+const KEY_NAMES: [(&str, &str); 38] = [
+    ("pgup", "PgUp"),
+    ("pageup", "PgUp"),
+    ("pgdown", "PgDown"),
+    ("pagedown", "PgDown"),
+    ("del", "Del"),
+    ("delete", "Del"),
+    ("ins", "Ins"),
+    ("insert", "Ins"),
+    ("backspace", "Backspace"),
+    ("bksp", "Backspace"),
+    ("space", "Space"),
+    ("home", "Home"),
+    ("end", "End"),
+    ("up", "Up"),
+    ("down", "Down"),
+    ("left", "Left"),
+    ("right", "Right"),
+    ("tab", "Tab"),
+    ("return", "Return"),
+    ("escape", "Escape"),
+    ("capslock", "CapsLock"),
+    ("numlock", "NumLock"),
+    ("scrolllock", "ScrollLock"),
+    ("print", "Print"),
+    ("printscreen", "Print"),
+    ("pause", "Pause"),
+    ("menu", "Menu"),
+    ("plus", "Plus"),
+    ("minus", "Minus"),
+    ("comma", "Comma"),
+    ("period", "Period"),
+    ("slash", "Slash"),
+    ("backslash", "Backslash"),
+    ("semicolon", "Semicolon"),
+    ("apostrophe", "Apostrophe"),
+    ("bracketleft", "BracketLeft"),
+    ("bracketright", "BracketRight"),
+    ("enter", "Return"),
+];
+
+/// Qt PortableText name for a non-modifier key, or `None` if unknown.
+fn canonical_key(token: &str) -> Option<String> {
     let lower = token.to_lowercase();
-    let is_fkey = lower.strip_prefix('f').is_some_and(|n| {
-        n.parse::<u8>().is_ok_and(|v| (1..=24).contains(&v)) && !n.starts_with('0')
-    });
-    if is_fkey {
-        return lower.to_uppercase();
+    if let Some((_, name)) = KEY_NAMES.iter().find(|(k, _)| *k == lower) {
+        return Some((*name).to_string());
+    }
+    if let Some(n) = lower.strip_prefix('f')
+        && !n.starts_with('0')
+        && n.parse::<u8>().is_ok_and(|v| (1..=24).contains(&v))
+    {
+        return Some(lower.to_uppercase());
     }
     let mut chars = lower.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => String::new(),
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_alphanumeric() => Some(c.to_ascii_uppercase().to_string()),
+        (Some(c), None) if "-,./\\;'[]=`".contains(c) => Some(c.to_string()),
+        _ => None,
     }
 }
 
@@ -240,7 +286,7 @@ pub fn normalize_binding(input: &str) -> Option<String> {
             .unwrap_or_else(|| raw.to_string());
         let token = match MODIFIERS.iter().find(|m| m.eq_ignore_ascii_case(&resolved)) {
             Some(m) => (*m).to_string(),
-            None => title_case(&resolved),
+            None => canonical_key(&resolved)?,
         };
         if !tokens.contains(&token) {
             tokens.push(token);

@@ -125,3 +125,42 @@ fn round_trip_through_settings() {
     assert_eq!(again.get("editor_undo"), Some("Ctrl+Z"));
     assert!(again.is_enabled());
 }
+
+#[test]
+fn qt_portable_key_names_are_canonical() {
+    assert_eq!(normalize_binding("pgup").as_deref(), Some("PgUp"));
+    assert_eq!(normalize_binding("Delete").as_deref(), Some("Del"));
+    assert_eq!(normalize_binding("BACKSPACE").as_deref(), Some("Backspace"));
+    assert_eq!(
+        normalize_binding("Ctrl+PgDown").as_deref(),
+        Some("Ctrl+PgDown")
+    );
+}
+
+#[test]
+fn unknown_key_is_rejected() {
+    assert_eq!(normalize_binding("foo"), None);
+    assert_eq!(normalize_binding("Ctrl+Foo"), None);
+}
+
+#[test]
+fn set_empty_combo_clears_without_conflict() {
+    let (_t, s) = store();
+    let mut nb = NavigationBindings::from_settings(&s);
+    nb.set("editor_split", "").unwrap();
+    nb.set("editor_delete", "").unwrap();
+    assert_eq!(nb.get("editor_split"), Some(""));
+}
+
+#[test]
+fn enabled_flags_round_trip_through_write_to() {
+    let (_t, mut s) = store();
+    let mut nb = NavigationBindings::from_settings(&s);
+    nb.set_enabled(false);
+    nb.set_category_enabled("Clip editor", false);
+    nb.write_to(&mut s);
+    let again = NavigationBindings::from_settings(&s);
+    assert!(!again.is_enabled());
+    assert!(!again.is_category_enabled("Clip editor"));
+    assert!(again.is_category_enabled("Clips"));
+}
