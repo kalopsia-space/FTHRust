@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod atomic_json;
+pub mod audio_manifest;
 pub mod clip_files;
 pub mod clip_metadata;
 mod error;
