@@ -5,7 +5,7 @@ use crate::media_identity::FileIdentity;
 use crate::paths::FthrPaths;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::path::Path;
 
 /// Maximum number of clips that keep an editor draft.
@@ -65,13 +65,21 @@ fn table_exists(conn: &Connection) -> Result<bool> {
         .is_some())
 }
 
-/// Lenient parse: non-object values and malformed fields fall back to defaults.
-fn parse_entry(raw: &str) -> ClipEntry {
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(raw) else {
-        return ClipEntry::default();
-    };
+/// A raw stored row; unknown keys and unparseable fields are preserved.
+type Row = Map<String, Value>;
+
+/// Parses a stored value into a raw row; non-objects count as an empty row.
+fn parse_row(raw: &str) -> Row {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => map,
+        _ => Row::new(),
+    }
+}
+
+/// Typed, lenient view of a raw row.
+fn entry_from_row(row: &Row) -> ClipEntry {
     let text = |k: &str| {
-        map.get(k)
+        row.get(k)
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned()
@@ -79,30 +87,49 @@ fn parse_entry(raw: &str) -> ClipEntry {
     ClipEntry {
         tag: text("tag"),
         description: text("description"),
-        editor_draft: map
+        editor_draft: row
             .get("editor_draft")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
     }
 }
 
-fn to_json(entry: &ClipEntry) -> Result<String> {
-    serde_json::to_string(entry).map_err(|e| CoreError::Invalid(format!("entry serialise: {e}")))
+/// Compact JSON with `tag`, `description`, `editor_draft` first, then other keys.
+fn row_to_json(row: &Row) -> Result<String> {
+    let err = |e: serde_json::Error| CoreError::Invalid(format!("entry serialise: {e}"));
+    let mut out = String::from("{");
+    let mut first = true;
+    let known = ["tag", "description", "editor_draft"];
+    let ordered = known
+        .iter()
+        .filter_map(|k| row.get_key_value(*k))
+        .chain(row.iter().filter(|(k, _)| !known.contains(&k.as_str())));
+    for (k, v) in ordered {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&serde_json::to_string(k).map_err(err)?);
+        out.push(':');
+        out.push_str(&serde_json::to_string(v).map_err(err)?);
+    }
+    out.push('}');
+    Ok(out)
 }
 
-fn load(tx: &Transaction<'_>, k: &str) -> Result<Option<ClipEntry>> {
+fn load(tx: &Transaction<'_>, k: &str) -> Result<Option<Row>> {
     Ok(tx
         .query_row("SELECT value FROM entries WHERE path=?1", [k], |r| {
             r.get::<_, String>(0)
         })
         .optional()?
-        .map(|raw| parse_entry(&raw)))
+        .map(|raw| parse_row(&raw)))
 }
 
-fn store(tx: &Transaction<'_>, k: &str, entry: &ClipEntry) -> Result<()> {
+fn store(tx: &Transaction<'_>, k: &str, row: &Row) -> Result<()> {
     tx.execute(
         "INSERT INTO entries VALUES (?1, ?2) \
          ON CONFLICT(path) DO UPDATE SET value=excluded.value",
-        (k, to_json(entry)?),
+        (k, row_to_json(row)?),
     )?;
     Ok(())
 }
@@ -159,7 +186,9 @@ impl ClipMetadataStore {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(raw.map(|r| parse_entry(&r)).unwrap_or_default())
+        Ok(raw
+            .map(|r| entry_from_row(&parse_row(&r)))
+            .unwrap_or_default())
     }
 
     /// Sets the given fields, leaving `None` fields and any draft untouched.
@@ -173,14 +202,14 @@ impl ClipMetadataStore {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut entry = load(&tx, &k)?.unwrap_or_default();
+        let mut row = load(&tx, &k)?.unwrap_or_default();
         if let Some(t) = tag {
-            entry.tag = t.to_owned();
+            row.insert("tag".into(), Value::String(t.to_owned()));
         }
         if let Some(d) = description {
-            entry.description = d.to_owned();
+            row.insert("description".into(), Value::String(d.to_owned()));
         }
-        store(&tx, &k, &entry)?;
+        store(&tx, &k, &row)?;
         tx.commit()?;
         Ok(())
     }
@@ -191,36 +220,39 @@ impl ClipMetadataStore {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut entry = load(&tx, &k)?.unwrap_or_default();
-        entry.editor_draft = Some(draft);
-        store(&tx, &k, &entry)?;
+        let mut row = load(&tx, &k)?.unwrap_or_default();
+        let value = serde_json::to_value(&draft)
+            .map_err(|e| CoreError::Invalid(format!("draft serialise: {e}")))?;
+        row.insert("editor_draft".into(), value);
+        store(&tx, &k, &row)?;
         Self::prune_drafts(&tx)?;
         tx.commit()?;
         Ok(())
     }
 
-    /// Clears the oldest drafts (by `updated_at`) beyond the limit; entries stay.
+    /// Clears the oldest drafts (by `updated_at`, ties by path) beyond the limit.
     fn prune_drafts(tx: &Transaction<'_>) -> Result<()> {
-        let mut drafts: Vec<(f64, String, ClipEntry)> = Vec::new();
+        let mut drafts: Vec<(f64, String, Row)> = Vec::new();
         {
             let mut stmt = tx.prepare("SELECT path, value FROM entries")?;
             let rows =
                 stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for row in rows {
                 let (p, raw) = row?;
-                let entry = parse_entry(&raw);
-                if let Some(d) = &entry.editor_draft {
-                    drafts.push((d.updated_at, p, entry));
+                let row = parse_row(&raw);
+                if let Some(Value::Object(d)) = row.get("editor_draft") {
+                    let updated = d.get("updated_at").and_then(Value::as_f64).unwrap_or(0.0);
+                    drafts.push((updated, p, row));
                 }
             }
         }
         if drafts.len() <= EDITOR_DRAFT_LIMIT {
             return Ok(());
         }
-        drafts.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for (_, p, mut entry) in drafts.into_iter().skip(EDITOR_DRAFT_LIMIT) {
-            entry.editor_draft = None;
-            store(tx, &p, &entry)?;
+        drafts.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        for (_, p, mut row) in drafts.into_iter().skip(EDITOR_DRAFT_LIMIT) {
+            row.remove("editor_draft");
+            store(tx, &p, &row)?;
         }
         Ok(())
     }
@@ -231,25 +263,28 @@ impl ClipMetadataStore {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(mut entry) = load(&tx, &k)?
-            && entry.editor_draft.take().is_some()
+        if let Some(mut row) = load(&tx, &k)?
+            && row.remove("editor_draft").is_some()
         {
-            store(&tx, &k, &entry)?;
+            store(&tx, &k, &row)?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Returns the draft only when its recorded file identity matches `identity`.
+    /// Returns the draft only when it is version 1, has object state and its
+    /// recorded file identity matches `identity`.
     pub fn editor_draft_if_current(
         &self,
         path: &Path,
         identity: &FileIdentity,
     ) -> Result<Option<EditorDraft>> {
-        Ok(self
-            .get(path)?
-            .editor_draft
-            .filter(|d| d.file.mtime_ns == identity.mtime_ns && d.file.size == identity.size))
+        Ok(self.get(path)?.editor_draft.filter(|d| {
+            d.version == 1
+                && d.state.is_object()
+                && d.file.mtime_ns == identity.mtime_ns
+                && d.file.size == identity.size
+        }))
     }
 
     /// Moves the entry of `from` to `to`; no-op when `from` has none.
@@ -285,9 +320,6 @@ impl ClipMetadataStore {
         let Some(draft) = self.editor_draft_if_current(path, &identity)? else {
             return Ok(source_duration);
         };
-        if draft.version != 1 {
-            return Ok(source_duration);
-        }
         Ok(retained_fraction(&draft.state).map_or(source_duration, |k| source_duration * k))
     }
 }

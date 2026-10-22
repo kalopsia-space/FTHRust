@@ -183,21 +183,59 @@ fn rename_moves_entry() {
 #[test]
 fn locked_database_errors_not_fallback() {
     let (_d, paths) = setup();
-    let mut store = ClipMetadataStore::open(&paths).unwrap();
     std::fs::write(
         paths.legacy_clip_metadata_json(),
         r#"{"/a.mp4": {"tag": "legacy"}}"#,
     )
     .unwrap();
+    let mut store = ClipMetadataStore::open(&paths).unwrap();
     let blocker = rusqlite::Connection::open(paths.clip_metadata_db()).unwrap();
     blocker.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let err = store
         .update(Path::new("/a.mp4"), Some("x"), None)
         .unwrap_err();
     assert!(matches!(err, CoreError::Sqlite(_)), "{err:?}");
-    let after = store.get(Path::new("/a.mp4"));
-    assert!(after.is_err() || after.unwrap().tag != "legacy");
     blocker.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(store.get(Path::new("/a.mp4")).unwrap().tag, "legacy");
+}
+
+#[test]
+fn update_preserves_unparseable_draft_and_unknown_keys() {
+    let (_d, paths) = setup();
+    let mut store = ClipMetadataStore::open(&paths).unwrap();
+    let raw = r#"{"tag":"a","description":"b","extra":1,"editor_draft":{"version":9}}"#;
+    {
+        let c = rusqlite::Connection::open(paths.clip_metadata_db()).unwrap();
+        c.execute("INSERT INTO entries VALUES ('/a.mp4', ?1)", [raw])
+            .unwrap();
+    }
+    store.update(Path::new("/a.mp4"), Some("c"), None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw_value(&paths, "/a.mp4")).unwrap();
+    assert_eq!(
+        v,
+        json!({"tag":"c","description":"b","extra":1,"editor_draft":{"version":9}})
+    );
+}
+
+#[test]
+fn editor_draft_if_current_ignores_other_versions() {
+    let (d, paths) = setup();
+    let clip = d.path().join("c.mp4");
+    std::fs::write(&clip, b"abc").unwrap();
+    let mut store = ClipMetadataStore::open(&paths).unwrap();
+    let id = file_identity(&clip).unwrap();
+    let mut draft = draft_for(&clip, 1.0, json!({}));
+    draft.version = 2;
+    store.set_editor_draft(&clip, draft).unwrap();
+    assert!(store.editor_draft_if_current(&clip, &id).unwrap().is_none());
+    store
+        .set_editor_draft(&clip, draft_for(&clip, 1.0, json!([1])))
+        .unwrap();
+    assert!(store.editor_draft_if_current(&clip, &id).unwrap().is_none());
+    store
+        .set_editor_draft(&clip, draft_for(&clip, 1.0, json!({})))
+        .unwrap();
+    assert!(store.editor_draft_if_current(&clip, &id).unwrap().is_some());
 }
 
 #[test]
