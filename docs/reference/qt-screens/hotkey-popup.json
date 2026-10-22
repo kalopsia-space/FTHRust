@@ -57,6 +57,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 43
    }
   },
@@ -190,6 +193,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 81
    }
   },
@@ -243,6 +249,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 44
    }
   },
@@ -296,6 +305,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 49
    }
   },
@@ -349,6 +361,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 14
    }
   },
@@ -402,6 +417,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -455,6 +473,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 23
    }
   },
@@ -508,6 +529,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -601,6 +625,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 73
    }
   },
@@ -654,6 +681,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 44
    }
   },
@@ -707,6 +737,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 49
    }
   },
@@ -760,6 +793,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 20
    }
   },
@@ -813,6 +849,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -866,6 +905,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 23
    }
   },
@@ -919,6 +961,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -1012,6 +1057,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 86
    }
   },
@@ -1065,6 +1113,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 44
    }
   },
@@ -1118,6 +1169,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 49
    }
   },
@@ -1171,6 +1225,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 14
    }
   },
@@ -1224,6 +1281,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -1277,6 +1337,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 23
    }
   },
@@ -1330,6 +1393,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -1423,6 +1489,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 82
    }
   },
@@ -1476,6 +1545,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 44
    }
   },
@@ -1529,6 +1601,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 49
    }
   },
@@ -1582,6 +1657,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 13
    }
   },
@@ -1635,6 +1713,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -1688,6 +1769,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
     "advance": 23
    }
   },
@@ -1741,6 +1825,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 25
    }
   },
@@ -1794,6 +1881,9 @@
     "ascent": 13,
     "descent": 4,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 8,
     "advance": 309
    }
   }

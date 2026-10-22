@@ -57,6 +57,9 @@
     "ascent": 14,
     "descent": 3,
     "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
     "advance": 73
    }
   },
@@ -110,6 +113,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
     "advance": 44
    }
   },
@@ -163,6 +169,9 @@
     "ascent": 18,
     "descent": 4,
     "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
     "advance": 115
    }
   }

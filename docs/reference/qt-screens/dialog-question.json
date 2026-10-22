@@ -97,6 +97,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 60
    }
   },
@@ -190,6 +193,9 @@
     "ascent": 20,
     "descent": 5,
     "height": 25,
+    "leading": 0,
+    "line_spacing": 25,
+    "avg_char_width": 8,
     "advance": 175
    }
   },
@@ -243,6 +249,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 14
    }
   },
@@ -296,6 +305,9 @@
     "ascent": 17,
     "descent": 4,
     "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
     "advance": 18
    }
   }

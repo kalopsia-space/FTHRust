@@ -334,7 +334,36 @@ pub fn install_style(ctx: &egui::Context, tokens: &Tokens) {
         style.visuals.dark_mode = true;
         style.visuals.panel_fill = tokens.color(Color::Bg);
         style.visuals.window_fill = tokens.color(Color::Bg);
-        style.visuals.extreme_bg_color = tokens.color(Color::Surface2);
+        style.visuals.extreme_bg_color = tokens.color(Color::Bg);
+        // Scrollbars (`scrollbar_qss`): 8 px, BG track, BORDER_HI r4 handle
+        // (min 32), hover/active ACCENT, always visible, no arrows.
+        style.spacing.scroll = egui::style::ScrollStyle {
+            floating: false,
+            bar_width: 8.0,
+            handle_min_length: 32.0,
+            bar_inner_margin: 0.0,
+            bar_outer_margin: 0.0,
+            foreground_color: false,
+            dormant_background_opacity: 1.0,
+            active_background_opacity: 1.0,
+            interact_background_opacity: 1.0,
+            dormant_handle_opacity: 1.0,
+            active_handle_opacity: 1.0,
+            interact_handle_opacity: 1.0,
+            ..egui::style::ScrollStyle::solid()
+        };
+        style.visuals.widgets.inactive.bg_fill = tokens.color(Color::BorderHi);
+        style.visuals.widgets.inactive.corner_radius =
+            egui::CornerRadius::same(geom::RADIUS_SM as u8);
+        style.visuals.widgets.hovered.bg_fill = tokens.color(Color::Accent);
+        style.visuals.widgets.hovered.corner_radius =
+            egui::CornerRadius::same(geom::RADIUS_SM as u8);
+        style.visuals.widgets.active.bg_fill = tokens.color(Color::Accent);
+        style.visuals.widgets.active.corner_radius =
+            egui::CornerRadius::same(geom::RADIUS_SM as u8);
+        // Wheel scrolling settles like the reference's τ = 35 ms exponential.
+        style.scroll_animation =
+            egui::style::ScrollAnimation::new(3000.0, egui::Rangef::new(0.05, 0.15));
         style.visuals.override_text_color = Some(tokens.color(Color::Text));
         style.visuals.selection.bg_fill = tokens.color(Color::AccentSoft);
         style.visuals.selection.stroke = egui::Stroke::new(1.0, tokens.color(Color::Accent));

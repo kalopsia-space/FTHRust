@@ -3,7 +3,8 @@
 //! (`display`, `body`) by family; a role naming an imported file maps every
 //! weight to that file, as the reference's `QFontDatabase` registration does.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{Color32, Context, FontData, FontDefinitions, FontFamily, FontId, RichText};
@@ -59,6 +60,51 @@ impl Weight {
     }
 }
 
+static AVG_RATIO: OnceLock<Mutex<HashMap<String, f32>>> = OnceLock::new();
+
+/// `xAvgCharWidth / unitsPerEm` from a TrueType/OpenType file (Qt's
+/// `QFontMetrics::averageCharWidth` is this ratio times the pixel size).
+pub fn os2_avg_ratio(bytes: &[u8]) -> Option<f32> {
+    let num = u16::from_be_bytes([*bytes.get(4)?, *bytes.get(5)?]) as usize;
+    let (mut os2, mut head) = (None, None);
+    for i in 0..num {
+        let o = 12 + 16 * i;
+        let tag = bytes.get(o..o + 4)?;
+        let off = u32::from_be_bytes(bytes.get(o + 8..o + 12)?.try_into().ok()?) as usize;
+        match tag {
+            b"OS/2" => os2 = Some(off),
+            b"head" => head = Some(off),
+            _ => {}
+        }
+    }
+    let (os2, head) = (os2?, head?);
+    let xavg = i16::from_be_bytes([*bytes.get(os2 + 2)?, *bytes.get(os2 + 3)?]) as f32;
+    let upem = u16::from_be_bytes([*bytes.get(head + 18)?, *bytes.get(head + 19)?]) as f32;
+    (upem > 0.0).then_some(xavg / upem)
+}
+
+fn remember_avg(key: &str, bytes: &[u8]) {
+    if let Some(r) = os2_avg_ratio(bytes) {
+        AVG_RATIO
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), r);
+    }
+}
+
+/// Qt's integer `averageCharWidth()` for a role at `px`.
+pub fn avg_char_width(px: f32, weight: Weight) -> f32 {
+    let ratio = AVG_RATIO
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(weight.family())
+        .copied()
+        .unwrap_or(0.465);
+    (ratio * px).round()
+}
+
 /// The named family under which a theme font file is registered.
 pub fn theme_family(family: &str) -> String {
     format!("theme-{}", family.to_ascii_lowercase().replace(' ', "-"))
@@ -73,6 +119,7 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
     for (family, path) in &tokens.font_files {
         if let Ok(bytes) = std::fs::read(path) {
             let key = theme_family(family);
+            remember_avg(&key, &bytes);
             defs.font_data
                 .insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
             defs.families
@@ -94,6 +141,7 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
         let key = weight.family().to_owned();
         match std::fs::read(dir.join(file)) {
             Ok(bytes) => {
+                remember_avg(&key, &bytes);
                 defs.font_data
                     .insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
             }

@@ -113,6 +113,9 @@ def _text_info(w: QWidget):
             'ascent': fm.ascent(),
             'descent': fm.descent(),
             'height': fm.height(),
+            'leading': fm.leading(),
+            'line_spacing': fm.lineSpacing(),
+            'avg_char_width': fm.averageCharWidth(),
             'advance': fm.horizontalAdvance(text.split('\n')[0]),
         }
     return None

@@ -37,11 +37,22 @@ pub fn harness<'a>(
     tokens: &Tokens,
     app: impl FnMut(&mut egui::Ui) + 'a,
 ) -> Harness<'a> {
+    harness_with_dt(size, ppp, tokens, 1.0 / 60.0, app)
+}
+
+/// [`harness`] with an explicit frame duration (timing tests).
+pub fn harness_with_dt<'a>(
+    size: Vec2,
+    ppp: f32,
+    tokens: &Tokens,
+    step_dt: f32,
+    app: impl FnMut(&mut egui::Ui) + 'a,
+) -> Harness<'a> {
     let tokens = tokens.clone();
     let mut h = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(ppp)
-        .with_step_dt(1.0 / 60.0)
+        .with_step_dt(step_dt)
         .with_context_setup(move |ctx| {
             fonts::install(ctx, &tokens);
             fthrust_ui::tokens::install_style(ctx, &tokens);
