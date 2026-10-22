@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod audio_timing;
 pub mod ffi;
 pub mod replay_interval;
 
