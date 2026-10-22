@@ -3,6 +3,7 @@
 
 mod atomic_json;
 mod error;
+pub mod error_codes;
 pub mod export_presets;
 pub mod hotkeys;
 pub mod navigation;
