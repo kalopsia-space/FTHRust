@@ -368,7 +368,10 @@ impl HotkeyBindings {
         let saved = match read_json(&paths.hotkeys_file()) {
             Ok(Some(Value::Object(o))) => o,
             Ok(_) | Err(CoreError::Json { .. }) => return Ok((b, false)),
-            Err(e) => return Err(e),
+            Err(e) => {
+                tracing::warn!("could not read hotkeys.json: {e}; using defaults");
+                return Ok((b, false));
+            }
         };
         let keyboard_map = saved.get("keyboard").and_then(Value::as_object);
         let controller_map = saved.get("controller").and_then(Value::as_object);
@@ -496,7 +499,10 @@ pub fn load_portal_cleared(paths: &FthrPaths) -> Result<BTreeSet<String>> {
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect()),
         Ok(_) | Err(CoreError::Json { .. }) => Ok(BTreeSet::new()),
-        Err(e) => Err(e),
+        Err(e) => {
+            tracing::warn!("could not read hotkeys-portal-cleared.json: {e}");
+            Ok(BTreeSet::new())
+        }
     }
 }
 

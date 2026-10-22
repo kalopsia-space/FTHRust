@@ -43,8 +43,24 @@ impl PresetsStore {
     /// Reads all presets; a missing, unreadable or non-object file is empty.
     /// Retired keys are stripped and the file rewritten when any were present.
     fn read(&self) -> Map<String, Value> {
-        let Ok(Some(Value::Object(mut all))) = read_json(&self.path) else {
-            return Map::new();
+        let mut all = match read_json(&self.path) {
+            Ok(Some(Value::Object(all))) => all,
+            Ok(None) => return Map::new(),
+            // A transient read error: keep the file, use nothing this time.
+            Err(crate::CoreError::Io(e)) if e.kind() != std::io::ErrorKind::InvalidData => {
+                tracing::warn!("could not read {}: {e}", self.path.display());
+                return Map::new();
+            }
+            // Corrupt or non-object content is quarantined so a later save
+            // cannot silently overwrite the user's presets.
+            Ok(Some(_)) | Err(_) => {
+                let mut name = self.path.as_os_str().to_owned();
+                name.push(".corrupt");
+                if let Err(e) = std::fs::rename(&self.path, PathBuf::from(name)) {
+                    tracing::warn!("could not quarantine {}: {e}", self.path.display());
+                }
+                return Map::new();
+            }
         };
         let mut removed = false;
         for values in all.values_mut() {

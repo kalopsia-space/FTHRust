@@ -199,17 +199,31 @@ impl ExportPresetStore {
     /// Custom presets in file order. A missing or unreadable file is empty;
     /// invalid entries and duplicate (or `discord`) ids are skipped.
     pub fn custom(&self) -> Result<Vec<ExportPreset>> {
+        Ok(self.read_entries().0)
+    }
+
+    /// Reads the file into the presets this version understands and the raw
+    /// entries it does not (unparseable or invalid), so a rewrite can carry
+    /// the latter through untouched. Duplicate and `discord` ids are dropped.
+    fn read_entries(&self) -> (Vec<ExportPreset>, Vec<Value>) {
         let Ok(Some(Value::Array(items))) = read_json(&self.path) else {
-            return Ok(Vec::new());
+            return (Vec::new(), Vec::new());
         };
         let mut seen = vec![DISCORD_ID.to_string()];
         let mut out = Vec::new();
+        let mut preserved = Vec::new();
         for item in items {
-            let Ok(p) = serde_json::from_value::<ExportPreset>(item) else {
+            let parsed = serde_json::from_value::<ExportPreset>(item.clone())
+                .ok()
+                .map(|p| p.normalized())
+                .filter(|p| p.validate().is_ok());
+            let Some(p) = parsed else {
+                if item.get("preset_id").and_then(Value::as_str) != Some(DISCORD_ID) {
+                    preserved.push(item);
+                }
                 continue;
             };
-            let p = p.normalized();
-            if p.validate().is_err() || seen.contains(&p.preset_id) {
+            if seen.contains(&p.preset_id) {
                 continue;
             }
             seen.push(p.preset_id.clone());
@@ -218,7 +232,7 @@ impl ExportPresetStore {
                 ..p
             });
         }
-        Ok(out)
+        (out, preserved)
     }
 
     /// Looks a preset up by id, built-ins included.
@@ -236,10 +250,10 @@ impl ExportPresetStore {
                 "Built-in presets cannot be replaced".into(),
             ));
         }
-        let mut list = self.custom()?;
+        let (mut list, preserved) = self.read_entries();
         list.retain(|x| x.preset_id != p.preset_id);
         list.push(p.clone());
-        self.write(&list)?;
+        self.write(&list, &preserved)?;
         Ok(p)
     }
 
@@ -248,23 +262,29 @@ impl ExportPresetStore {
         if id == DISCORD_ID {
             return Ok(false);
         }
-        let list = self.custom()?;
+        let (list, preserved) = self.read_entries();
         let remaining: Vec<_> = list.iter().filter(|p| p.preset_id != id).cloned().collect();
         if remaining.len() == list.len() {
             return Ok(false);
         }
-        self.write(&remaining)?;
+        self.write(&remaining, &preserved)?;
         Ok(true)
     }
 
-    fn write(&self, list: &[ExportPreset]) -> Result<()> {
+    /// Writes the understood presets followed by the preserved raw entries.
+    fn write(&self, list: &[ExportPreset], preserved: &[Value]) -> Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let value = serde_json::to_value(list).map_err(|source| CoreError::Json {
-            path: self.path.clone(),
-            source,
-        })?;
-        write_json_atomic(&self.path, &value, true)
+        let mut items = serde_json::to_value(list)
+            .map_err(|source| CoreError::Json {
+                path: self.path.clone(),
+                source,
+            })?
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        items.extend(preserved.iter().cloned());
+        write_json_atomic(&self.path, &Value::Array(items), true)
     }
 }

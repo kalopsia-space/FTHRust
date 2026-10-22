@@ -14,3 +14,8 @@
 - Thumbnail cache keys hash raw path bytes, so clips with non-UTF-8 names reuse their thumbnails.
 - Diagnostic event fields named like secrets are redacted wholesale, not only when their value looks like a credential.
 - Error-bar titles are normalised (trimmed, upper-cased) before code lookup exactly as the reference does.
+- A transient read error on `settings.json` or `presets.json` no longer renames the file; corrupt `presets.json` is quarantined before any rewrite instead of being overwritten.
+- Theme zip import validates colour values and caps each asset at 64 MiB.
+- Export presets this version cannot parse are carried through rewrites untouched instead of being deleted.
+- `hotkeys.json` that cannot be read loads defaults instead of blocking startup.
+- Diagnostic events and exported log tails replace the home directory with `%USERPROFILE%`, so the export's `paths_redacted` attestation is true.

@@ -44,6 +44,40 @@ pub fn redact(text: &str) -> String {
     text.into_owned()
 }
 
+/// Redacts credentials and then replaces the user's home directory (and the
+/// temp root when `TMPDIR`/`TEMP` is set) with the reference's placeholders,
+/// case-insensitively, so exported diagnostics carry no profile paths.
+pub fn redact_path(text: &str) -> String {
+    let mut out = redact(text);
+    let mut roots: Vec<(&str, String)> = Vec::new();
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+        && home != "/"
+    {
+        roots.push(("%USERPROFILE%", home));
+    }
+    for var in ["TMPDIR", "TEMP", "TMP"] {
+        if let Ok(tmp) = std::env::var(var)
+            && !tmp.is_empty()
+            && tmp != "/"
+            && tmp != "/tmp"
+        {
+            roots.push(("%TEMP%", tmp));
+            break;
+        }
+    }
+    for (token, root) in roots {
+        let root = root.trim_end_matches('/');
+        if root.is_empty() {
+            continue;
+        }
+        if let Ok(re) = Regex::new(&format!("(?i){}", regex::escape(root))) {
+            out = re.replace_all(&out, token).into_owned();
+        }
+    }
+    out
+}
+
 /// Reduces a URL to its credential-free base and hides the whole query
 /// string, which is where upload tokens live.
 pub fn sanitize_url_for_log(url: &str) -> String {
@@ -76,11 +110,11 @@ const SECRET_KEYS: &[&str] = &[
     "catbox_userhash",
 ];
 
-/// Redacts a JSON value in place: string values go through [`redact`], and
-/// any object entry whose key names a secret is replaced wholesale.
+/// Redacts a JSON value in place: string values go through [`redact_path`],
+/// and any object entry whose key names a secret is replaced wholesale.
 pub fn redact_json(value: &mut serde_json::Value) {
     match value {
-        serde_json::Value::String(s) => *s = redact(s),
+        serde_json::Value::String(s) => *s = redact_path(s),
         serde_json::Value::Array(items) => items.iter_mut().for_each(redact_json),
         serde_json::Value::Object(map) => {
             for (key, entry) in map.iter_mut() {

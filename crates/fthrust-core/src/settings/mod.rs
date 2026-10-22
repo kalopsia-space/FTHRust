@@ -56,8 +56,15 @@ impl SettingsStore {
                 (merge_one_level(base.clone(), loaded.clone()), loaded, true)
             }
             Ok(None) => (base.clone(), Map::new(), false),
-            // Non-object content and any read/parse failure (including
-            // invalid UTF-8) are quarantined, as the reference does.
+            // A transient read error (permissions, EIO, too many open files)
+            // must not rename the user's file: use defaults for this run and
+            // leave the file alone.
+            Err(CoreError::Io(e)) if e.kind() != std::io::ErrorKind::InvalidData => {
+                tracing::warn!("could not read {}: {e}; using defaults", file.display());
+                (base.clone(), Map::new(), false)
+            }
+            // Non-object content, a parse failure or invalid UTF-8 is
+            // quarantined, as the reference does.
             Ok(Some(_)) | Err(_) => {
                 let mut name = file.as_os_str().to_owned();
                 name.push(".corrupt");

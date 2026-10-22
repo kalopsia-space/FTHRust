@@ -87,23 +87,7 @@ pub(super) fn merge_and_migrate(loaded: &Value) -> ThemeData {
         data.font_files = m;
     }
 
-    // Colour sanitising: drop unknown tokens, replace malformed values.
-    data.colors.retain(|k, _| def_colors.contains_key(k));
-    for (token, default) in &def_colors {
-        let ok = data.colors.get(token).is_some_and(|v| is_hex_color(v));
-        if !ok {
-            data.colors.insert(token.clone(), default.clone());
-        }
-    }
-    for (token, default) in &def_cc {
-        if !data
-            .capture_card
-            .get(token)
-            .is_some_and(|v| is_hex_color(v))
-        {
-            data.capture_card.insert(token.clone(), default.clone());
-        }
-    }
+    sanitize_colors(&mut data.colors, &mut data.capture_card);
 
     // Restore Oswald after the briefly shipped Segoe default; keep imports.
     for (role, default) in default_fonts() {
@@ -118,4 +102,26 @@ pub(super) fn merge_and_migrate(loaded: &Value) -> ThemeData {
         }
     }
     data
+}
+
+/// Drops unknown colour tokens and replaces malformed values with the
+/// shipped default for that token, in both the palette and the capture-card
+/// map. Shared by the loader and the zip importer.
+pub(crate) fn sanitize_colors(
+    colors: &mut std::collections::BTreeMap<String, String>,
+    capture_card: &mut std::collections::BTreeMap<String, String>,
+) {
+    let def_colors = super::default_colors();
+    let def_cc = super::default_capture_card_colors();
+    colors.retain(|k, _| def_colors.contains_key(k));
+    for (token, default) in &def_colors {
+        if !colors.get(token).is_some_and(|v| is_hex_color(v)) {
+            colors.insert(token.clone(), default.clone());
+        }
+    }
+    for (token, default) in &def_cc {
+        if !capture_card.get(token).is_some_and(|v| is_hex_color(v)) {
+            capture_card.insert(token.clone(), default.clone());
+        }
+    }
 }

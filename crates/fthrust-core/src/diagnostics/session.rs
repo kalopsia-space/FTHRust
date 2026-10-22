@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
-use super::redact::{redact, redact_json};
+use super::redact::{redact_json, redact_path};
 use crate::error::Result;
 use crate::paths::FthrPaths;
 
@@ -465,7 +465,7 @@ pub fn bounded_tail(path: &Path, max_bytes: u64) -> String {
     if file.take(max_bytes).read_to_end(&mut data).is_err() {
         return "[diagnostic log unavailable: Read]\n".into();
     }
-    let clean = redact(&String::from_utf8_lossy(&data));
+    let clean = redact_path(&String::from_utf8_lossy(&data));
     if size <= max_bytes && clean.len() as u64 <= max_bytes {
         return clean;
     }

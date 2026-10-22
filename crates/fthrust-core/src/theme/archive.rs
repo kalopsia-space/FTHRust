@@ -1,5 +1,8 @@
 //! Theme zip export and import.
 
+/// Largest single asset (icon, sound or font) accepted from a theme archive.
+pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+
 use super::{ThemeData, ThemeStore};
 use super::{default_capture_card_colors, default_colors, default_fonts, migrate};
 use crate::error::{CoreError, Result};
@@ -140,6 +143,8 @@ impl ThemeStore {
 
     /// Replaces the whole theme with the archive at `src`.
     ///
+    /// Each asset inside the archive may be at most [`MAX_ASSET_BYTES`].
+    ///
     /// The archive is fully read and validated before anything on disk or in
     /// memory changes; on error the current theme is untouched. Entries other
     /// than `theme.json` and plain files in `icons/`, `sounds/`, `fonts/` are
@@ -176,7 +181,7 @@ impl ThemeStore {
         let mut assets: Vec<(PathBuf, Vec<u8>)> = Vec::new();
         let mut present: [std::collections::BTreeSet<String>; 3] = Default::default();
         for i in 0..zf.len() {
-            let mut entry = zf.by_index(i).map_err(zip_err)?;
+            let entry = zf.by_index(i).map_err(zip_err)?;
             if entry.is_dir() {
                 continue;
             }
@@ -188,9 +193,20 @@ impl ThemeStore {
                 Folder::Sounds => self.paths.theme_sounds_dir(),
                 Folder::Fonts => self.paths.theme_fonts_dir(),
             };
+            if entry.size() > MAX_ASSET_BYTES {
+                return Err(CoreError::Invalid(format!(
+                    "theme asset {file} is too large ({} bytes; limit {MAX_ASSET_BYTES})",
+                    entry.size()
+                )));
+            }
             present[folder as usize].insert(file.clone());
             let mut body = Vec::new();
-            entry.read_to_end(&mut body)?;
+            entry.take(MAX_ASSET_BYTES + 1).read_to_end(&mut body)?;
+            if body.len() as u64 > MAX_ASSET_BYTES {
+                return Err(CoreError::Invalid(format!(
+                    "theme asset {file} is too large (limit {MAX_ASSET_BYTES} bytes)"
+                )));
+            }
             assets.push((dir.join(file), body));
         }
 
@@ -198,6 +214,7 @@ impl ThemeStore {
         colors.extend(string_map(obj.get("colors"))?);
         let mut capture_card = default_capture_card_colors();
         capture_card.extend(string_map(obj.get("capture_card"))?);
+        migrate::sanitize_colors(&mut colors, &mut capture_card);
         let mut fonts = default_fonts();
         fonts.extend(string_map(obj.get("fonts"))?);
         let mut icon_tints = string_map(obj.get("icon_tints"))?;
