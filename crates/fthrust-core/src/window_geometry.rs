@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 pub const MIN_WIDTH: u32 = 1100;
 /// Minimum window height in logical pixels.
 pub const MIN_HEIGHT: u32 = 720;
-/// Minimum width of a saved rectangle for it to count as present (also the
-/// reference's minimum useful visible width).
+/// Minimum useful visible width, for UI visibility checks. Not used by
+/// [`restore`].
 pub const MIN_VISIBLE_WIDTH: u32 = 64;
-/// Minimum height of a saved rectangle for it to count as present.
+/// Minimum useful visible height, for UI visibility checks. Not used by
+/// [`restore`].
 pub const MIN_VISIBLE_HEIGHT: u32 = 40;
 const POPUP_MARGIN: i64 = 8;
 
@@ -35,12 +36,26 @@ pub struct SavedGeometry {
     pub normal_geometry: Option<Rect>,
     /// Name of the screen the window was on.
     pub screen_name: Option<String>,
-    /// Whether the window was maximized.
-    pub maximized: Option<bool>,
+    /// Whether the window was maximized. Outer `None` means the key is
+    /// missing (restore defaults to maximized); `Some(None)` is an explicit
+    /// JSON `null`, which counts as `false` like the reference.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub maximized: Option<Option<bool>>,
     /// Device pixel ratio at save time (diagnostic only).
     pub saved_dpr: Option<f64>,
     /// Logical DPI at save time (diagnostic only).
     pub saved_logical_dpi: Option<f64>,
+}
+
+fn deserialize_present<'de, D>(d: D) -> std::result::Result<Option<Option<bool>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<bool>::deserialize(d).map(Some)
 }
 
 /// A connected screen and its available work area.
@@ -100,7 +115,7 @@ pub fn restore(saved: &SavedGeometry, screens: &[Screen]) -> Option<Placement> {
     let first = screens.first()?;
     let candidate = saved
         .normal_geometry
-        .filter(|r| r.width >= MIN_VISIBLE_WIDTH && r.height >= MIN_VISIBLE_HEIGHT);
+        .filter(|r| r.width > 0 && r.height > 0);
     let by_name = saved
         .screen_name
         .as_deref()
@@ -139,7 +154,7 @@ pub fn restore(saved: &SavedGeometry, screens: &[Screen]) -> Option<Placement> {
     Some(Placement {
         rect: clamp_rect(rect, a),
         screen_name: screen.name.clone(),
-        maximized: saved.maximized.unwrap_or(true),
+        maximized: saved.maximized.is_none_or(|m| m.unwrap_or(false)),
     })
 }
 

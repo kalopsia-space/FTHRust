@@ -1,4 +1,7 @@
-use fthrust_core::window_geometry::{Rect, SavedGeometry, Screen, popup_anchor, restore};
+use fthrust_core::window_geometry::{
+    MIN_HEIGHT, MIN_VISIBLE_HEIGHT, MIN_VISIBLE_WIDTH, MIN_WIDTH, Rect, SavedGeometry, Screen,
+    popup_anchor, restore,
+};
 use serde_json::Value;
 
 fn screens_from(v: &Value) -> Vec<Screen> {
@@ -22,6 +25,11 @@ fn screens_from(v: &Value) -> Vec<Screen> {
 fn restore_cases_match_fixture() {
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/window-geometry.json")).unwrap();
+    let c = &fixture["constants"];
+    assert_eq!(c["default_min_width"], MIN_WIDTH);
+    assert_eq!(c["default_min_height"], MIN_HEIGHT);
+    assert_eq!(c["min_visible_width"], MIN_VISIBLE_WIDTH);
+    assert_eq!(c["min_visible_height"], MIN_VISIBLE_HEIGHT);
     for case in fixture["restore_cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         let saved: SavedGeometry = serde_json::from_value(case["saved"].clone()).unwrap();
@@ -138,4 +146,47 @@ fn popup_clamps_horizontally() {
         height: 20,
     };
     assert_eq!(popup_anchor(corner, (200, 100), screen), (792, 680));
+}
+
+fn fixture_screens() -> Vec<Screen> {
+    let f: Value = serde_json::from_str(include_str!("fixtures/window-geometry.json")).unwrap();
+    screens_from(&f["restore_cases"][0]["screens"])
+}
+
+#[test]
+fn small_saved_rect_is_clamped_not_replaced() {
+    let saved = SavedGeometry {
+        normal_geometry: Some(Rect {
+            x: 400,
+            y: 300,
+            width: 50,
+            height: 30,
+        }),
+        ..Default::default()
+    };
+    let p = restore(&saved, &fixture_screens()).unwrap();
+    // Overlap: DP-3 (0,0 2560x1440) contains the rect fully (1500); HDMI-1 0.
+    // Clamp: w = min(2560, max(1100, 50)) = 1100; h = min(1440, max(720, 30)) = 720.
+    // x = 400 (max 2559-1100+1 = 1460); y = 300 (max 1439-720+1 = 720).
+    assert_eq!(p.screen_name, "DP-3");
+    assert_eq!(
+        p.rect,
+        Rect {
+            x: 400,
+            y: 300,
+            width: 1100,
+            height: 720
+        }
+    );
+}
+
+#[test]
+fn maximized_null_is_false_missing_is_true() {
+    let screens = fixture_screens();
+    let null: SavedGeometry = serde_json::from_str(r#"{"maximized": null}"#).unwrap();
+    assert!(!restore(&null, &screens).unwrap().maximized);
+    let missing: SavedGeometry = serde_json::from_str("{}").unwrap();
+    assert!(restore(&missing, &screens).unwrap().maximized);
+    let f: SavedGeometry = serde_json::from_str(r#"{"maximized": false}"#).unwrap();
+    assert!(!restore(&f, &screens).unwrap().maximized);
 }
