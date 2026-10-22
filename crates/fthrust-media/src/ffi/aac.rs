@@ -4,7 +4,7 @@ use std::ptr;
 
 use ffmpeg_next::ffi;
 
-use super::codec::RawPacket;
+use super::codec::{RawPacket, packet_bytes};
 use crate::{MediaError, Result};
 
 /// AAC encoder with a float32 interleaved → planar resampler in front.
@@ -117,11 +117,6 @@ impl AacEncoder {
         }
     }
 
-    /// Samples per AAC frame.
-    pub fn frame_size(&self) -> usize {
-        self.frame_size
-    }
-
     /// Sample rate.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -221,7 +216,7 @@ impl AacEncoder {
             let packet = unsafe {
                 let p = &*self.pkt;
                 let packet = RawPacket {
-                    data: std::slice::from_raw_parts(p.data, p.size as usize).to_vec(),
+                    data: packet_bytes(p),
                     pts: p.pts,
                     dts: p.dts,
                     keyframe: true,

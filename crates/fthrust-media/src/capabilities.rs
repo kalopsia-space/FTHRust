@@ -3,10 +3,19 @@
 //! initialisation. Ports `core/encoder_capabilities.py` (Linux table).
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
 use crate::encoder::encoder_works;
+
+/// The argument a host binary recognises to run one encoder probe and exit
+/// (see [`handle_probe_argv`]).
+pub const PROBE_ARG: &str = "--fthrust-probe-encoder";
+
+/// Per-encoder time limit for the child probe, as in the reference.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Cache schema version (the Linux value of the reference).
 pub const CACHE_VERSION: u32 = 3;
@@ -129,10 +138,81 @@ pub fn probe_capabilities_with(
     found
 }
 
-/// Discovers backends by a real one-frame encode per candidate. Call from
-/// a worker: driver initialisation can block.
-pub fn probe_capabilities() -> Vec<EncoderCapability> {
+/// Discovers backends by a real one-frame encode per candidate, inside
+/// this process. A crashing or hanging driver takes the caller with it, so
+/// prefer [`probe_capabilities`] from a UI.
+pub fn probe_capabilities_in_process() -> Vec<EncoderCapability> {
     probe_capabilities_with(encoder_works)
+}
+
+/// Discovers backends with each one-frame encode run in a child process
+/// (this executable re-invoked with [`PROBE_ARG`]), so a driver that aborts
+/// or hangs only costs that candidate. The host binary must call
+/// [`handle_probe_argv`] first thing in `main`. Call from a worker.
+pub fn probe_capabilities() -> Vec<EncoderCapability> {
+    match std::env::current_exe() {
+        Ok(exe) => probe_capabilities_with(child_probe_runner(exe, PROBE_TIMEOUT)),
+        Err(e) => {
+            tracing::warn!(
+                "cannot locate this executable for child probes, probing in-process: {e}"
+            );
+            probe_capabilities_in_process()
+        }
+    }
+}
+
+/// If this process was started as a probe child (`<exe> --fthrust-probe-encoder
+/// NAME`), runs the probe and exits with status 0 (works) or 1. Returns
+/// normally otherwise. Call before anything else in `main`.
+pub fn handle_probe_argv() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) != Some(PROBE_ARG) {
+        return;
+    }
+    let name: &'static str = Box::leak(args.get(2).cloned().unwrap_or_default().into_boxed_str());
+    std::process::exit(if encoder_works(name) { 0 } else { 1 });
+}
+
+/// A "does this encoder work" check that runs `exe --fthrust-probe-encoder
+/// NAME` with no inherited stdio and treats a non-zero exit, a signal, a
+/// spawn failure or a timeout (the child is killed) as "does not work".
+pub fn child_probe_runner(exe: PathBuf, timeout: Duration) -> impl FnMut(&'static str) -> bool {
+    move |name| {
+        let mut child = match Command::new(&exe)
+            .arg(PROBE_ARG)
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                tracing::debug!(encoder = name, "probe child could not start: {e}");
+                return false;
+            }
+        };
+        let started = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) => {
+                    if started.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        tracing::debug!(encoder = name, "probe child timed out");
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => {
+                    tracing::debug!(encoder = name, "probe child wait failed: {e}");
+                    let _ = child.kill();
+                    return false;
+                }
+            }
+        }
+    }
 }
 
 /// Codec keys in UI priority order for one selected backend (`auto` = any).

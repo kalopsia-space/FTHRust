@@ -73,6 +73,22 @@ impl Recorder {
                 "recording size and fps must be non-zero".into(),
             ));
         }
+        // Claim the name first so a recording never truncates an existing
+        // file (the muxer opens with O_TRUNC).
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(MediaError::Invalid(format!(
+                    "recording path already exists: {}",
+                    path.display()
+                )));
+            }
+            Err(e) => return Err(MediaError::Io(e)),
+        }
         let mut mux = Muxer::new(path, true)?;
         mux.set_metadata("fthr_frame_rate", &format!("{}/1", cfg.fps))?;
         mux.set_metadata(

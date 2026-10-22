@@ -3,8 +3,8 @@ mod support;
 use fthrust_core::capture_config::{Codec, EncoderPref};
 use fthrust_media::MediaError;
 use fthrust_media::encoder::{Encoder, EncoderConfig};
-use fthrust_media::ffi::hw::vaapi_available;
 use fthrust_media::ring::EncodedPacket;
+use fthrust_media::vaapi::vaapi_available;
 
 const SECOND: i64 = 1_000_000_000;
 
@@ -211,4 +211,35 @@ fn vaapi_encodes_when_device_present() {
     assert!(!out.is_empty());
     assert!(out.iter().all(|p| !p.data.is_empty()));
     assert!(out[0].keyframe);
+}
+
+#[test]
+fn vaapi_open_iterates_devices_until_one_encodes() {
+    use fthrust_media::vaapi::{candidate_devices, vaapi_available};
+    let cfg = EncoderConfig {
+        src_width: 320,
+        src_height: 180,
+        enc_width: 320,
+        enc_height: 180,
+        fps: 30,
+        bitrate_kbps: 500,
+        codec: Codec::H264,
+        encoder: EncoderPref::Vaapi,
+        preset: 4,
+    };
+    // A node that cannot host an encoder must not stop the search.
+    let bogus = vec!["/dev/null".to_string()];
+    let err = Encoder::open_with_devices(&cfg, &bogus)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("/dev/null"), "{err}");
+    if !vaapi_available() {
+        eprintln!("skipping: no VA-API device");
+        return;
+    }
+    let mut devices = bogus;
+    devices.extend(candidate_devices());
+    let enc = Encoder::open_with_devices(&cfg, &devices).unwrap();
+    assert!(enc.is_vaapi());
+    assert_ne!(enc.vaapi_device(), Some("/dev/null"));
 }

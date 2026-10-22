@@ -73,7 +73,9 @@ impl Scaler {
     }
 
     /// Converts one BGRA image (`stride` bytes per row, `height` rows) into
-    /// `dst`. The caller guarantees `bgra` holds `stride * height` bytes.
+    /// `dst`. `height` must match the scaler's source height, `stride` must
+    /// cover a source row, and `bgra` must hold `stride * (height - 1) +
+    /// width * 4` bytes (the last row need not be padded).
     pub fn scale_bgra(
         &mut self,
         bgra: &[u8],
@@ -81,10 +83,24 @@ impl Scaler {
         height: u32,
         dst: &mut OwnedFrame,
     ) -> Result<()> {
-        if bgra.len() < stride * height as usize {
-            return Err(MediaError::Invalid(
-                "frame buffer shorter than stride * height".into(),
-            ));
+        if height != self.src_height || height == 0 {
+            return Err(MediaError::Invalid(format!(
+                "frame height {height} does not match the scaler's source height {}",
+                self.src_height
+            )));
+        }
+        let row = self.src_width as usize * 4;
+        if stride < row {
+            return Err(MediaError::Invalid(format!(
+                "stride {stride} is smaller than width*4 ({row})"
+            )));
+        }
+        let needed = stride * (height as usize - 1) + row;
+        if bgra.len() < needed {
+            return Err(MediaError::Invalid(format!(
+                "frame buffer holds {} bytes but its geometry needs {needed}",
+                bgra.len()
+            )));
         }
         let src_planes: [*const u8; 4] = [bgra.as_ptr(), ptr::null(), ptr::null(), ptr::null()];
         let src_strides: [i32; 4] = [stride as i32, 0, 0, 0];
@@ -114,5 +130,47 @@ impl Drop for Scaler {
         // SAFETY: the context came from sws_getContext and is freed once.
         unsafe { ffi::sws_freeContext(self.ctx) }
         self.ctx = ptr::null_mut();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scaler() -> Scaler {
+        crate::init().unwrap();
+        Scaler::new(64, 64, 32, 32, ffi::AVPixelFormat::AV_PIX_FMT_YUV420P).unwrap()
+    }
+
+    #[test]
+    fn rejects_stride_smaller_than_source_width() {
+        let mut s = scaler();
+        let mut dst = OwnedFrame::video(ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, 32, 32).unwrap();
+        let buf = vec![0u8; 64 * 64 * 4];
+        assert!(s.scale_bgra(&buf, 16, 64, &mut dst).is_err());
+    }
+
+    #[test]
+    fn rejects_short_buffer_and_wrong_height() {
+        let mut s = scaler();
+        let mut dst = OwnedFrame::video(ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, 32, 32).unwrap();
+        let short = vec![0u8; 64 * 64 * 4 - 1];
+        assert!(s.scale_bgra(&short, 64 * 4, 64, &mut dst).is_err());
+        let full = vec![0u8; 64 * 64 * 4];
+        assert!(
+            s.scale_bgra(&full, 64 * 4, 65, &mut dst).is_err(),
+            "height must match the scaler"
+        );
+        assert!(s.scale_bgra(&full, 64 * 4, 64, &mut dst).is_ok());
+    }
+
+    #[test]
+    fn accepts_unpadded_last_row() {
+        // The encoder's rule: stride*(h-1) + w*4 bytes is enough.
+        let mut s = scaler();
+        let mut dst = OwnedFrame::video(ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, 32, 32).unwrap();
+        let stride = 512;
+        let buf = vec![0u8; stride * 63 + 64 * 4];
+        assert!(s.scale_bgra(&buf, stride, 64, &mut dst).is_ok());
     }
 }

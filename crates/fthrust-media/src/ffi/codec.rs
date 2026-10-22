@@ -40,6 +40,20 @@ pub struct RawPacket {
     pub keyframe: bool,
 }
 
+/// Copies a packet's payload; a packet without data (zero-size output)
+/// yields an empty vector instead of a null-pointer slice.
+///
+/// # Safety
+/// `p` must be a packet whose `data` is either null or valid for `size`
+/// bytes.
+pub(crate) unsafe fn packet_bytes(p: &ffi::AVPacket) -> Vec<u8> {
+    if p.data.is_null() || p.size <= 0 {
+        return Vec::new();
+    }
+    // SAFETY: guaranteed by the caller contract above.
+    unsafe { std::slice::from_raw_parts(p.data, p.size as usize).to_vec() }
+}
+
 /// An open encoder context.
 #[derive(Debug)]
 pub struct RawEncoder {
@@ -186,9 +200,8 @@ impl RawEncoder {
             super::check(ret)?;
             let packet = unsafe {
                 let p = &*self.pkt;
-                let data = std::slice::from_raw_parts(p.data, p.size as usize).to_vec();
                 let packet = RawPacket {
-                    data,
+                    data: packet_bytes(p),
                     pts: p.pts,
                     dts: p.dts,
                     keyframe: p.flags & ffi::AV_PKT_FLAG_KEY != 0,
@@ -226,6 +239,22 @@ impl Drop for RawEncoder {
         unsafe {
             ffi::av_packet_free(&mut self.pkt);
             ffi::avcodec_free_context(&mut self.ctx);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_packet_copies_to_empty_vec() {
+        // SAFETY: a freshly allocated packet has null data and size 0.
+        unsafe {
+            let pkt = ffi::av_packet_alloc();
+            assert!(packet_bytes(&*pkt).is_empty());
+            let mut pkt = pkt;
+            ffi::av_packet_free(&mut pkt);
         }
     }
 }

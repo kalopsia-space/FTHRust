@@ -242,6 +242,13 @@ impl Muxer {
                 "write_packet before write_header".into(),
             ));
         }
+        // SAFETY: fmt is valid; nb_streams is a plain field.
+        let streams = unsafe { (*self.fmt).nb_streams } as usize;
+        if stream_index >= streams {
+            return Err(MediaError::Invalid(format!(
+                "stream index {stream_index} is out of range (container has {streams})"
+            )));
+        }
         // SAFETY: the packet borrows `data` only for the duration of the
         // interleaved write (av_interleaved_write_frame may keep a reference
         // only when the packet is refcounted, which a borrowed buffer is not:
@@ -343,5 +350,29 @@ impl Drop for Muxer {
             unsafe { ffi::avformat_free_context(self.fmt) }
             self.fmt = ptr::null_mut();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_packet_rejects_out_of_range_stream() {
+        crate::init().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mux = Muxer::new(&tmp.path().join("m.mp4"), false).unwrap();
+        let index = mux
+            .add_video_stream(ffi::AVCodecID::AV_CODEC_ID_MPEG4, 16, 16, 30, 30, 0, &[])
+            .unwrap();
+        mux.write_header().unwrap();
+        assert!(
+            mux.write_packet(index + 7, &[0, 0, 1, 0], 0, 0, 1, true, (1, 30))
+                .is_err()
+        );
+        assert!(
+            mux.write_packet(index, &[0, 0, 1, 0], 0, 0, 1, true, (1, 30))
+                .is_ok()
+        );
     }
 }

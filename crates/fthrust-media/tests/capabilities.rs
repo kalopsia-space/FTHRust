@@ -1,6 +1,7 @@
 use fthrust_media::capabilities::{
-    CACHE_VERSION, CacheSignature, EncoderCapability, available_codecs, backend_keys,
-    backend_table, load_cached, probe_capabilities, probe_capabilities_with, store_cached,
+    CACHE_VERSION, CacheSignature, EncoderCapability, PROBE_ARG, available_codecs, backend_keys,
+    backend_table, child_probe_runner, load_cached, probe_capabilities_in_process,
+    probe_capabilities_with, store_cached,
 };
 use serde_json::Value;
 
@@ -14,7 +15,7 @@ fn capability_table_matches_fixture() {
     assert_eq!(fx["cache_version"].as_u64().unwrap() as u32, CACHE_VERSION);
     assert_eq!(
         fx["vaapi_device_default"],
-        fthrust_media::ffi::hw::DEFAULT_DEVICE
+        fthrust_media::vaapi::DEFAULT_DEVICE
     );
     let keys: Vec<&str> = fx["backend_keys"]
         .as_array()
@@ -135,7 +136,7 @@ fn real_probe_reports_a_working_software_h264() {
     let have_sw = ["libopenh264", "libx264"]
         .iter()
         .any(|n| ffmpeg_next::encoder::find_by_name(n).is_some());
-    let caps = probe_capabilities();
+    let caps = probe_capabilities_in_process();
     let software = caps.iter().find(|c| c.key == "software");
     if have_sw {
         let software = software.expect("software backend present");
@@ -148,4 +149,35 @@ fn real_probe_reports_a_working_software_h264() {
     let sig = CacheSignature::current().unwrap();
     assert_eq!(sig.platform, "linux");
     assert!(sig.ffmpeg_size > 0);
+}
+
+#[test]
+fn child_runner_treats_crash_and_timeout_as_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("fake-exe");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = \"{PROBE_ARG}\" ] || exit 9\ncase \"$2\" in\n  *x264*) exit 0;;\n  *sleep*) sleep 30;;\n  *abort*) kill -ABRT $$;;\n  *) exit 1;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut runner = child_probe_runner(script.clone(), Duration::from_millis(400));
+    assert!(runner("libx264"), "exit 0 means the encoder works");
+    assert!(!runner("libopenh264"), "exit 1 means it does not");
+    assert!(
+        !runner("abort_driver"),
+        "a crashing child is unavailable, not a crash of this process"
+    );
+    let started = std::time::Instant::now();
+    assert!(!runner("sleep_driver"), "a hung child is unavailable");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the hung child was killed at the timeout"
+    );
+    let mut missing = child_probe_runner(tmp.path().join("missing"), Duration::from_secs(1));
+    assert!(!missing("libx264"));
 }

@@ -15,7 +15,8 @@
 //! | [`thumbnail`] | `ui/clip_grid.py` | Poster frames fitted into 640×360 |
 //! | [`capabilities`] | `core/encoder_capabilities.py` | Working-backend discovery by a one-frame encode, and its cache |
 //! | [`combined_audio`] | `core/combined_audio_policy.py` | Which native streams a combined track mixes, and the `amix` filter |
-//! | [`ffi`] | — | The only `unsafe` in the crate: thin wrappers over FFmpeg APIs ffmpeg-next lacks |
+//! | [`vaapi`] | `encoder.cpp` | VA-API render-node discovery |
+//! | `ffi` (private) | — | The only `unsafe` in the crate: thin wrappers over FFmpeg APIs ffmpeg-next lacks |
 //!
 //! Every module above the `ffi` row is safe Rust. Call [`init`] once (any
 //! entry point does it for you) before touching FFmpeg.
@@ -28,13 +29,18 @@ pub mod clip_writer;
 pub mod combined_audio;
 pub mod encoder;
 pub mod encoder_policy;
-pub mod ffi;
+pub(crate) mod ffi;
 pub mod probe;
 pub mod recorder;
 pub mod replay_interval;
 pub mod ring;
 pub mod thumbnail;
 pub mod transactional_save;
+
+/// VA-API device discovery (the safe surface of the private `ffi::hw`).
+pub mod vaapi {
+    pub use crate::ffi::hw::{DEFAULT_DEVICE, candidate_devices, vaapi_available};
+}
 
 use std::sync::OnceLock;
 

@@ -65,7 +65,8 @@ impl VaapiFrames {
         Err(last.unwrap_or_else(|| MediaError::Invalid("no render node found".into())))
     }
 
-    fn create_on(path: &str, width: u32, height: u32) -> Result<Self> {
+    /// Opens one render node and allocates the pool there.
+    pub(crate) fn create_on(path: &str, width: u32, height: u32) -> Result<Self> {
         let cpath =
             CString::new(path).map_err(|_| MediaError::Invalid("device path has NUL".into()))?;
         let mut device: *mut ffi::AVBufferRef = ptr::null_mut();

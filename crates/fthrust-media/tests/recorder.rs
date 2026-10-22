@@ -212,3 +212,18 @@ fn audio_before_video_is_ignored_and_empty_extradata_rejected() {
     };
     assert!(Recorder::start(&tmp.path().join("bad.mp4"), &bad).is_err());
 }
+
+#[test]
+fn start_refuses_existing_file() {
+    let Some(src) = encode(1, None) else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("precious.mp4");
+    std::fs::write(&out, b"someone else's recording").unwrap();
+    let err = Recorder::start(&out, &src.config).unwrap_err();
+    assert!(err.to_string().contains("exists"), "{err}");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        b"someone else's recording",
+        "untouched"
+    );
+}

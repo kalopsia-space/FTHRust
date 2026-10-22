@@ -10,7 +10,7 @@ use fthrust_core::capture_config::{Codec, EncoderPref};
 use crate::encoder_policy::{encoder_candidates, preset_options};
 use crate::ffi::codec::{OpenParams, RawEncoder};
 use crate::ffi::frame::OwnedFrame;
-use crate::ffi::hw::VaapiFrames;
+use crate::ffi::hw::{VaapiFrames, candidate_devices};
 use crate::ffi::scaler::Scaler;
 use crate::ring::EncodedPacket;
 use crate::{MediaError, Result};
@@ -60,8 +60,16 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Opens the first candidate encoder that initialises.
+    /// Opens the first candidate encoder that initialises. VA-API
+    /// candidates are tried on every render node from
+    /// [`crate::vaapi::candidate_devices`] until one encodes.
     pub fn open(cfg: &EncoderConfig) -> Result<Self> {
+        crate::init()?;
+        Self::open_with_devices(cfg, &candidate_devices())
+    }
+
+    /// [`Encoder::open`] with an explicit list of VA-API render nodes.
+    pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
         crate::init()?;
         if cfg.fps == 0 || cfg.enc_width == 0 || cfg.enc_height == 0 {
             return Err(MediaError::Invalid(
@@ -75,7 +83,7 @@ impl Encoder {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg) {
+            match Self::try_open(name, cfg, devices) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -106,15 +114,10 @@ impl Encoder {
         )))
     }
 
-    fn try_open(name: &'static str, cfg: &EncoderConfig) -> Result<RawEncoder> {
+    fn try_open(name: &'static str, cfg: &EncoderConfig, devices: &[String]) -> Result<RawEncoder> {
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
             is_vaapi || name.contains("nvenc") || name.contains("amf") || name.contains("qsv");
-        let hw = if is_vaapi {
-            Some(VaapiFrames::create(cfg.enc_width, cfg.enc_height)?)
-        } else {
-            None
-        };
         let params = OpenParams {
             width: cfg.enc_width,
             height: cfg.enc_height,
@@ -127,7 +130,26 @@ impl Encoder {
                 ffi::AVPixelFormat::AV_PIX_FMT_YUV420P
             },
         };
-        RawEncoder::open(name, &params, hw)
+        if !is_vaapi {
+            return RawEncoder::open(name, &params, None);
+        }
+        // The node where a device opens is not necessarily the node whose
+        // driver has this encoder (NVIDIA on renderD128, AMD on renderD129):
+        // keep going until an encoder actually opens.
+        let mut failures = Vec::new();
+        for device in devices {
+            match VaapiFrames::create_on(device, cfg.enc_width, cfg.enc_height)
+                .and_then(|hw| RawEncoder::open(name, &params, Some(hw)))
+            {
+                Ok(raw) => return Ok(raw),
+                Err(e) => failures.push(format!("{device}: {e}")),
+            }
+        }
+        Err(MediaError::EncoderUnavailable(if failures.is_empty() {
+            "no VA-API render node to try".into()
+        } else {
+            failures.join(", ")
+        }))
     }
 
     fn finish_open(raw: RawEncoder, cfg: &EncoderConfig) -> Result<Self> {
@@ -176,7 +198,7 @@ impl Encoder {
             encoder: EncoderPref::Auto,
             preset: 4,
         };
-        let Ok(raw) = Self::try_open(name, &cfg) else {
+        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices()) else {
             return false;
         };
         let Ok(mut encoder) = Self::finish_open(raw, &cfg) else {
@@ -208,6 +230,11 @@ impl Encoder {
     /// Whether the VA-API path is active.
     pub fn is_vaapi(&self) -> bool {
         self.raw.is_vaapi()
+    }
+
+    /// The render node in use, when the VA-API path is active.
+    pub fn vaapi_device(&self) -> Option<&str> {
+        self.raw.vaapi().map(|v| v.device_path.as_str())
     }
 
     /// Stamps every subsequent packet with `generation`.
