@@ -47,6 +47,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Notice",
     "px": 15,
     "weight": 500,
@@ -97,6 +100,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "CAPTURE FAILED",
     "px": 15,
     "weight": 600,
@@ -147,6 +153,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "—",
     "px": 15,
     "weight": 500,
@@ -197,6 +206,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "The compositor stopped answering",
     "px": 15,
     "weight": 500,
@@ -247,6 +259,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 14,
     "content": "+2 MORE",
     "px": 14,
     "weight": 500,
@@ -297,6 +312,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "RESTART ENGINE",
     "px": 14,
     "weight": 600,

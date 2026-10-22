@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "New export preset",
     "px": 14,
     "weight": 600,
@@ -177,6 +180,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Name",
     "px": 15,
     "weight": 500,
@@ -227,6 +233,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Target file size",
     "px": 15,
     "weight": 500,
@@ -317,6 +326,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "25.0 MB",
     "px": 15,
     "weight": 600,
@@ -448,6 +460,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Limit resolution",
     "px": 17,
     "weight": 500,
@@ -498,6 +513,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Resolution",
     "px": 15,
     "weight": 500,
@@ -588,6 +606,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "1920",
     "px": 15,
     "weight": 600,
@@ -718,6 +739,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "×",
     "px": 15,
     "weight": 500,
@@ -808,6 +832,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "1080",
     "px": 15,
     "weight": 600,
@@ -939,6 +966,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Limit frame rate",
     "px": 17,
     "weight": 500,
@@ -989,6 +1019,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Frame rate",
     "px": 15,
     "weight": 500,
@@ -1079,6 +1112,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "60.00 FPS",
     "px": 15,
     "weight": 600,
@@ -1209,6 +1245,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Video codec",
     "px": 15,
     "weight": 500,
@@ -1259,6 +1298,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "H.264 (reviewed runtime)",
     "px": 15,
     "weight": 400,
@@ -1309,6 +1351,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Audio",
     "px": 15,
     "weight": 500,
@@ -1399,6 +1444,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "128 kbps AAC",
     "px": 15,
     "weight": 600,
@@ -1529,6 +1577,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Cancel",
     "px": 14,
     "weight": 600,
@@ -1579,6 +1630,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Save preset",
     "px": 14,
     "weight": 600,

@@ -28,7 +28,7 @@ sys.path.insert(0, str(REF / 'FTHR_UI'))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PySide6.QtCore import QPoint, QRect  # noqa: E402
-from PySide6.QtGui import QFontMetrics, QImage  # noqa: E402
+from PySide6.QtGui import QFontInfo, QFontMetrics, QImage  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QAbstractButton, QApplication, QComboBox, QLabel, QLineEdit, QWidget,
 )
@@ -101,7 +101,11 @@ def _text_info(w: QWidget):
         if px <= 0:
             px = round(font.pointSizeF() * 96.0 / 72.0)
         fm = QFontMetrics(font)
+        info = QFontInfo(font)
         return {
+            'matched_family': info.family(),
+            'matched_weight': int(info.weight()),
+            'matched_px': info.pixelSize(),
             'content': text.replace('\n', ' ')[:120],
             'px': px,
             'weight': int(font.weight()),

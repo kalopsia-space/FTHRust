@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clip not found",
     "px": 14,
     "weight": 600,
@@ -177,6 +180,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 17,
     "content": "The clip is no longer on disk.",
     "px": 17,
     "weight": 400,
@@ -227,6 +233,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "OK",
     "px": 14,
     "weight": 600,

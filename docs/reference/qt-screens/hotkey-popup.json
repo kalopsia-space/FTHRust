@@ -47,6 +47,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "HOTKEYS",
     "px": 12,
     "weight": 600,
@@ -177,6 +180,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "CAPTURE CLIP",
     "px": 14,
     "weight": 600,
@@ -227,6 +233,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Keyboard",
     "px": 12,
     "weight": 600,
@@ -277,6 +286,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Controller",
     "px": 12,
     "weight": 600,
@@ -327,6 +339,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "F9",
     "px": 15,
     "weight": 600,
@@ -377,6 +392,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -427,6 +445,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "Add",
     "px": 15,
     "weight": 600,
@@ -477,6 +498,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -567,6 +591,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "SCREENSHOT",
     "px": 14,
     "weight": 600,
@@ -617,6 +644,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Keyboard",
     "px": 12,
     "weight": 600,
@@ -667,6 +697,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Controller",
     "px": 12,
     "weight": 600,
@@ -717,6 +750,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "F12",
     "px": 15,
     "weight": 600,
@@ -767,6 +803,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -817,6 +856,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "Add",
     "px": 15,
     "weight": 600,
@@ -867,6 +909,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -957,6 +1002,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "CONFIRM GAME",
     "px": 14,
     "weight": 600,
@@ -1007,6 +1055,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Keyboard",
     "px": 12,
     "weight": 600,
@@ -1057,6 +1108,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Controller",
     "px": 12,
     "weight": 600,
@@ -1107,6 +1161,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "F8",
     "px": 15,
     "weight": 600,
@@ -1157,6 +1214,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -1207,6 +1267,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "Add",
     "px": 15,
     "weight": 600,
@@ -1257,6 +1320,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -1347,6 +1413,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "DISMISS GAME",
     "px": 14,
     "weight": 600,
@@ -1397,6 +1466,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Keyboard",
     "px": 12,
     "weight": 600,
@@ -1447,6 +1519,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Controller",
     "px": 12,
     "weight": 600,
@@ -1497,6 +1572,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "F7",
     "px": 15,
     "weight": 600,
@@ -1547,6 +1625,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -1597,6 +1678,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "Add",
     "px": 15,
     "weight": 600,
@@ -1647,6 +1731,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clear",
     "px": 12,
     "weight": 600,
@@ -1697,6 +1784,9 @@
     }
    ],
    "text": {
+    "matched_family": "Noto Sans Mono",
+    "matched_weight": 500,
+    "matched_px": 12,
     "content": "Bind your preferred keys to these commands:  echo -n \"save_clip\" | /usr/bin/nc -U /run/user/1000/fthr/hotkey.sock echo -",
     "px": 12,
     "weight": 500,

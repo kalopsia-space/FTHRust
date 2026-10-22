@@ -47,6 +47,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Capture source",
     "px": 12,
     "weight": 600,
@@ -97,6 +100,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Desktop",
     "px": 15,
     "weight": 400,
@@ -147,6 +153,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "First Screen (Default)",
     "px": 15,
     "weight": 400,

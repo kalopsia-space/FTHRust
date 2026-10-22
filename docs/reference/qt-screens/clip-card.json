@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 14,
     "content": "0:00",
     "px": 14,
     "weight": 500,
@@ -177,6 +180,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "Overwatch_clip_from_04Oct2…",
     "px": 15,
     "weight": 600,
@@ -227,6 +233,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 12,
     "content": "Screenshot",
     "px": 12,
     "weight": 400,

@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Custom clip length",
     "px": 14,
     "weight": 600,
@@ -177,6 +180,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Length",
     "px": 15,
     "weight": 400,
@@ -267,6 +273,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "1 min",
     "px": 15,
     "weight": 600,
@@ -397,6 +406,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 12,
     "content": "Choose 1–15 minutes.",
     "px": 12,
     "weight": 400,
@@ -447,6 +459,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Cancel",
     "px": 14,
     "weight": 600,
@@ -497,6 +512,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Add length",
     "px": 14,
     "weight": 600,

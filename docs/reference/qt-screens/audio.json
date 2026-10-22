@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 700,
+    "matched_px": 17,
     "content": "FTHR Clips",
     "px": 17,
     "weight": 700,
@@ -137,6 +140,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Help us keep the app free and open for everyone",
     "px": 14,
     "weight": 600,
@@ -427,6 +433,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "30s // 60 fps // Source // 25,000 kbps",
     "px": 15,
     "weight": 400,
@@ -477,6 +486,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Source",
     "px": 15,
     "weight": 400,
@@ -527,6 +539,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Game detection: Off",
     "px": 15,
     "weight": 400,
@@ -577,6 +592,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Record",
     "px": 20,
     "weight": 600,
@@ -627,6 +645,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Hotkeys",
     "px": 15,
     "weight": 400,
@@ -677,6 +698,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Connecting",
     "px": 14,
     "weight": 400,
@@ -768,6 +792,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clips",
     "px": 14,
     "weight": 400,
@@ -819,6 +846,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Settings",
     "px": 14,
     "weight": 400,
@@ -990,6 +1020,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "General",
     "px": 14,
     "weight": 400,
@@ -1041,6 +1074,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clip",
     "px": 14,
     "weight": 400,
@@ -1092,6 +1128,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Audio",
     "px": 14,
     "weight": 400,
@@ -1143,6 +1182,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Visuals",
     "px": 14,
     "weight": 400,
@@ -1194,6 +1236,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Customize",
     "px": 14,
     "weight": 400,
@@ -1245,6 +1290,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Performance",
     "px": 14,
     "weight": 400,
@@ -1296,6 +1344,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Shortcuts",
     "px": 14,
     "weight": 400,
@@ -1426,6 +1477,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Microphone",
     "px": 20,
     "weight": 600,
@@ -1476,6 +1530,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Input device",
     "px": 17,
     "weight": 500,
@@ -1526,6 +1583,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "System Default",
     "px": 15,
     "weight": 400,
@@ -1617,6 +1677,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Downmix stereo microphone to mono",
     "px": 17,
     "weight": 500,
@@ -1667,6 +1730,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Microphone gain",
     "px": 17,
     "weight": 500,
@@ -1717,6 +1783,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -1767,6 +1836,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Live level",
     "px": 17,
     "weight": 500,
@@ -1818,6 +1890,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Monitor (route mic to speakers so I can hear it)",
     "px": 17,
     "weight": 500,
@@ -1868,6 +1943,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Gary Mode",
     "px": 20,
     "weight": 600,
@@ -1999,6 +2077,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable Gary Mode",
     "px": 17,
     "weight": 500,
@@ -2049,6 +2130,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Choose",
     "px": 12,
     "weight": 600,
@@ -2099,6 +2183,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Default",
     "px": 12,
     "weight": 600,
@@ -2149,6 +2236,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Notifications",
     "px": 20,
     "weight": 600,
@@ -2200,6 +2290,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable notification sounds",
     "px": 17,
     "weight": 500,
@@ -2250,6 +2343,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Monitor:",
     "px": 17,
     "weight": 500,
@@ -2300,6 +2396,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Auto (highest Hz)",
     "px": 15,
     "weight": 400,
@@ -2350,6 +2449,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Notification volume",
     "px": 12,
     "weight": 600,
@@ -2400,6 +2502,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Master volume",
     "px": 17,
     "weight": 500,
@@ -2450,6 +2555,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -2500,6 +2608,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Clip captured",
     "px": 17,
     "weight": 500,
@@ -2550,6 +2661,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -2600,6 +2714,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Screenshot saved",
     "px": 17,
     "weight": 500,
@@ -2650,6 +2767,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -2700,6 +2820,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Capture failed",
     "px": 17,
     "weight": 500,
@@ -2750,6 +2873,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -2800,6 +2926,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Startup",
     "px": 17,
     "weight": 500,
@@ -2850,6 +2979,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -2900,6 +3032,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Upload successful",
     "px": 17,
     "weight": 500,
@@ -2950,6 +3085,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -3000,6 +3138,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Upload failed",
     "px": 17,
     "weight": 500,
@@ -3050,6 +3191,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "100%",
     "px": 17,
     "weight": 500,
@@ -3100,6 +3244,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Audio Capture",
     "px": 20,
     "weight": 600,
@@ -3151,6 +3298,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable audio capture",
     "px": 17,
     "weight": 500,
@@ -3201,6 +3351,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Playback device to capture",
     "px": 17,
     "weight": 500,
@@ -3251,6 +3404,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "System default",
     "px": 15,
     "weight": 400,
@@ -3301,6 +3457,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Refresh",
     "px": 14,
     "weight": 600,
@@ -3351,6 +3510,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "If this device is missing when capture starts, the default output is captured instead.",
     "px": 17,
     "weight": 500,
@@ -3402,6 +3564,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Keep system and microphone audio as separate tracks",
     "px": 17,
     "weight": 500,
@@ -3452,6 +3617,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Combined audio is the default. Enable separate tracks only when you need independent system and microphone mixing in the",
     "px": 15,
     "weight": 400,

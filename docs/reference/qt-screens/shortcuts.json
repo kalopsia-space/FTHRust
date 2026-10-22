@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 700,
+    "matched_px": 17,
     "content": "FTHR Clips",
     "px": 17,
     "weight": 700,
@@ -137,6 +140,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Help us keep the app free and open for everyone",
     "px": 14,
     "weight": 600,
@@ -427,6 +433,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "30s // 60 fps // Source // 25,000 kbps",
     "px": 15,
     "weight": 400,
@@ -477,6 +486,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Source",
     "px": 15,
     "weight": 400,
@@ -527,6 +539,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Game detection: Off",
     "px": 15,
     "weight": 400,
@@ -577,6 +592,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Record",
     "px": 20,
     "weight": 600,
@@ -627,6 +645,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Hotkeys",
     "px": 15,
     "weight": 400,
@@ -677,6 +698,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Connecting",
     "px": 14,
     "weight": 400,
@@ -768,6 +792,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clips",
     "px": 14,
     "weight": 400,
@@ -819,6 +846,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Settings",
     "px": 14,
     "weight": 400,
@@ -990,6 +1020,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "General",
     "px": 14,
     "weight": 400,
@@ -1041,6 +1074,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clip",
     "px": 14,
     "weight": 400,
@@ -1092,6 +1128,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Audio",
     "px": 14,
     "weight": 400,
@@ -1143,6 +1182,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Visuals",
     "px": 14,
     "weight": 400,
@@ -1194,6 +1236,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Customize",
     "px": 14,
     "weight": 400,
@@ -1245,6 +1290,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Performance",
     "px": 14,
     "weight": 400,
@@ -1296,6 +1344,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Shortcuts",
     "px": 14,
     "weight": 400,
@@ -1466,6 +1517,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 17,
     "content": "Beta",
     "px": 17,
     "weight": 400,
@@ -1516,6 +1570,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Click a binding, hold the keys together, then release to save. Tab + S means hold Tab and press S. Shortcuts work while ",
     "px": 15,
     "weight": 400,
@@ -1567,6 +1624,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable shortcuts",
     "px": 17,
     "weight": 500,
@@ -1617,6 +1677,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Application",
     "px": 17,
     "weight": 600,
@@ -1668,6 +1731,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable application shortcuts",
     "px": 17,
     "weight": 500,
@@ -1718,6 +1784,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Switch Clips / Settings",
     "px": 15,
     "weight": 400,
@@ -1768,6 +1837,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Tab+S",
     "px": 14,
     "weight": 600,
@@ -1818,6 +1890,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -1868,6 +1943,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Next sidebar destination",
     "px": 15,
     "weight": 400,
@@ -1918,6 +1996,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Shift+Down",
     "px": 14,
     "weight": 600,
@@ -1968,6 +2049,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2018,6 +2102,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Previous sidebar destination",
     "px": 15,
     "weight": 400,
@@ -2068,6 +2155,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Shift+Up",
     "px": 14,
     "weight": 600,
@@ -2118,6 +2208,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2168,6 +2261,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Toggle game detection",
     "px": 15,
     "weight": 400,
@@ -2218,6 +2314,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Shift+G",
     "px": 14,
     "weight": 600,
@@ -2268,6 +2367,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2318,6 +2420,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Restart capture engine",
     "px": 15,
     "weight": 400,
@@ -2368,6 +2473,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Alt+Shift+R",
     "px": 14,
     "weight": 600,
@@ -2418,6 +2526,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2468,6 +2579,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Clips",
     "px": 17,
     "weight": 600,
@@ -2519,6 +2633,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Enable clips shortcuts",
     "px": 17,
     "weight": 500,
@@ -2569,6 +2686,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Scroll clips up",
     "px": 15,
     "weight": 400,
@@ -2619,6 +2739,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Up",
     "px": 14,
     "weight": 600,
@@ -2669,6 +2792,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2719,6 +2845,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Scroll clips down",
     "px": 15,
     "weight": 400,
@@ -2769,6 +2898,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Down",
     "px": 14,
     "weight": 600,
@@ -2819,6 +2951,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clear",
     "px": 14,
     "weight": 600,
@@ -2869,6 +3004,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Settings",
     "px": 17,
     "weight": 600,

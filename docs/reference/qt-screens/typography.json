@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 700,
+    "matched_px": 17,
     "content": "FTHR Clips",
     "px": 17,
     "weight": 700,
@@ -137,6 +140,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Help us keep the app free and open for everyone",
     "px": 14,
     "weight": 600,
@@ -427,6 +433,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "30s // 60 fps // Source // 25,000 kbps",
     "px": 15,
     "weight": 400,
@@ -477,6 +486,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Source",
     "px": 15,
     "weight": 400,
@@ -527,6 +539,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Game detection: Off",
     "px": 15,
     "weight": 400,
@@ -577,6 +592,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Record",
     "px": 20,
     "weight": 600,
@@ -627,6 +645,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Hotkeys",
     "px": 15,
     "weight": 400,
@@ -677,6 +698,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Connecting",
     "px": 14,
     "weight": 400,
@@ -768,6 +792,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clips",
     "px": 14,
     "weight": 400,
@@ -819,6 +846,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Settings",
     "px": 14,
     "weight": 400,
@@ -990,6 +1020,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "General",
     "px": 14,
     "weight": 400,
@@ -1041,6 +1074,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clip",
     "px": 14,
     "weight": 400,
@@ -1092,6 +1128,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Audio",
     "px": 14,
     "weight": 400,
@@ -1143,6 +1182,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Visuals",
     "px": 14,
     "weight": 400,
@@ -1194,6 +1236,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Customize",
     "px": 14,
     "weight": 400,
@@ -1245,6 +1290,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Performance",
     "px": 14,
     "weight": 400,
@@ -1296,6 +1344,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Shortcuts",
     "px": 14,
     "weight": 400,
@@ -1466,6 +1517,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Export theme",
     "px": 14,
     "weight": 600,
@@ -1516,6 +1570,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Import theme",
     "px": 14,
     "weight": 600,
@@ -1566,6 +1623,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Reset all",
     "px": 14,
     "weight": 600,
@@ -1616,6 +1676,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Apply theme",
     "px": 14,
     "weight": 600,
@@ -1786,6 +1849,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 14,
     "content": "Themes include typography, colors, icons, capture-card styling, and sounds  —  Fonts: .ttf, .otf  |  Icons: .png, .jpg, ",
     "px": 14,
     "weight": 500,
@@ -1916,6 +1982,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "01",
     "px": 17,
     "weight": 600,
@@ -1966,6 +2035,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Typography",
     "px": 17,
     "weight": 600,
@@ -2096,6 +2168,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Fonts: .ttf and .otf files are supported.",
     "px": 15,
     "weight": 400,
@@ -2146,6 +2221,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Heading font",
     "px": 14,
     "weight": 600,
@@ -2196,6 +2274,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Oswald",
     "px": 15,
     "weight": 400,
@@ -2246,6 +2327,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Import font",
     "px": 14,
     "weight": 600,
@@ -2296,6 +2380,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Interface font",
     "px": 14,
     "weight": 600,
@@ -2346,6 +2433,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Oswald",
     "px": 15,
     "weight": 400,
@@ -2396,6 +2486,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Import font",
     "px": 14,
     "weight": 600,
@@ -2446,6 +2539,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Your privacy isn't currency.",
     "px": 17,
     "weight": 500,
@@ -2496,6 +2592,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Reset typography",
     "px": 14,
     "weight": 600,
@@ -2626,6 +2725,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "02",
     "px": 17,
     "weight": 600,
@@ -2676,6 +2778,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Colors",
     "px": 17,
     "weight": 600,
@@ -2806,6 +2911,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "03",
     "px": 17,
     "weight": 600,
@@ -2856,6 +2964,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Icon Colors",
     "px": 17,
     "weight": 600,
@@ -2986,6 +3097,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "04",
     "px": 17,
     "weight": 600,
@@ -3036,6 +3150,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Icons",
     "px": 17,
     "weight": 600,
@@ -3166,6 +3283,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "05",
     "px": 17,
     "weight": 600,
@@ -3216,6 +3336,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Capture Card",
     "px": 17,
     "weight": 600,
@@ -3346,6 +3469,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "06",
     "px": 17,
     "weight": 600,
@@ -3396,6 +3522,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 17,
     "content": "Sounds & Volumes",
     "px": 17,
     "weight": 600,

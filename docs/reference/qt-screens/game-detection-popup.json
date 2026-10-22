@@ -47,6 +47,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Game detection",
     "px": 12,
     "weight": 600,
@@ -97,6 +100,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Switch mode",
     "px": 12,
     "weight": 600,
@@ -148,6 +154,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "AUTO-SWITCH",
     "px": 14,
     "weight": 600,
@@ -199,6 +208,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "PROMPT FIRST",
     "px": 14,
     "weight": 600,
@@ -249,6 +261,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Fall back to desktop",
     "px": 12,
     "weight": 600,
@@ -299,6 +314,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Manual games",
     "px": 12,
     "weight": 600,
@@ -349,6 +367,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Steam · Steam",
     "px": 15,
     "weight": 400,
@@ -399,6 +420,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Refresh windows",
     "px": 14,
     "weight": 600,
@@ -449,6 +473,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Add manual game",
     "px": 14,
     "weight": 600,
@@ -499,6 +526,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Block detection",
     "px": 14,
     "weight": 600,
@@ -549,6 +579,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 12,
     "content": "No manual game rules.",
     "px": 12,
     "weight": 400,
@@ -599,6 +632,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "Blocked from game detection",
     "px": 15,
     "weight": 500,
@@ -649,6 +685,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
     "content": "No blocked applications.",
     "px": 15,
     "weight": 500,

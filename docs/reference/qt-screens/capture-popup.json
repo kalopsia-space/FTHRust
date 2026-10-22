@@ -48,6 +48,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Clips",
     "px": 14,
     "weight": 600,
@@ -99,6 +102,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Recording",
     "px": 14,
     "weight": 600,
@@ -149,6 +155,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Clip length",
     "px": 12,
     "weight": 600,
@@ -199,6 +208,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "30s",
     "px": 15,
     "weight": 400,
@@ -249,6 +261,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Add custom clip length…",
     "px": 14,
     "weight": 600,
@@ -299,6 +314,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Framerate",
     "px": 12,
     "weight": 600,
@@ -349,6 +367,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "60",
     "px": 15,
     "weight": 400,
@@ -399,6 +420,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Resolution",
     "px": 12,
     "weight": 600,
@@ -449,6 +473,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Source",
     "px": 15,
     "weight": 400,
@@ -499,6 +526,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Quality",
     "px": 12,
     "weight": 600,
@@ -549,6 +579,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Medium",
     "px": 15,
     "weight": 400,
@@ -599,6 +632,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
     "content": "Custom bitrate",
     "px": 12,
     "weight": 600,
@@ -689,6 +725,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
     "content": "25000 kbps",
     "px": 15,
     "weight": 600,

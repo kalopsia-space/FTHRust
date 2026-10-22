@@ -87,6 +87,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 700,
+    "matched_px": 17,
     "content": "FTHR Clips",
     "px": 17,
     "weight": 700,
@@ -137,6 +140,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "Help us keep the app free and open for everyone",
     "px": 14,
     "weight": 600,
@@ -427,6 +433,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "30s // 60 fps // Source // 25,000 kbps",
     "px": 15,
     "weight": 400,
@@ -477,6 +486,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Source",
     "px": 15,
     "weight": 400,
@@ -527,6 +539,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Game detection: Off",
     "px": 15,
     "weight": 400,
@@ -577,6 +592,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Record",
     "px": 20,
     "weight": 600,
@@ -627,6 +645,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Hotkeys",
     "px": 15,
     "weight": 400,
@@ -677,6 +698,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Connecting",
     "px": 14,
     "weight": 400,
@@ -768,6 +792,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clips",
     "px": 14,
     "weight": 400,
@@ -819,6 +846,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Settings",
     "px": 14,
     "weight": 400,
@@ -990,6 +1020,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "General",
     "px": 14,
     "weight": 400,
@@ -1041,6 +1074,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Clip",
     "px": 14,
     "weight": 400,
@@ -1092,6 +1128,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Audio",
     "px": 14,
     "weight": 400,
@@ -1143,6 +1182,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Visuals",
     "px": 14,
     "weight": 400,
@@ -1194,6 +1236,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Customize",
     "px": 14,
     "weight": 400,
@@ -1245,6 +1290,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Performance",
     "px": 14,
     "weight": 400,
@@ -1296,6 +1344,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 14,
     "content": "Shortcuts",
     "px": 14,
     "weight": 400,
@@ -1466,6 +1517,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Clip exports",
     "px": 20,
     "weight": 600,
@@ -1517,6 +1571,9 @@
    ],
    "checked": false,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Allow simultaneous exports",
     "px": 17,
     "weight": 500,
@@ -1567,6 +1624,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "2 exports at once",
     "px": 15,
     "weight": 400,
@@ -1617,6 +1677,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off by default: clips export one at a time. You can keep browsing and queue more clips. Simultaneous exports use more CP",
     "px": 15,
     "weight": 400,
@@ -1667,6 +1730,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
     "content": "View export jobs",
     "px": 14,
     "weight": 600,
@@ -1717,6 +1783,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 20,
     "content": "Interface performance",
     "px": 20,
     "weight": 600,
@@ -1767,6 +1836,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Full experience",
     "px": 15,
     "weight": 400,
@@ -1817,6 +1889,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Choose a preset, or adjust the options below to suit your PC. Impact shows how much each option may help your PC run mor",
     "px": 15,
     "weight": 400,
@@ -1868,6 +1943,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Full clip editor · Very high impact",
     "px": 17,
     "weight": 500,
@@ -1918,6 +1996,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: open clips in a simple video player with playback and volume controls, without the editing tools. Clips already ope",
     "px": 15,
     "weight": 400,
@@ -1969,6 +2050,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Live edit preview · High impact",
     "px": 17,
     "weight": 500,
@@ -2019,6 +2103,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: show the original video while you edit, instead of showing your crops, stretching and color changes as you make the",
     "px": 15,
     "weight": 400,
@@ -2070,6 +2157,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Color effects in preview · High impact",
     "px": 17,
     "weight": 500,
@@ -2120,6 +2210,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: hide color changes while a clip plays. Cropping and stretching still appear, and exported clips keep your color cha",
     "px": 15,
     "weight": 400,
@@ -2171,6 +2264,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Seek bar preview · High impact",
     "px": 17,
     "weight": 500,
@@ -2221,6 +2317,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: hide the small preview pictures along the clip’s timeline.",
     "px": 15,
     "weight": 400,
@@ -2272,6 +2371,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Library thumbnails · Medium impact",
     "px": 17,
     "weight": 500,
@@ -2322,6 +2424,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: hide preview pictures in your clip library. You can still find, open and manage clips by name.",
     "px": 15,
     "weight": 400,
@@ -2373,6 +2478,9 @@
    ],
    "checked": true,
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
     "content": "Animated settings previews · Medium impact",
     "px": 17,
     "weight": 500,
@@ -2423,6 +2531,9 @@
     }
    ],
    "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
     "content": "Off: stop the moving camera and keyboard previews in Settings. This does not change what appears in recordings. After tu",
     "px": 15,
     "weight": 400,
