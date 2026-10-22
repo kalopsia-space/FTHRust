@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod connection;
 pub mod dispatch;
+pub mod ext_capture;
 pub mod frame;
 pub mod outputs;
 pub mod screencopy;
