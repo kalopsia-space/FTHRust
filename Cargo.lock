@@ -1476,6 +1476,7 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 name = "fthrust-core"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "image",
  "md-5",
  "nix",
  "regex",
