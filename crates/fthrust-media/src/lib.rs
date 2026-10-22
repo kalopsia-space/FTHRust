@@ -8,6 +8,7 @@ pub mod clip_writer;
 pub mod encoder;
 pub mod encoder_policy;
 pub mod ffi;
+pub mod probe;
 pub mod recorder;
 pub mod replay_interval;
 pub mod ring;
