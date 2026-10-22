@@ -5,6 +5,7 @@
 
 pub mod cli;
 pub mod devices;
+pub mod policy;
 
 /// Crate version, printed by `fthrust-engine --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

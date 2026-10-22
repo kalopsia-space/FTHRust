@@ -2,3 +2,5 @@
 //! dispatch, output tracking, shm pools and the protocol backends.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+
+pub mod dispatch;

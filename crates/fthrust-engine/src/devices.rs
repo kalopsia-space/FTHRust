@@ -166,11 +166,11 @@ fn enumerate(
             }
             let mut scan = scan_for_done.borrow_mut();
             scan.phase += 1;
-            if scan.phase == 1 {
-                if let Ok(next) = core_for_done.sync(0) {
-                    *pending_for_done.borrow_mut() = next;
-                    return;
-                }
+            if scan.phase == 1
+                && let Ok(next) = core_for_done.sync(0)
+            {
+                *pending_for_done.borrow_mut() = next;
+                return;
             }
             loop_for_done.quit();
         })
