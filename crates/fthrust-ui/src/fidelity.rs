@@ -309,7 +309,9 @@ pub fn compare(
                     .failures
                     .push(format!("{}: text {}px vs Qt {}px", m.name, t.px, q.px));
             }
-            if t.weight != Weight::from_qt(q.weight) {
+            // QFontInfo reports the base font; a `:checked` QSS rule can paint a
+            // different weight that the JSON cannot see.
+            if w.checked != Some(true) && t.weight != Weight::from_qt(q.weight) {
                 report.failures.push(format!(
                     "{}: weight {:?} vs Qt {}",
                     m.name, t.weight, q.weight

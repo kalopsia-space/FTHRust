@@ -1,7 +1,7 @@
 //! Section furniture: `_flat_section_header`, `_settings_hsep`,
 //! `label_uppercase`, `label_body`, `label_display`.
 
-use egui::{Align, Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
+use egui::{Align, Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use super::{galley, paint_text};
 use crate::fidelity;
@@ -20,7 +20,7 @@ pub fn label(
     name: Option<&str>,
 ) -> Response {
     let g = galley(ui, text, px, weight, t.color(color));
-    let size = Vec2::new(g.size().x.ceil(), g.size().y.round());
+    let size = Vec2::new(g.size().x.round(), g.size().y.round());
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name
@@ -88,10 +88,12 @@ pub fn flat_header(ui: &mut Ui, t: &Tokens, title: &str, name: &str) -> Rect {
     );
     let rule_y = rect.min.y + (h / 2.0).floor();
     let rule_x0 = text_rect.max.x.ceil() + geom::ROW_GAP;
-    ui.painter().hline(
-        rule_x0..=rect.max.x,
+    super::rule_h(
+        ui,
+        rule_x0,
+        rect.max.x,
         rule_y,
-        Stroke::new(1.0, t.color(Color::ShellDivider)),
+        t.color(Color::ShellDivider),
     );
     fidelity::mark(
         ui,

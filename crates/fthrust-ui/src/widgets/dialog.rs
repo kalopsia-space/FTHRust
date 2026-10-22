@@ -66,10 +66,12 @@ impl<'a> Frame<'a> {
             header_idx,
             egui::Shape::rect_filled(header_rect, radius, t.color(Color::Surface2)),
         );
-        ui.painter().hline(
-            header_rect.x_range(),
+        super::rule_h(
+            ui,
+            header_rect.min.x,
+            header_rect.max.x,
             header_rect.max.y - 1.0,
-            Stroke::new(1.0, t.color(Color::Border)),
+            t.color(Color::Border),
         );
         fidelity::mark(ui, "fthrDialogHeader", header_rect)
             .sample(

@@ -100,6 +100,25 @@ pub fn qt_wrapped_label_height(
     (rows, rows as f32 * (line + 1.0))
 }
 
+/// A crisp 1 px horizontal rule on pixel row `y` from `x0` to `x1`
+/// (egui's `hline` is centred on the coordinate and lands between rows).
+pub fn rule_h(ui: &Ui, x0: f32, x1: f32, y: f32, color: Color32) {
+    ui.painter().rect_filled(
+        Rect::from_min_max(Pos2::new(x0, y), Pos2::new(x1, y + 1.0)),
+        0.0,
+        color,
+    );
+}
+
+/// A crisp 1 px vertical rule on pixel column `x` from `y0` to `y1`.
+pub fn rule_v(ui: &Ui, x: f32, y0: f32, y1: f32, color: Color32) {
+    ui.painter().rect_filled(
+        Rect::from_min_max(Pos2::new(x, y0), Pos2::new(x + 1.0, y1)),
+        0.0,
+        color,
+    );
+}
+
 /// Allocates `size` at the cursor with click sensing.
 pub fn allocate(ui: &mut Ui, size: Vec2, sense: egui::Sense) -> (Rect, egui::Response) {
     ui.allocate_exact_size(size, sense)

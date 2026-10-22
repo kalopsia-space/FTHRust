@@ -230,11 +230,7 @@ pub fn number_spin(
         &format!("{name}/fthrStepUp"),
     );
     for r in [&down_rect, &up_rect] {
-        ui.painter().vline(
-            r.min.x,
-            r.y_range(),
-            Stroke::new(1.0, t.color(Color::Border)),
-        );
+        super::rule_v(ui, r.min.x, r.min.y, r.max.y, t.color(Color::Border));
     }
     if down.clicked() && can_down {
         *value = (*value - step).max(*range.start());

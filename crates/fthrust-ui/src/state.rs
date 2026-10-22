@@ -299,6 +299,20 @@ pub struct AppState {
     pub source_label: String,
     /// Settings keys changed since the last engine configure (plan 5 consumes).
     pub changed_keys: Vec<&'static str>,
+    /// Bottom error bar.
+    pub error_bar: crate::shell::error_bar::ErrorBarState,
+    /// Running page slide.
+    pub page_slide: crate::shell::page_stack::PageSlide,
+    /// Toolbar button rects (popup anchors): capture, source, game, hotkeys.
+    pub toolbar_anchors: [egui::Rect; 4],
+    /// Manual recording control enabled (plan 5).
+    pub record_enabled: bool,
+    /// Record clicked this frame (plan 5 consumes).
+    pub record_requested: bool,
+    /// Rail editor button clicked (plan 6 consumes).
+    pub editor_requested: Option<usize>,
+    /// Rail editor close requested (plan 6 consumes).
+    pub editor_close_requested: Option<usize>,
 }
 
 impl AppState {
@@ -307,6 +321,11 @@ impl AppState {
         let settings = SettingsStore::load(paths.clone())?;
         let mut tokens = theme::load(&paths);
         tokens.reduce_motion = settings.get_bool("reduce_ui_animations").unwrap_or(false);
+        let error_bar = crate::shell::error_bar::ErrorBarState::new(
+            settings
+                .get_bool("error_notifications_enabled")
+                .unwrap_or(true),
+        );
         Ok(AppState {
             paths,
             settings,
@@ -322,6 +341,13 @@ impl AppState {
             window: WindowState::default(),
             source_label: "Source".into(),
             changed_keys: Vec::new(),
+            error_bar,
+            page_slide: Default::default(),
+            toolbar_anchors: [egui::Rect::NOTHING; 4],
+            record_enabled: false,
+            record_requested: false,
+            editor_requested: None,
+            editor_close_requested: None,
         })
     }
 
