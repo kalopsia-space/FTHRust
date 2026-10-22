@@ -1,0 +1,12 @@
+{
+  "audio_categories": {
+    "game": true
+  },
+  "auto_crop_enabled": true,
+  "extended_clip_length": 120,
+  "hotkeys": {
+    "save_extended_clip": "F10"
+  },
+  "keyboard_overlay_enabled": true,
+  "multiband_audio_enabled": true
+}

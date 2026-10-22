@@ -1,0 +1,175 @@
+{
+  "actions": [
+    "save_clip",
+    "save_screenshot",
+    "start_recording",
+    "stop_recording",
+    "confirm_game_detection",
+    "dismiss_game_detection"
+  ],
+  "controller_defaults": {
+    "confirm_game_detection": "",
+    "dismiss_game_detection": "",
+    "save_clip": "",
+    "save_screenshot": "",
+    "start_recording": "",
+    "stop_recording": ""
+  },
+  "defaults": {
+    "confirm_game_detection": "F8",
+    "dismiss_game_detection": "F7",
+    "save_clip": "F9",
+    "save_screenshot": "F12",
+    "start_recording": "",
+    "stop_recording": ""
+  },
+  "descriptions": {
+    "confirm_game_detection": "Confirm detected game",
+    "dismiss_game_detection": "Dismiss game detection",
+    "save_clip": "Save clip",
+    "save_screenshot": "Save screenshot",
+    "start_recording": "Start recording",
+    "stop_recording": "Stop recording"
+  },
+  "legacy_files": {
+    "flat": {
+      "controller_hotkeys": {
+        "confirm_game_detection": "",
+        "dismiss_game_detection": "",
+        "save_clip": "",
+        "save_screenshot": "",
+        "start_recording": "",
+        "stop_recording": ""
+      },
+      "file": {
+        "save_clip": "ctrl+shift+s",
+        "save_screenshot": "f12"
+      },
+      "hotkeys": {
+        "confirm_game_detection": "F8",
+        "dismiss_game_detection": "F7",
+        "save_clip": "Ctrl+Shift+S",
+        "save_screenshot": "F12",
+        "start_recording": "",
+        "stop_recording": ""
+      }
+    },
+    "legacy-top-level-keyboard-map": {
+      "controller_hotkeys": {
+        "confirm_game_detection": "",
+        "dismiss_game_detection": "",
+        "save_clip": "",
+        "save_screenshot": "",
+        "start_recording": "",
+        "stop_recording": ""
+      },
+      "file": {
+        "keyboard": {
+          "game_capture_accept": "F5",
+          "game_capture_dismiss": "F4",
+          "save_clip": "f6"
+        }
+      },
+      "hotkeys": {
+        "confirm_game_detection": "F5",
+        "dismiss_game_detection": "F4",
+        "save_clip": "F6",
+        "save_screenshot": "F12",
+        "start_recording": "",
+        "stop_recording": ""
+      }
+    },
+    "nested-keyboard-controller": {
+      "controller_hotkeys": {
+        "confirm_game_detection": "",
+        "dismiss_game_detection": "",
+        "save_clip": "LB+A",
+        "save_screenshot": "",
+        "start_recording": "",
+        "stop_recording": ""
+      },
+      "file": {
+        "save_clip": {
+          "controller": "a+lb",
+          "keyboard": "F10"
+        },
+        "save_screenshot": {
+          "controller": "",
+          "keyboard": "f11"
+        }
+      },
+      "hotkeys": {
+        "confirm_game_detection": "F8",
+        "dismiss_game_detection": "F7",
+        "save_clip": "F10",
+        "save_screenshot": "F11",
+        "start_recording": "",
+        "stop_recording": ""
+      }
+    }
+  },
+  "normalize_cases": [
+    [
+      "ctrl+shift+s",
+      "Ctrl+Shift+S"
+    ],
+    [
+      "f9",
+      "F9"
+    ],
+    [
+      "Shift+Ctrl+a",
+      "Ctrl+Shift+A"
+    ],
+    [
+      "page up",
+      "Page Up"
+    ],
+    [
+      "WIN+F1",
+      "Win+F1"
+    ],
+    [
+      "ctrl+",
+      "Ctrl"
+    ],
+    [
+      "",
+      ""
+    ],
+    [
+      "a",
+      "A"
+    ]
+  ],
+  "portal_trigger_cases": [
+    [
+      "Ctrl+Shift+S",
+      "CTRL+SHIFT+s"
+    ],
+    [
+      "F9",
+      "F9"
+    ],
+    [
+      "Esc",
+      "Escape"
+    ],
+    [
+      "Page Up",
+      "Prior"
+    ],
+    [
+      "Scroll Lock",
+      "Scroll_Lock"
+    ],
+    [
+      "Win+A",
+      "LOGO+a"
+    ],
+    [
+      "Alt+Shift+F5",
+      "ALT+SHIFT+F5"
+    ]
+  ]
+}

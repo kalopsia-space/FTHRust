@@ -1,0 +1,241 @@
+{
+  "constants": {
+    "default_min_height": 720,
+    "default_min_width": 1100,
+    "min_visible_height": 40,
+    "min_visible_width": 64
+  },
+  "restore_cases": [
+    {
+      "expected": {
+        "maximized": false,
+        "rect": {
+          "height": 800,
+          "width": 1200,
+          "x": 2700,
+          "y": 100
+        },
+        "screen_name": "HDMI-1"
+      },
+      "name": "saved-screen-present",
+      "saved": {
+        "maximized": false,
+        "normal_geometry": {
+          "height": 800,
+          "width": 1200,
+          "x": 2700,
+          "y": 100
+        },
+        "screen_name": "HDMI-1"
+      },
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "maximized": false,
+        "rect": {
+          "height": 800,
+          "width": 1300,
+          "x": 2560,
+          "y": 100
+        },
+        "screen_name": "HDMI-1"
+      },
+      "name": "saved-screen-missing-overlap",
+      "saved": {
+        "maximized": false,
+        "normal_geometry": {
+          "height": 800,
+          "width": 1300,
+          "x": 2400,
+          "y": 100
+        },
+        "screen_name": "DP-9"
+      },
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "maximized": false,
+        "rect": {
+          "height": 800,
+          "width": 1200,
+          "x": 1360,
+          "y": 640
+        },
+        "screen_name": "DP-3"
+      },
+      "name": "no-overlap-primary",
+      "saved": {
+        "maximized": false,
+        "normal_geometry": {
+          "height": 800,
+          "width": 1200,
+          "x": 9000,
+          "y": 9000
+        },
+        "screen_name": "DP-9"
+      },
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "maximized": false,
+        "rect": {
+          "height": 720,
+          "width": 1100,
+          "x": 100,
+          "y": 100
+        },
+        "screen_name": "DP-3"
+      },
+      "name": "rect-too-small",
+      "saved": {
+        "maximized": false,
+        "normal_geometry": {
+          "height": 200,
+          "width": 300,
+          "x": 100,
+          "y": 100
+        },
+        "screen_name": "DP-3"
+      },
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "maximized": true,
+        "rect": {
+          "height": 800,
+          "width": 1200,
+          "x": 50,
+          "y": 50
+        },
+        "screen_name": "DP-3"
+      },
+      "name": "maximized-flag",
+      "saved": {
+        "maximized": true,
+        "normal_geometry": {
+          "height": 800,
+          "width": 1200,
+          "x": 50,
+          "y": 50
+        },
+        "screen_name": "DP-3"
+      },
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "expected": {
+        "maximized": true,
+        "rect": {
+          "height": 720,
+          "width": 1100,
+          "x": 730,
+          "y": 360
+        },
+        "screen_name": "DP-3"
+      },
+      "name": "empty-saved-centred-default",
+      "saved": {},
+      "screens": [
+        {
+          "h": 1440,
+          "name": "DP-3",
+          "primary": true,
+          "w": 2560,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1080,
+          "name": "HDMI-1",
+          "w": 1920,
+          "x": 2560,
+          "y": 0
+        }
+      ]
+    }
+  ]
+}

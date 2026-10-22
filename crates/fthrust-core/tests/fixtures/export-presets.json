@@ -1,0 +1,177 @@
+{
+  "builtin_discord": {
+    "audio_bitrate_kbps": 96,
+    "built_in": true,
+    "name": "Discord · 10 MB",
+    "preset_id": "discord",
+    "safety_margin": 0.93,
+    "target_fps": 60.0,
+    "target_height": null,
+    "target_size_mb": 10.0,
+    "target_width": null,
+    "video_codec": "h264"
+  },
+  "catbox_adhoc": {
+    "audio_bitrate_kbps": 128,
+    "built_in": false,
+    "name": "Catbox upload",
+    "preset_id": "upload-catbox",
+    "safety_margin": 0.94,
+    "target_fps": 60.0,
+    "target_height": null,
+    "target_size_mb": 200.0,
+    "target_width": null,
+    "video_codec": "h264"
+  },
+  "validation_cases": [
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 0.5
+      },
+      false
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 1
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10000
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10001
+      },
+      false
+    ],
+    [
+      {
+        "audio_bitrate_kbps": 31,
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10
+      },
+      false
+    ],
+    [
+      {
+        "audio_bitrate_kbps": 32,
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "audio_bitrate_kbps": 512,
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "audio_bitrate_kbps": 513,
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10
+      },
+      false
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_fps": 0,
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_fps": 1,
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_fps": 240,
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_fps": 241,
+        "target_size_mb": 10
+      },
+      false
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "safety_margin": 0.79,
+        "target_size_mb": 10
+      },
+      false
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "safety_margin": 0.8,
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "safety_margin": 0.99,
+        "target_size_mb": 10
+      },
+      true
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "safety_margin": 1.0,
+        "target_size_mb": 10
+      },
+      false
+    ],
+    [
+      {
+        "name": "Case",
+        "preset_id": "case",
+        "target_size_mb": 10,
+        "target_width": 640
+      },
+      false
+    ]
+  ]
+}

@@ -1,0 +1,264 @@
+{
+  "T1": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "WAITING_FOR_ACK",
+      "step": "pump (NONE -> WAITING_FOR_ACK)",
+      "t": 1000.0
+    },
+    {
+      "outcome_kinds": [
+        "ACCEPTED"
+      ],
+      "results": 0,
+      "state": "ENGINE_ACCEPTED",
+      "step": "SAVE_STARTED",
+      "t": 1000.05
+    },
+    {
+      "outcome_kinds": [
+        "ACCEPTED"
+      ],
+      "results": 0,
+      "state": "ENGINE_ACCEPTED",
+      "step": "still encoding",
+      "t": 1000.8499999999999
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "COMPLETED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "ACCEPTED",
+        "COMPLETED"
+      ],
+      "results": 1,
+      "state": "ENGINE_COMPLETED",
+      "step": "CLIP_SAVED",
+      "t": 1000.8499999999999
+    }
+  ],
+  "T2": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "COMPLETED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "COMPLETED"
+      ],
+      "results": 1,
+      "state": "ENGINE_COMPLETED",
+      "step": "CLIP_SAVED without SAVE_STARTED",
+      "t": 1000.02
+    }
+  ],
+  "T3": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "SaveClip failed: disk full",
+        "kind": "FAILED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "FAILED"
+      ],
+      "results": 1,
+      "state": "ENGINE_FAILED",
+      "step": "ERROR_OCCURRED",
+      "t": 1000.0
+    }
+  ],
+  "T4": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "outcome_kinds": [
+        "ACCEPTED"
+      ],
+      "results": 0,
+      "state": "ENGINE_ACCEPTED",
+      "step": "SAVE_STARTED",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "mux failed",
+        "kind": "FAILED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "ACCEPTED",
+        "FAILED"
+      ],
+      "results": 1,
+      "state": "ENGINE_FAILED",
+      "step": "ERROR_OCCURRED",
+      "t": 1000.3
+    }
+  ],
+  "T5": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "WAITING_FOR_ACK",
+      "step": "pump",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "TIMEOUT_NOTICE",
+        "late": false
+      },
+      "outcome_kinds": [
+        "TIMEOUT_NOTICE"
+      ],
+      "results": 0,
+      "state": "TIMED_OUT",
+      "step": "ack timeout",
+      "t": 1001.5
+    },
+    {
+      "last": {
+        "detail": "The capture engine never reported whether the clip was written.",
+        "kind": "FAILED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "TIMEOUT_NOTICE",
+        "FAILED"
+      ],
+      "results": 1,
+      "state": "ENGINE_FAILED",
+      "step": "completion deadline",
+      "t": 1071.5
+    }
+  ],
+  "T5_late_success": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "TIMEOUT_NOTICE",
+        "late": false
+      },
+      "outcome_kinds": [
+        "TIMEOUT_NOTICE"
+      ],
+      "results": 0,
+      "state": "TIMED_OUT",
+      "step": "ack timeout",
+      "t": 1001.5
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "COMPLETED",
+        "late": true
+      },
+      "log": [
+        "Save #1 requested: a.mp4 (30s)",
+        "Save #1: no acknowledgement within 1.0s — still watching for a late result",
+        "Save #1 state: TIMED_OUT -> ENGINE_COMPLETED (total=1900 ms)",
+        "Save #1: late success after timeout (1900 ms)"
+      ],
+      "outcome_kinds": [
+        "TIMEOUT_NOTICE",
+        "COMPLETED"
+      ],
+      "results": 1,
+      "state": "ENGINE_COMPLETED",
+      "step": "late CLIP_SAVED",
+      "t": 1001.9
+    }
+  ],
+  "T6": [
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "submit A",
+      "t": 1000.0
+    },
+    {
+      "outcome_kinds": [],
+      "results": 0,
+      "state": "REQUESTED",
+      "step": "CLIP_SAVED written, unread",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "COMPLETED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "COMPLETED"
+      ],
+      "results": 1,
+      "state": "REQUESTED",
+      "step": "submit B (pumps A verdict first)",
+      "t": 1000.0
+    },
+    {
+      "last": {
+        "detail": "",
+        "kind": "COMPLETED",
+        "late": false
+      },
+      "outcome_kinds": [
+        "COMPLETED",
+        "COMPLETED"
+      ],
+      "results": 2,
+      "state": "ENGINE_COMPLETED",
+      "step": "B CLIP_SAVED",
+      "t": 1000.0
+    }
+  ]
+}
