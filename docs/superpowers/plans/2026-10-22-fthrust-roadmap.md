@@ -9,7 +9,7 @@ the exact Rust interfaces the earlier ones end up with.
 
 | # | Plan | Delivers | Depends on |
 |---|------|----------|------------|
-| 1 | `2026-10-22-fthrust-plan-1-core.md` | Repo bootstrap, reference fixtures, `fthrust-core`: every on-disk format, migrations, error codes, state machines, library index, metadata DB. No UI, no hardware. | none |
+| 1 (shipped 2026-10-22) | `2026-10-22-fthrust-plan-1-core.md` | Repo bootstrap, reference fixtures, `fthrust-core`: every on-disk format, migrations, error codes, state machines, library index, metadata DB. No UI, no hardware. | none |
 | 2 | plan-2-media | `fthrust-media`: FFmpeg bindings, replay-interval selection, audio timing, encoder candidates (VAAPI, NVENC, software), encoded GOP ring, MP4 mux with pre-roll, transactional save, fragmented MP4 recorder, thumbnails, probe and media-metadata parsing, `encoder_capabilities.json` cache, combined-audio mix policy. Tested with synthetic frames. | 1 |
 | 3 | plan-3-engine | `fthrust-ipc`, `fthrust-wayland` (registry, outputs, wlr-screencopy, ext-image-copy-capture, foreign-toplevel, dmabuf/shm pools), `fthrust-portal` (ScreenCast + PipeWire), PipeWire audio capture, recovery policy, health, the `fthrust-engine` daemon. Qualified on Hyprland and Plasma on this machine. | 1, 2 |
 | 4 | plan-4-ui-shell | `fthrust-ui`: tokens, theme application, fonts, icons, custom widgets, frameless window, title strip, toolbar, nav rail, error bar, all seven Settings tabs, popups, dialogs, snapshot harness against the Qt PNGs. | 1 |

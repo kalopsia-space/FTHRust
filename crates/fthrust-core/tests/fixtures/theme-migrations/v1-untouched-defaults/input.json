@@ -1,0 +1,30 @@
+{
+  "colors": {
+    "ACCENT": "#00ffaa",
+    "ACCENT_DIM": "#00aa72",
+    "ACCENT_SOFT": "#0a2218",
+    "BG": "#000000",
+    "BORDER": "#222222",
+    "BORDER_HI": "#333333",
+    "CARD_BG": "#0a0a0a",
+    "CARD_BG_HI": "#111111",
+    "CARD_BORDER": "#222222",
+    "DELETE": "#cc0000",
+    "ERROR": "#cc0000",
+    "ERROR_SOFT": "#240606",
+    "HAIRLINE": "#111111",
+    "SHELL_BG": "#000000",
+    "SHELL_BG_2": "#0a0a0a",
+    "SHELL_DIVIDER": "#222222",
+    "SUCCESS": "#00aa00",
+    "SURFACE_1": "#0a0a0a",
+    "SURFACE_2": "#111111",
+    "SURFACE_3": "#1c1c1c",
+    "TEXT": "#ffffff",
+    "TEXT_DIM": "#888888",
+    "TEXT_GHOST": "#222222",
+    "TEXT_MUTED": "#555555",
+    "WARNING": "#E8871A"
+  },
+  "palette_version": 1
+}

@@ -1,0 +1,5 @@
+{
+  "image_overlay_enabled": true,
+  "image_overlay_opacity": 50,
+  "image_overlay_path": "/tmp/x.png"
+}

@@ -1,0 +1,50 @@
+{
+  "capture_card": {
+    "CAPTURE_CARD_ACCENT": "#20e3a0",
+    "CAPTURE_CARD_BG": "#0a0f0d",
+    "CAPTURE_CARD_DIVIDER": "#242c27",
+    "CAPTURE_CARD_PROGRESS_FILL": "#20e3a0",
+    "CAPTURE_CARD_PROGRESS_TRACK": "#101512",
+    "CAPTURE_CARD_STATS_DIM": "#a0aba5",
+    "CAPTURE_CARD_TEXT": "#f3f6f4"
+  },
+  "colors": {
+    "ACCENT": "#20e3a0",
+    "ACCENT_DIM": "#16bf87",
+    "ACCENT_SOFT": "#0d2b20",
+    "BG": "#070a09",
+    "BORDER": "#242c27",
+    "BORDER_HI": "#49584f",
+    "CARD_BG": "#101512",
+    "CARD_BG_HI": "#141b17",
+    "CARD_BORDER": "#1b231e",
+    "DELETE": "#b84f45",
+    "ERROR": "#ff795d",
+    "ERROR_SOFT": "#270b0f",
+    "HAIRLINE": "#181f1b",
+    "SHELL_BG": "#0a0f0d",
+    "SHELL_BG_2": "#101512",
+    "SHELL_DIVIDER": "#1b231e",
+    "SUCCESS": "#20e3a0",
+    "SURFACE_1": "#0a0f0d",
+    "SURFACE_2": "#101512",
+    "SURFACE_3": "#141b17",
+    "TEXT": "#f3f6f4",
+    "TEXT_DIM": "#a0aba5",
+    "TEXT_GHOST": "#7e8a83",
+    "TEXT_MUTED": "#7e8a83",
+    "WARNING": "#e7b56e"
+  },
+  "font_files": {},
+  "fonts": {
+    "body": "Oswald",
+    "display": "Oswald"
+  },
+  "icon_tints": {
+    "_global": "#a0aba5"
+  },
+  "icons": {},
+  "palette_version": 4,
+  "sounds": {},
+  "typography_version": 2
+}

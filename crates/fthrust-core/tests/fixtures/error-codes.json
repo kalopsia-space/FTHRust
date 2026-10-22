@@ -1,0 +1,140 @@
+[
+  {
+    "category": "Capture",
+    "code": "Error 001",
+    "explanation": "Capture health reported a backend failure or the capture startup sequence failed. The detail text contains the reported reason.",
+    "title": "CAPTURE FAILED"
+  },
+  {
+    "category": "Capture",
+    "code": "Error 002",
+    "explanation": "A save was requested while the capture engine was not connected, so there was no active replay buffer to address.",
+    "title": "CAPTURE UNAVAILABLE"
+  },
+  {
+    "category": "Capture",
+    "code": "Error 003",
+    "explanation": "The FTHRcapture executable could not be found at the expected install or development path.",
+    "title": "ENGINE NOT FOUND"
+  },
+  {
+    "category": "Capture",
+    "code": "Error 004",
+    "explanation": "The capture process was launched but did not complete its IPC startup handshake.",
+    "title": "ENGINE NOT RESPONDING"
+  },
+  {
+    "category": "Capture",
+    "code": "Error 005",
+    "explanation": "A capture startup attempt failed before a usable engine connection was established.",
+    "title": "ENGINE COULD NOT START"
+  },
+  {
+    "category": "Capture",
+    "code": "Error 006",
+    "explanation": "The capture process exited unexpectedly. The process exit code is included in the message detail.",
+    "title": "ENGINE STOPPED"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 007",
+    "explanation": "A manual recording could not be completed or finalized. Recoverable video fragments may be mentioned in the detail.",
+    "title": "MANUAL RECORDING FAILED"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 008",
+    "explanation": "The manual recording request could not be handed to the capture engine.",
+    "title": "RECORDING COULD NOT START"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 009",
+    "explanation": "The capture engine was unavailable when a manual recording stop was requested.",
+    "title": "RECORDING COULD NOT STOP"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 010",
+    "explanation": "The configured manual-recording folder could not be created or accessed.",
+    "title": "RECORDING FOLDER UNAVAILABLE"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 011",
+    "explanation": "The manual-recording output path exceeds the native engine path limit.",
+    "title": "RECORDING PATH TOO LONG"
+  },
+  {
+    "category": "Recording",
+    "code": "Error 012",
+    "explanation": "Manual recording was blocked by the preflight free-space threshold.",
+    "title": "NOT ENOUGH DISK SPACE"
+  },
+  {
+    "category": "Clip saving",
+    "code": "Error 013",
+    "explanation": "Capture health rejected the save because fresh replay data was not currently usable. The detail says whether capture is starting, recovering, or stale.",
+    "title": "CLIP NOT SAVED"
+  },
+  {
+    "category": "Clip saving",
+    "code": "Error 014",
+    "explanation": "The local clip folder, save command submission, or save setup failed before a completed clip was produced.",
+    "title": "CLIP SAVE FAILED"
+  },
+  {
+    "category": "Clip saving",
+    "code": "Error 015",
+    "explanation": "The capture engine reported a terminal save failure, an incomplete path, or a missing/empty output file.",
+    "title": "CLIP WAS NOT SAVED"
+  },
+  {
+    "category": "Clip saving",
+    "code": "Error 016",
+    "explanation": "The requested clip path exceeds the Windows shared-memory path field limit.",
+    "title": "CLIP PATH TOO LONG"
+  },
+  {
+    "category": "Clip saving",
+    "code": "Error 017",
+    "explanation": "The base clip could not be made available as a completed final file after the save operation.",
+    "title": "CLIP FINALIZATION FAILED"
+  },
+  {
+    "category": "Export and sharing",
+    "code": "Error 018",
+    "explanation": "An edited clip export failed validation, encoding, folder creation, or file publication.",
+    "title": "EXPORT FAILED"
+  },
+  {
+    "category": "Export and sharing",
+    "code": "Error 019",
+    "explanation": "The share workflow could not create or publish its exported clip.",
+    "title": "SHARE FAILED"
+  },
+  {
+    "category": "Upload",
+    "code": "Error 020",
+    "explanation": "The upload provider rejected or could not complete the upload. The provider or retry detail is passed through when available.",
+    "title": "UPLOAD FAILED"
+  },
+  {
+    "category": "Upload",
+    "code": "Error 021",
+    "explanation": "An upload was requested without an installed and enabled Upload Extension.",
+    "title": "UPLOAD NOT CONFIGURED"
+  },
+  {
+    "category": "Upload",
+    "code": "Error 022",
+    "explanation": "The upload settings Test Connection request failed. The provider response is used as the detail.",
+    "title": "UPLOAD CONNECTION FAILED"
+  },
+  {
+    "category": "Upload",
+    "code": "Error 023",
+    "explanation": "The optional compressed upload copy could not be created, verified, or brought under the provider size limit.",
+    "title": "COMPRESSION FAILED"
+  }
+]

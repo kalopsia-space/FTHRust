@@ -1,0 +1,200 @@
+{
+  "definitions": [
+    [
+      "switch_panel",
+      "Switch Clips / Settings",
+      "Tab+S",
+      "application",
+      "Application"
+    ],
+    [
+      "sidebar_next",
+      "Next sidebar destination",
+      "Shift+Down",
+      "application",
+      "Application"
+    ],
+    [
+      "sidebar_previous",
+      "Previous sidebar destination",
+      "Shift+Up",
+      "application",
+      "Application"
+    ],
+    [
+      "toggle_detection",
+      "Toggle game detection",
+      "Shift+G",
+      "main",
+      "Application"
+    ],
+    [
+      "restart_capture",
+      "Restart capture engine",
+      "Alt+Shift+R",
+      "main",
+      "Application"
+    ],
+    [
+      "library_scroll_up",
+      "Scroll clips up",
+      "Up",
+      "library",
+      "Clips"
+    ],
+    [
+      "library_scroll_down",
+      "Scroll clips down",
+      "Down",
+      "library",
+      "Clips"
+    ],
+    [
+      "category_next",
+      "Next settings category",
+      "Shift+Right",
+      "settings",
+      "Settings"
+    ],
+    [
+      "category_previous",
+      "Previous settings category",
+      "Shift+Left",
+      "settings",
+      "Settings"
+    ],
+    [
+      "editor_split",
+      "Split segment here",
+      "Ctrl+C",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_delete",
+      "Delete segment",
+      "Ctrl+D",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_restore",
+      "Reinstate segment",
+      "Ctrl+W",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_crop",
+      "Quick crop",
+      "Ctrl+Q",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_export",
+      "Export now",
+      "Ctrl+E",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_minimize",
+      "Minimize editor",
+      "Shift+Escape",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_close",
+      "Close editor",
+      "Escape",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_next",
+      "Open next clip",
+      "Tab+Right",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_previous",
+      "Open previous clip",
+      "Tab+Left",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_play",
+      "Play / pause",
+      "Space",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_undo",
+      "Undo",
+      "Ctrl+Z",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_redo",
+      "Redo",
+      "Ctrl+Y",
+      "editor",
+      "Clip editor"
+    ],
+    [
+      "editor_redo_alt",
+      "Redo (alternate)",
+      "Ctrl+Shift+Z",
+      "editor",
+      "Clip editor"
+    ]
+  ],
+  "normalize_cases": [
+    [
+      "ctrl+s",
+      "Ctrl+S"
+    ],
+    [
+      "Shift+Ctrl+S",
+      "Ctrl+Shift+S"
+    ],
+    [
+      "esc",
+      "Escape"
+    ],
+    [
+      "enter",
+      "Return"
+    ],
+    [
+      "win+x",
+      "Meta+X"
+    ],
+    [
+      "Tab+S",
+      "Tab+S"
+    ],
+    [
+      "cmd+q",
+      "Meta+Q"
+    ],
+    [
+      "ctrl+",
+      null
+    ],
+    [
+      "",
+      ""
+    ],
+    [
+      "F13",
+      "F13"
+    ]
+  ]
+}

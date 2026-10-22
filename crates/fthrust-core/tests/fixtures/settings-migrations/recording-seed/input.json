@@ -1,0 +1,6 @@
+{
+  "bitrate_level": "high",
+  "custom_bitrate_kbps": 40000,
+  "framerate": 120,
+  "resolution": "1080p"
+}

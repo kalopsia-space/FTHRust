@@ -1,0 +1,10 @@
+{
+  "navigation_bindings": {
+    "editor_close": "Shift+Escape",
+    "editor_minimize": "Escape",
+    "editor_next": "Right",
+    "editor_previous": "Left",
+    "editor_split": "Ctrl+S"
+  },
+  "navigation_bindings_version": 1
+}

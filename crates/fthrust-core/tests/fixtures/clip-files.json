@@ -1,0 +1,68 @@
+{
+  "completed_video_cases": [
+    [
+      "a.mp4",
+      true
+    ],
+    [
+      "a.mkv",
+      true
+    ],
+    [
+      "a.avi",
+      true
+    ],
+    [
+      "a.mp4.partial",
+      false
+    ],
+    [
+      ".a.partial.0123abcd.mp4",
+      false
+    ],
+    [
+      "a.png",
+      false
+    ],
+    [
+      "A.MP4",
+      true
+    ],
+    [
+      "a.webm",
+      false
+    ]
+  ],
+  "partial_marker": "_clip_from_",
+  "sanitize_cases": [
+    [
+      "Over:watch*?",
+      "Overwatch"
+    ],
+    [
+      "CON",
+      "CON_game"
+    ],
+    [
+      "",
+      "Unknown"
+    ],
+    [
+      "abcdefghijabcdefghijabcdefghijabcdefghij",
+      "abcdefghijabcdefghijabcdefghijab"
+    ],
+    [
+      "Game With Spaces",
+      "Game With Spaces"
+    ],
+    [
+      "../etc",
+      "etc"
+    ],
+    [
+      "\u0001ctl",
+      "ctl"
+    ]
+  ],
+  "sanitize_source": "main.py:_sanitize_foldername (lifted via ast)"
+}

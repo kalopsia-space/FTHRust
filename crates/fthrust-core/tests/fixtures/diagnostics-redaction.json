@@ -1,0 +1,34 @@
+[
+  [
+    "Authorization: Bearer abc.def",
+    "Authorization: <redacted> <redacted>"
+  ],
+  [
+    "token=abcdef123456",
+    "token=<redacted>"
+  ],
+  [
+    "api_key: \"xyz\"",
+    "api_key: <redacted>"
+  ],
+  [
+    "password=hunter2 user=bob",
+    "password=<redacted> user=bob"
+  ],
+  [
+    "https://user:pw@host/path",
+    "https://<redacted>:<redacted>@host/path"
+  ],
+  [
+    "plain text 123",
+    "plain text 123"
+  ],
+  [
+    "secret=1",
+    "secret=<redacted>"
+  ],
+  [
+    "X-Auth-Header: foo",
+    "X-Auth-Header: foo"
+  ]
+]
