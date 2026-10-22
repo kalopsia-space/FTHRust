@@ -19,6 +19,7 @@ pub mod settings;
 pub mod theme;
 pub mod thumbnails;
 pub mod transactional_output;
+pub mod window_geometry;
 
 pub use atomic_json::{read_json, write_json_atomic};
 pub use error::{CoreError, Result};
