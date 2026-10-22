@@ -180,3 +180,22 @@ fn rename_refuses_collision_and_reserved_names() {
     assert!(rename_clip(&media, &"x".repeat(252)).is_err());
     assert!(media.exists());
 }
+
+#[test]
+fn rename_rolls_back_when_sidecar_write_fails() {
+    let d = tempfile::tempdir().unwrap();
+    let media = media_in(d.path(), "clip.mp4");
+    manifest_for(&media).write(&media).unwrap();
+    let side = manifest_path_for(&media);
+    let before = fs::read(&side).unwrap();
+    let stem = "a".repeat(240);
+    assert!(rename_clip(&media, &stem).is_err());
+    assert!(media.exists());
+    assert_eq!(fs::read(&side).unwrap(), before);
+    assert!(!d.path().join(format!("{stem}.mp4")).exists());
+    let names: Vec<String> = fs::read_dir(d.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+}

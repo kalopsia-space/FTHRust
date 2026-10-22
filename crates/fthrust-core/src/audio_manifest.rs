@@ -377,18 +377,24 @@ pub fn rename_clip(media: &Path, new_stem: &str) -> Result<PathBuf> {
             "Audio metadata with that name already exists.".into(),
         ));
     }
+    let same_side = same_file(&old_side, &new_side);
     std::fs::rename(media, &dest)?;
     if let Some(v) = side_value {
         let step = write_canonical(&new_side, &v).and_then(|()| {
-            if old_side != new_side {
+            if !same_side {
                 std::fs::remove_file(&old_side)?;
             }
             Ok(())
         });
         if let Err(e) = step {
-            let _ = std::fs::rename(&dest, media);
-            if old_side != new_side {
-                let _ = std::fs::remove_file(&new_side);
+            if let Err(re) = std::fs::rename(&dest, media) {
+                tracing::warn!(error = %re, "failed to restore media name after sidecar failure");
+            }
+            if !same_side
+                && let Err(re) = std::fs::remove_file(&new_side)
+                && re.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(error = %re, "failed to remove new sidecar after rollback");
             }
             return Err(e);
         }
