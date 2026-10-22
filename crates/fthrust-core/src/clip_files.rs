@@ -14,6 +14,14 @@ pub const IMAGE_SUFFIXES: [&str; 3] = ["png", "jpg", "jpeg"];
 pub const PARTIAL_MARKER: &str = "_clip_from_";
 const AUDIO_MANIFEST_SUFFIX: &str = ".fthr-audio.json";
 
+/// Path of the audio manifest sidecar for `media`: the full file name with
+/// `.fthr-audio.json` appended.
+pub fn audio_manifest_sidecar(media: &Path) -> PathBuf {
+    let mut name = media.file_name().unwrap_or_default().to_os_string();
+    name.push(AUDIO_MANIFEST_SUFFIX);
+    media.with_file_name(name)
+}
+
 /// Whether `name` is an in-progress file (`*.partial` or `*.partial.*`).
 pub fn is_partial_name(name: &str) -> bool {
     let n = name.to_lowercase();

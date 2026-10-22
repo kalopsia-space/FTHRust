@@ -7,6 +7,8 @@ mod error;
 pub mod error_codes;
 pub mod export_presets;
 pub mod hotkeys;
+pub mod library_index;
+pub mod library_ownership;
 pub mod media_identity;
 pub mod navigation;
 mod paths;
