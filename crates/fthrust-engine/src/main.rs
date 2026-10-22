@@ -1,12 +1,65 @@
 //! `fthrust-engine` binary entry point.
 #![forbid(unsafe_code)]
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("--version") {
-        println!("fthrust-engine {}", fthrust_engine::VERSION);
-        return;
+use std::process::ExitCode;
+
+use fthrust_engine::cli::{CliMode, USAGE, classify};
+use fthrust_engine::devices::{enumerate_sinks, enumerate_sources, error_json, listing_json};
+use fthrust_ipc::BackendKind;
+
+fn main() -> ExitCode {
+    fthrust_media::capabilities::handle_probe_argv();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match classify(&args) {
+        CliMode::Version => {
+            println!("fthrust-engine {}", fthrust_engine::VERSION);
+            ExitCode::SUCCESS
+        }
+        CliMode::ListPlaybackDevices => listing(enumerate_sinks()),
+        CliMode::ListMicrophones => listing(enumerate_sources()),
+        CliMode::UsageError(msg) => {
+            eprintln!("fthrust-engine: {msg}\n{USAGE}");
+            ExitCode::from(2)
+        }
+        CliMode::Serve { socket } => {
+            init_logging();
+            let default_override = std::env::var("FTHR_CAPTURE_BACKEND")
+                .ok()
+                .and_then(|v| BackendKind::parse_override(&v));
+            let paths = fthrust_core::FthrPaths::from_env().ok();
+            match fthrust_engine::daemon::serve(
+                socket,
+                fthrust_engine::daemon::production_deps(paths),
+                default_override,
+            ) {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("FTHR_STARTUP_ERROR: ENGINE_START_FAILED: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
     }
-    eprintln!("usage: fthrust-engine --socket PATH");
-    std::process::exit(2);
+}
+
+fn listing(result: Result<Vec<fthrust_engine::devices::Endpoint>, String>) -> ExitCode {
+    match result {
+        Ok(endpoints) => {
+            println!("{}", listing_json(&endpoints));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{}", error_json(&e));
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("FTHRUST_LOG")
+        .unwrap_or_else(|_| "info".into());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }

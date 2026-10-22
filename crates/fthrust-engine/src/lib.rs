@@ -6,6 +6,7 @@
 pub mod audio;
 pub mod backend;
 pub mod cli;
+pub mod daemon;
 pub mod devices;
 pub mod engine;
 pub mod policy;

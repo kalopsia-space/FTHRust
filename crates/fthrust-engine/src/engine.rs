@@ -211,7 +211,9 @@ impl CaptureEngine {
     /// Starts audio and the capture thread, waiting (bounded) for the
     /// first generation to open an encoder.
     pub fn start(&mut self) -> Result<Vec<StartupNotice>, StartupError> {
-        if self.inner.backends.candidates().is_empty() && self.config.backend_override.is_none() {
+        if self.inner.backends.candidates().is_empty()
+            && self.config.backend_override != Some(BackendKind::Synthetic)
+        {
             let err = StartupError {
                 code: "WAYLAND_UNAVAILABLE",
                 detail: "WAYLAND_DISPLAY is not set; FTHRust captures Wayland sessions only".into(),
@@ -220,6 +222,7 @@ impl CaptureEngine {
                 s.health_flags = flags::BACKEND_FAILED;
                 s.capture_failure_detail = err.detail.clone();
             });
+            eprintln!("FTHR_STARTUP_ERROR: {}: {}", err.code, err.detail);
             return Err(err);
         }
         let mut notices = Vec::new();
