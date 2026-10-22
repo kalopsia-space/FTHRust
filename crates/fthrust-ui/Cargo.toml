@@ -12,6 +12,7 @@ fthrust-ipc = { path = "../fthrust-ipc" }
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
+resvg.workspace = true
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true

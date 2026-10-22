@@ -42,4 +42,5 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }
+resvg = { version = "0.45", default-features = false }
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }

@@ -1575,6 +1575,7 @@ dependencies = [
  "fthrust-ipc",
  "fthrust-media",
  "image",
+ "resvg",
  "serde",
  "serde_json",
  "sha2",

@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 
 pub mod fonts;
+pub mod icons;
 pub mod theme;
 pub mod tokens;
 
