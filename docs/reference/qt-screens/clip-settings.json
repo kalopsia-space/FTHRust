@@ -1,0 +1,2671 @@
+{
+ "schema": 1,
+ "screen": "clip-settings",
+ "size": [
+  1440,
+  900
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "topBar",
+   "class": "QFrame",
+   "rect": [
+    0,
+    0,
+    1440,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      720,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      720,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[FTHR Clips]",
+   "class": "QLabel",
+   "rect": [
+    56,
+    0,
+    75,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      93,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      56,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      93,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "FTHR Clips",
+    "px": 17,
+    "weight": 700,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "advance": 74
+   }
+  },
+  {
+   "name": "QPushButton[Help us keep the app free and open for e]",
+   "class": "QPushButton",
+   "rect": [
+    932,
+    0,
+    334,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1099,
+      18
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      932,
+      18
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1099,
+      0
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Help us keep the app free and open for everyone",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 269
+   }
+  },
+  {
+   "name": "winBtn",
+   "class": "QPushButton",
+   "rect": [
+    1278,
+    0,
+    46,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1301,
+      18
+     ],
+     "rgb": "#2f3633",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1278,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1301,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "winBtn",
+   "class": "QPushButton",
+   "rect": [
+    1336,
+    0,
+    46,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1359,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1336,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1359,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "closeBtn",
+   "class": "QPushButton",
+   "rect": [
+    1394,
+    0,
+    46,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1417,
+      18
+     ],
+     "rgb": "#6e7772",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1394,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1417,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "captureToolbarScroll",
+   "class": "QScrollArea",
+   "rect": [
+    0,
+    36,
+    1440,
+    64
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      720,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      68
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      720,
+      36
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "qt_scrollarea_viewport",
+   "class": "QWidget",
+   "rect": [
+    0,
+    36,
+    1440,
+    64
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      720,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      68
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      720,
+      36
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "topClusterMain",
+   "class": "QFrame",
+   "rect": [
+    0,
+    36,
+    1440,
+    64
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      720,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      68
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      720,
+      36
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "TopBarButton[30s // 60 fps // Source // 25,000 kbps]",
+   "class": "TopBarButton",
+   "rect": [
+    162,
+    46,
+    421,
+    44
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      372,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      162,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      372,
+      46
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    }
+   ],
+   "text": {
+    "content": "30s // 60 fps // Source // 25,000 kbps",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 216
+   }
+  },
+  {
+   "name": "TopBarButton[Source]",
+   "class": "TopBarButton",
+   "rect": [
+    591,
+    46,
+    280,
+    44
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      731,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      591,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      731,
+      46
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    }
+   ],
+   "text": {
+    "content": "Source",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 37
+   }
+  },
+  {
+   "name": "TopBarButton[Game detection: Off]",
+   "class": "TopBarButton",
+   "rect": [
+    879,
+    46,
+    281,
+    44
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1019,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      879,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1019,
+      46
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    }
+   ],
+   "text": {
+    "content": "Game detection: Off",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 108
+   }
+  },
+  {
+   "name": "QPushButton[Record]",
+   "class": "QPushButton",
+   "rect": [
+    14,
+    46,
+    140,
+    44
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      84,
+      68
+     ],
+     "rgb": "#5cab8e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      14,
+      68
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      84,
+      46
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "content": "Record",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 56
+   }
+  },
+  {
+   "name": "TopBarButton[Hotkeys]",
+   "class": "TopBarButton",
+   "rect": [
+    1168,
+    46,
+    140,
+    44
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1238,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1168,
+      68
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1238,
+      46
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    }
+   ],
+   "text": {
+    "content": "Hotkeys",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 44
+   }
+  },
+  {
+   "name": "statusLabel",
+   "class": "QLabel",
+   "rect": [
+    1316,
+    42,
+    110,
+    52
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1371,
+      68
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1316,
+      68
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1371,
+      42
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Connecting",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 57
+   }
+  },
+  {
+   "name": "navigationPanel",
+   "class": "QFrame",
+   "rect": [
+    0,
+    100,
+    94,
+    800
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      47,
+      500
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      500
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      47,
+      100
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "homeBtn",
+   "class": "QToolButton",
+   "rect": [
+    8,
+    116,
+    78,
+    78
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      47,
+      155
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      8,
+      155
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      47,
+      116
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Clips",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 25
+   }
+  },
+  {
+   "name": "settingsGearBtn",
+   "class": "QToolButton",
+   "rect": [
+    8,
+    206,
+    78,
+    78
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      47,
+      245
+     ],
+     "rgb": "#0d2b20",
+     "token": "ACCENT_SOFT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      8,
+      245
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      47,
+      206
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "Settings",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 42
+   }
+  },
+  {
+   "name": "mainStack",
+   "class": "ShellPageStack",
+   "rect": [
+    94,
+    100,
+    1346,
+    800
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      767,
+      500
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      94,
+      500
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      767,
+      100
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    }
+   ]
+  },
+  {
+   "name": "settingsPage",
+   "class": "_SettingsPage",
+   "rect": [
+    94,
+    101,
+    1346,
+    799
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      767,
+      500
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      94,
+      500
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      767,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "settingsTabBar",
+   "class": "QFrame",
+   "rect": [
+    94,
+    101,
+    1346,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      767,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      94,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      767,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "settingsTabBtn[General]",
+   "class": "QToolButton",
+   "rect": [
+    364,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      421,
+      146
+     ],
+     "rgb": "#1d221e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      364,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      421,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "General",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 39
+   }
+  },
+  {
+   "name": "settingsTabBtn[Clip]",
+   "class": "QToolButton",
+   "rect": [
+    479,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      536,
+      146
+     ],
+     "rgb": "#a0aba5",
+     "token": "TEXT_DIM"
+    },
+    {
+     "role": "edge",
+     "at": [
+      479,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      536,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "Clip",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 20
+   }
+  },
+  {
+   "name": "settingsTabBtn[Audio]",
+   "class": "QToolButton",
+   "rect": [
+    594,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      651,
+      146
+     ],
+     "rgb": "#5a625e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      594,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      651,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Audio",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 28
+   }
+  },
+  {
+   "name": "settingsTabBtn[Visuals]",
+   "class": "QToolButton",
+   "rect": [
+    709,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      766,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      709,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      766,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Visuals",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 36
+   }
+  },
+  {
+   "name": "settingsTabBtn[Customize]",
+   "class": "QToolButton",
+   "rect": [
+    824,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      881,
+      146
+     ],
+     "rgb": "#a0aba5",
+     "token": "TEXT_DIM"
+    },
+    {
+     "role": "edge",
+     "at": [
+      824,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      881,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Customize",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 52
+   }
+  },
+  {
+   "name": "settingsTabBtn[Performance]",
+   "class": "QToolButton",
+   "rect": [
+    939,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      996,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      939,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      996,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Performance",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 64
+   }
+  },
+  {
+   "name": "settingsTabBtn[Shortcuts]",
+   "class": "QToolButton",
+   "rect": [
+    1054,
+    101,
+    115,
+    90
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1111,
+      146
+     ],
+     "rgb": "#2c322e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1054,
+      146
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1111,
+      101
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Shortcuts",
+    "px": 14,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 49
+   }
+  },
+  {
+   "name": "settingsDivider",
+   "class": "QFrame",
+   "rect": [
+    94,
+    191,
+    1346,
+    1
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      767,
+      191
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    },
+    {
+     "role": "edge",
+     "at": [
+      94,
+      191
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      767,
+      191
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    }
+   ]
+  },
+  {
+   "name": "settingsContent",
+   "class": "QWidget",
+   "rect": [
+    94,
+    192,
+    1346,
+    708
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      767,
+      546
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      94,
+      546
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      767,
+      192
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ]
+  },
+  {
+   "name": "qt_scrollarea_viewport",
+   "class": "QWidget",
+   "rect": [
+    118,
+    216,
+    1290,
+    684
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      763,
+      558
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      558
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      763,
+      216
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[Clip Settings]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    216,
+    103,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      169,
+      231
+     ],
+     "rgb": "#313332",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      231
+     ],
+     "rgb": "#0b0e0d",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      169,
+      216
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Clip Settings",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 102
+   }
+  },
+  {
+   "name": "QLabel[Folders]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    258,
+    58,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      147,
+      273
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      273
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      147,
+      258
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Folders",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 58
+   }
+  },
+  {
+   "name": "QLabel[CLIPS STORAGE FOLDER]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    300,
+    180,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      208,
+      320
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      320
+     ],
+     "rgb": "#676a69",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      208,
+      300
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "CLIPS STORAGE FOLDER",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 114
+   }
+  },
+  {
+   "name": "QLineEdit[/home/kalopsia/Videos/FTHR Clips]",
+   "class": "QLineEdit",
+   "rect": [
+    306,
+    300,
+    886,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      749,
+      320
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      306,
+      320
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      749,
+      300
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "/home/kalopsia/Videos/FTHR Clips",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 190
+   }
+  },
+  {
+   "name": "QPushButton[BROWSE]",
+   "class": "QPushButton",
+   "rect": [
+    1200,
+    300,
+    82,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1241,
+      320
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1200,
+      320
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1241,
+      300
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "BROWSE",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 47
+   }
+  },
+  {
+   "name": "QPushButton[USE DEFAULT]",
+   "class": "QPushButton",
+   "rect": [
+    1290,
+    300,
+    106,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1343,
+      320
+     ],
+     "rgb": "#b6b9b7",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1290,
+      320
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1343,
+      300
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "USE DEFAULT",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 71
+   }
+  },
+  {
+   "name": "QLabel[MANUAL RECORDING FOLDER]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    349,
+    180,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      208,
+      369
+     ],
+     "rgb": "#bfc1bf",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      369
+     ],
+     "rgb": "#393d3c",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      208,
+      349
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "MANUAL RECORDING FOLDER",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 139
+   }
+  },
+  {
+   "name": "QLineEdit[/home/kalopsia/Videos/FTHR Clips/Recordi]",
+   "class": "QLineEdit",
+   "rect": [
+    306,
+    349,
+    1000,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      806,
+      369
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      306,
+      369
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      806,
+      349
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "/home/kalopsia/Videos/FTHR Clips/Recordings",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 257
+   }
+  },
+  {
+   "name": "QPushButton[BROWSE]",
+   "class": "QPushButton",
+   "rect": [
+    1314,
+    349,
+    82,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1355,
+      369
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1314,
+      369
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1355,
+      349
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "BROWSE",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 47
+   }
+  },
+  {
+   "name": "QLabel[Import Clips]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    414,
+    99,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      167,
+      429
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      429
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      167,
+      414
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Import Clips",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 99
+   }
+  },
+  {
+   "name": "QPushButton[Add folder]",
+   "class": "QPushButton",
+   "rect": [
+    118,
+    455,
+    92,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      164,
+      475
+     ],
+     "rgb": "#393b3a",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      475
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      164,
+      455
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Add folder",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 58
+   }
+  },
+  {
+   "name": "QPushButton[Scan for clips]",
+   "class": "QPushButton",
+   "rect": [
+    218,
+    454,
+    115,
+    43
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      475
+     ],
+     "rgb": "#b1b5b2",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      218,
+      475
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      454
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Scan for clips",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 76
+   }
+  },
+  {
+   "name": "QLabel[No import folders added yet.]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    509,
+    1278,
+    23
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      757,
+      520
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      520
+     ],
+     "rgb": "#0f1210",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      757,
+      509
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "No import folders added yet.",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 153
+   }
+  },
+  {
+   "name": "QLabel[Video Encoding]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    579,
+    122,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      179,
+      594
+     ],
+     "rgb": "#8c8f8e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      594
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      179,
+      579
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Video Encoding",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 121
+   }
+  },
+  {
+   "name": "QLabel[Encoder]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    621,
+    140,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      188,
+      640
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      640
+     ],
+     "rgb": "#464948",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      188,
+      621
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Encoder",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 38
+   }
+  },
+  {
+   "name": "_DropdownCombo[Detecting available encoders…]",
+   "class": "_DropdownCombo",
+   "rect": [
+    270,
+    621,
+    1126,
+    38
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      833,
+      640
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      270,
+      640
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      833,
+      621
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Detecting available encoders…",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 162
+   }
+  },
+  {
+   "name": "QLabel[Codec]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    667,
+    140,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      188,
+      686
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      686
+     ],
+     "rgb": "#676a69",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      188,
+      667
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Codec",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 29
+   }
+  },
+  {
+   "name": "_DropdownCombo[Automatic]",
+   "class": "_DropdownCombo",
+   "rect": [
+    270,
+    667,
+    1126,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      833,
+      686
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      270,
+      686
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      833,
+      667
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Automatic",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 55
+   }
+  },
+  {
+   "name": "QLabel[Active encoder]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    721,
+    140,
+    23
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      188,
+      732
+     ],
+     "rgb": "#575a58",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      732
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      188,
+      721
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Active encoder",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 71
+   }
+  },
+  {
+   "name": "QLabel[—]",
+   "class": "QLabel",
+   "rect": [
+    270,
+    721,
+    1126,
+    23
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      833,
+      732
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      270,
+      732
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      833,
+      721
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "—",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 15
+   }
+  },
+  {
+   "name": "QPushButton[Redetect]",
+   "class": "QPushButton",
+   "rect": [
+    118,
+    754,
+    85,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      160,
+      774
+     ],
+     "rgb": "#d7dad8",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      774
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      160,
+      754
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Redetect",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 50
+   }
+  },
+  {
+   "name": "QLabel[Checking this device…]",
+   "class": "QLabel",
+   "rect": [
+    215,
+    754,
+    1181,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      805,
+      774
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      215,
+      774
+     ],
+     "rgb": "#323735",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      805,
+      754
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Checking this device…",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 120
+   }
+  },
+  {
+   "name": "QLabel[Watermark]",
+   "class": "QLabel",
+   "rect": [
+    118,
+    819,
+    87,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      161,
+      834
+     ],
+     "rgb": "#262a29",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      834
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      161,
+      819
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "Watermark",
+    "px": 20,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 24,
+    "descent": 6,
+    "height": 30,
+    "advance": 87
+   }
+  },
+  {
+   "name": "QCheckBox[Add animated Capture Card to exports and]",
+   "class": "QCheckBox",
+   "rect": [
+    118,
+    861,
+    1278,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      757,
+      874
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      118,
+      874
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      757,
+      861
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "Add animated Capture Card to exports and shares",
+    "px": 17,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "advance": 304
+   }
+  },
+  {
+   "name": "qt_scrollarea_vcontainer",
+   "class": "QWidget",
+   "rect": [
+    1408,
+    216,
+    8,
+    684
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1412,
+      558
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1408,
+      558
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1412,
+      216
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ]
+  }
+ ]
+}

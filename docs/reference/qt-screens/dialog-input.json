@@ -1,0 +1,341 @@
+{
+ "schema": 1,
+ "screen": "dialog-input",
+ "size": [
+  360,
+  196
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "fthrDialogHeader",
+   "class": "_DialogHeader",
+   "rect": [
+    0,
+    0,
+    360,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      180,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      180,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "fthrDialogTitle",
+   "class": "QLabel",
+   "rect": [
+    12,
+    0,
+    69,
+    37
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      46,
+      18
+     ],
+     "rgb": "#5e6360",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      12,
+      18
+     ],
+     "rgb": "#303531",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      46,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Rename clip",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 68
+   }
+  },
+  {
+   "name": "fthrDialogClose",
+   "class": "IconButton",
+   "rect": [
+    324,
+    3,
+    30,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      339,
+      18
+     ],
+     "rgb": "#707974",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      324,
+      18
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      339,
+      3
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[New name]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    54,
+    328,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      180,
+      64
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      64
+     ],
+     "rgb": "#282c2a",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      180,
+      54
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "content": "New name",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 56
+   }
+  },
+  {
+   "name": "fthrDialogInput",
+   "class": "QLineEdit",
+   "rect": [
+    16,
+    85,
+    328,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      180,
+      105
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      105
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      180,
+      85
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "content": "Overwatch_clip",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 82
+   }
+  },
+  {
+   "name": "QPushButton[Cancel]",
+   "class": "QPushButton",
+   "rect": [
+    212,
+    141,
+    72,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      248,
+      161
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      212,
+      161
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      248,
+      141
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Cancel",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 37
+   }
+  },
+  {
+   "name": "QPushButton[OK]",
+   "class": "QPushButton",
+   "rect": [
+    292,
+    141,
+    52,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      318,
+      161
+     ],
+     "rgb": "#1cc48a",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      292,
+      161
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      318,
+      141
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "content": "OK",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 16
+   }
+  }
+ ]
+}

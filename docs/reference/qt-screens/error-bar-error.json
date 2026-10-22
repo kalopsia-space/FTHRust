@@ -1,0 +1,261 @@
+{
+ "schema": 1,
+ "screen": "error-bar-error",
+ "size": [
+  1440,
+  36
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QLabel[Notice]",
+   "class": "QLabel",
+   "rect": [
+    20,
+    1,
+    41,
+    35
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      40,
+      18
+     ],
+     "rgb": "#35211b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      20,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      40,
+      1
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    }
+   ],
+   "text": {
+    "content": "Notice",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 35
+   }
+  },
+  {
+   "name": "QLabel[CAPTURE FAILED]",
+   "class": "QLabel",
+   "rect": [
+    71,
+    1,
+    105,
+    35
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      123,
+      18
+     ],
+     "rgb": "#984c3b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      71,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      123,
+      1
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    }
+   ],
+   "text": {
+    "content": "CAPTURE FAILED",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 99
+   }
+  },
+  {
+   "name": "QLabel[—]",
+   "class": "QLabel",
+   "rect": [
+    186,
+    1,
+    22,
+    35
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      197,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      186,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      197,
+      1
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    }
+   ],
+   "text": {
+    "content": "—",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 15
+   }
+  },
+  {
+   "name": "QLabel[The compositor stopped answering]",
+   "class": "QLabel",
+   "rect": [
+    218,
+    1,
+    194,
+    35
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      315,
+      18
+     ],
+     "rgb": "#d2d5d4",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      218,
+      18
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      315,
+      1
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    }
+   ],
+   "text": {
+    "content": "The compositor stopped answering",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 188
+   }
+  },
+  {
+   "name": "QPushButton[RESTART ENGINE]",
+   "class": "QPushButton",
+   "rect": [
+    1268,
+    4,
+    114,
+    29
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1325,
+      18
+     ],
+     "rgb": "#bf5d48",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1268,
+      18
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    },
+    {
+     "role": "top",
+     "at": [
+      1325,
+      4
+     ],
+     "rgb": "#ff795d",
+     "token": "ERROR"
+    }
+   ],
+   "text": {
+    "content": "RESTART ENGINE",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 92
+   }
+  }
+ ]
+}

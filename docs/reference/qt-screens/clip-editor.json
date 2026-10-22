@@ -1,0 +1,2739 @@
+{
+ "schema": 1,
+ "screen": "clip-editor",
+ "size": [
+  1440,
+  900
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "editorHeader",
+   "class": "QFrame",
+   "rect": [
+    0,
+    0,
+    1440,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      720,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      720,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "editorTitle",
+   "class": "QLabel",
+   "rect": [
+    20,
+    0,
+    84,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      62,
+      20
+     ],
+     "rgb": "#dee1df",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      20,
+      20
+     ],
+     "rgb": "#535756",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      62,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "Overwatch_clip",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 84
+   }
+  },
+  {
+   "name": "editorMin",
+   "class": "IconButton",
+   "rect": [
+    1320,
+    0,
+    40,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1340,
+      20
+     ],
+     "rgb": "#2f3633",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1320,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1340,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "editorMax",
+   "class": "IconButton",
+   "rect": [
+    1360,
+    0,
+    40,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1380,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1360,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1380,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "editorClose",
+   "class": "IconButton",
+   "rect": [
+    1400,
+    0,
+    40,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1420,
+      20
+     ],
+     "rgb": "#6e7772",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1400,
+      20
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1420,
+      0
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "ctrlBar",
+   "class": "QFrame",
+   "rect": [
+    0,
+    656,
+    1160,
+    46
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      580,
+      679
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      679
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      580,
+      656
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    }
+   ]
+  },
+  {
+   "name": "playBtn",
+   "class": "QPushButton",
+   "rect": [
+    16,
+    663,
+    96,
+    33
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      64,
+      679
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      679
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      64,
+      663
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "Preparing…",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 64
+   }
+  },
+  {
+   "name": "timeLabel[0:00 / 0:10]",
+   "class": "QLabel",
+   "rect": [
+    124,
+    657,
+    63,
+    45
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      155,
+      679
+     ],
+     "rgb": "#373e3a",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      124,
+      679
+     ],
+     "rgb": "#1d2220",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      155,
+      657
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "0:00 / 0:10",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 63
+   }
+  },
+  {
+   "name": "timeLabel[Preparing · play queued]",
+   "class": "QLabel",
+   "rect": [
+    199,
+    657,
+    127,
+    45
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      262,
+      679
+     ],
+     "rgb": "#a0aba5",
+     "token": "TEXT_DIM"
+    },
+    {
+     "role": "edge",
+     "at": [
+      199,
+      679
+     ],
+     "rgb": "#131916",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      262,
+      657
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "Preparing · play queued",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 126
+   }
+  },
+  {
+   "name": "trimBar",
+   "class": "QFrame",
+   "rect": [
+    0,
+    702,
+    1160,
+    198
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      580,
+      801
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      801
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      580,
+      702
+     ],
+     "rgb": "#1b231e",
+     "token": "CARD_BORDER"
+    }
+   ]
+  },
+  {
+   "name": "trimLabel",
+   "class": "QLabel",
+   "rect": [
+    16,
+    713,
+    41,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      36,
+      723
+     ],
+     "rgb": "#8a938e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      723
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      36,
+      713
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "Timeline",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 40
+   }
+  },
+  {
+   "name": "trimRangeLbl",
+   "class": "QLabel",
+   "rect": [
+    1076,
+    713,
+    68,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1110,
+      723
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1076,
+      723
+     ],
+     "rgb": "#0e3729",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      1110,
+      713
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "0:00 → 0:10",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 67
+   }
+  },
+  {
+   "name": "timelineHistory[Undo]",
+   "class": "QPushButton",
+   "rect": [
+    16,
+    740,
+    66,
+    26
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      49,
+      753
+     ],
+     "rgb": "#151b18",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      49,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Undo",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 24
+   }
+  },
+  {
+   "name": "timelineHistory[Redo]",
+   "class": "QPushButton",
+   "rect": [
+    88,
+    740,
+    66,
+    26
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      121,
+      753
+     ],
+     "rgb": "#272d2a",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      88,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      121,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Redo",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 24
+   }
+  },
+  {
+   "name": "timelineTool",
+   "class": "IconButton",
+   "rect": [
+    168,
+    740,
+    26,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      181,
+      753
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      168,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      181,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "timelineTool",
+   "class": "IconButton",
+   "rect": [
+    200,
+    740,
+    26,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      213,
+      753
+     ],
+     "rgb": "#343b36",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      200,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      213,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "timelineZoomLabel",
+   "class": "QLabel",
+   "rect": [
+    232,
+    740,
+    44,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      254,
+      753
+     ],
+     "rgb": "#0f1412",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      232,
+      753
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      254,
+      740
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "100%",
+    "px": 12,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 28
+   }
+  },
+  {
+   "name": "timelineTool",
+   "class": "IconButton",
+   "rect": [
+    282,
+    740,
+    26,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      295,
+      753
+     ],
+     "rgb": "#8c9790",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      282,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      295,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "timelineTool",
+   "class": "IconButton",
+   "rect": [
+    314,
+    740,
+    26,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      327,
+      753
+     ],
+     "rgb": "#7f8983",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      314,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      327,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "timelineAction",
+   "class": "QPushButton",
+   "rect": [
+    1000,
+    740,
+    43,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1021,
+      753
+     ],
+     "rgb": "#a5a8a6",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1000,
+      753
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1021,
+      740
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Split",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 22
+   }
+  },
+  {
+   "name": "timelineActionDanger",
+   "class": "QPushButton",
+   "rect": [
+    1049,
+    740,
+    95,
+    26
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1096,
+      753
+     ],
+     "rgb": "#1e2320",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1049,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1096,
+      740
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Delete segment",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 74
+   }
+  },
+  {
+   "name": "editorSidebar",
+   "class": "QFrame",
+   "rect": [
+    1160,
+    40,
+    280,
+    860
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1300,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1160,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1300,
+      40
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "editorSidebarScroll",
+   "class": "QScrollArea",
+   "rect": [
+    1160,
+    40,
+    280,
+    860
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1300,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1160,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1300,
+      40
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "qt_scrollarea_viewport",
+   "class": "QWidget",
+   "rect": [
+    1160,
+    40,
+    272,
+    860
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1160,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      40
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "editorSidebarContent",
+   "class": "QWidget",
+   "rect": [
+    1160,
+    40,
+    272,
+    860
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1160,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      40
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "shareBtn",
+   "class": "QPushButton",
+   "rect": [
+    1174,
+    56,
+    244,
+    42
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      77
+     ],
+     "rgb": "#1ed496",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      77
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      56
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "content": "Share clip",
+    "px": 17,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "advance": 68
+   }
+  },
+  {
+   "name": "WheelSafeComboBox[High quality]",
+   "class": "WheelSafeComboBox",
+   "rect": [
+    1174,
+    106,
+    244,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      124
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      124
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      106
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "High quality",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 65
+   }
+  },
+  {
+   "name": "exportBtn",
+   "class": "QPushButton",
+   "rect": [
+    1174,
+    150,
+    244,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      169
+     ],
+     "rgb": "#969b99",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      169
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      150
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Export",
+    "px": 17,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "advance": 43
+   }
+  },
+  {
+   "name": "QPushButton[Export jobs]",
+   "class": "QPushButton",
+   "rect": [
+    1174,
+    196,
+    244,
+    19
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      205
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      205
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      196
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "Export jobs",
+    "px": 15,
+    "weight": 500,
+    "family": "Google Sans Flex",
+    "ascent": 14,
+    "descent": 4,
+    "height": 18,
+    "advance": 79
+   }
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    229,
+    244,
+    159
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      308
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      308
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      229
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    230,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      250
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      250
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      230
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "CLIP SPEED",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 64
+   }
+  },
+  {
+   "name": "panelBody",
+   "class": "QFrame",
+   "rect": [
+    1175,
+    271,
+    242,
+    116
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      329
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      329
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      271
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "detailKey",
+   "class": "QLabel",
+   "rect": [
+    1189,
+    275,
+    214,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      285
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      285
+     ],
+     "rgb": "#202522",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      275
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "Playback speed",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 86
+   }
+  },
+  {
+   "name": "speedCombo",
+   "class": "WheelSafeComboBox",
+   "rect": [
+    1189,
+    304,
+    214,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      322
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      322
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      304
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "1×  NORMAL",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 72
+   }
+  },
+  {
+   "name": "pitchToggle",
+   "class": "QCheckBox",
+   "rect": [
+    1189,
+    348,
+    214,
+    25
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      360
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      360
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      348
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "Preserve pitch",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 73
+   }
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    396,
+    244,
+    192
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      492
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      492
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      396
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    397,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      417
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      417
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      397
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "EDIT TOOLS",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 63
+   }
+  },
+  {
+   "name": "panelBody",
+   "class": "QFrame",
+   "rect": [
+    1175,
+    438,
+    242,
+    149
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      512
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      512
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      438
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "cropBtn",
+   "class": "QPushButton",
+   "rect": [
+    1189,
+    442,
+    146,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1262,
+      458
+     ],
+     "rgb": "#e7e9e8",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      458
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1262,
+      442
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Set crop",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 47
+   }
+  },
+  {
+   "name": "quickCropBtn",
+   "class": "QPushButton",
+   "rect": [
+    1341,
+    442,
+    62,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1372,
+      458
+     ],
+     "rgb": "#7e8a83",
+     "token": "TEXT_GHOST"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1341,
+      458
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1372,
+      442
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Quick",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 32
+   }
+  },
+  {
+   "name": "saveQcBtn",
+   "class": "QPushButton",
+   "rect": [
+    1189,
+    482,
+    214,
+    26
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      495
+     ],
+     "rgb": "#6e7973",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      495
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      482
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Save as quick crop",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 104
+   }
+  },
+  {
+   "name": "stretchBtn",
+   "class": "QPushButton",
+   "rect": [
+    1189,
+    516,
+    146,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1262,
+      532
+     ],
+     "rgb": "#202523",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      532
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1262,
+      516
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Stretch video",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 74
+   }
+  },
+  {
+   "name": "resetStretchBtn",
+   "class": "QPushButton",
+   "rect": [
+    1341,
+    516,
+    62,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1372,
+      532
+     ],
+     "rgb": "#f0f3f1",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      1341,
+      532
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      1372,
+      516
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Reset",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 31
+   }
+  },
+  {
+   "name": "cropInfoLbl",
+   "class": "QLabel",
+   "rect": [
+    1189,
+    556,
+    214,
+    17
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      564
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      564
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      556
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    596,
+    244,
+    128
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      660
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      660
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      596
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    597,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      617
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      617
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      597
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "AUDIO MIX",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 60
+   }
+  },
+  {
+   "name": "panelBody",
+   "class": "QFrame",
+   "rect": [
+    1175,
+    638,
+    242,
+    85
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      680
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      680
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      638
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "audioMixPanel",
+   "class": "AudioMixPanel",
+   "rect": [
+    1175,
+    638,
+    242,
+    85
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      680
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      680
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      638
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "audioMixControl",
+   "class": "QFrame",
+   "rect": [
+    1189,
+    642,
+    214,
+    67
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      675
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1189,
+      675
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      642
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "audioMixName",
+   "class": "QLabel",
+   "rect": [
+    1199,
+    650,
+    154,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1276,
+      660
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1199,
+      660
+     ],
+     "rgb": "#0d1210",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      1276,
+      650
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "MASTER",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 41
+   }
+  },
+  {
+   "name": "audioMixValue",
+   "class": "QLabel",
+   "rect": [
+    1359,
+    650,
+    34,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1376,
+      660
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1359,
+      660
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1376,
+      650
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "content": "80%",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 27
+   }
+  },
+  {
+   "name": "audioMixSlider",
+   "class": "ClickableSlider",
+   "rect": [
+    1199,
+    675,
+    194,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      688
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1199,
+      688
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      675
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    732,
+    244,
+    43
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      753
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      753
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      732
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    733,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      753
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      753
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      733
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "COLOR & EFFECTS",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 98
+   }
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    783,
+    244,
+    43
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      804
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      804
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      783
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    784,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      804
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      804
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      784
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "CLIP DETAILS",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 73
+   }
+  },
+  {
+   "name": "detailsPanel",
+   "class": "QFrame",
+   "rect": [
+    1174,
+    834,
+    244,
+    43
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      855
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      855
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      834
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "panelHeader",
+   "class": "ThemedDropdownButton",
+   "rect": [
+    1175,
+    835,
+    242,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      855
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1175,
+      855
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      835
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "FILE DETAILS",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 70
+   }
+  },
+  {
+   "name": "deleteBtn",
+   "class": "QPushButton",
+   "rect": [
+    1174,
+    885,
+    244,
+    15
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1296,
+      892
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1174,
+      892
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    },
+    {
+     "role": "top",
+     "at": [
+      1296,
+      885
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    }
+   ],
+   "text": {
+    "content": "Delete",
+    "px": 17,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "advance": 43
+   }
+  },
+  {
+   "name": "qt_scrollarea_vcontainer",
+   "class": "QWidget",
+   "rect": [
+    1432,
+    40,
+    8,
+    860
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      1436,
+      470
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      1432,
+      470
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      1436,
+      40
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  }
+ ]
+}

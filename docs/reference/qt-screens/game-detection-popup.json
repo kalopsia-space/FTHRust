@@ -1,0 +1,663 @@
+{
+ "schema": 1,
+ "screen": "game-detection-popup",
+ "size": [
+  533,
+  403
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QLabel[Game detection]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    15,
+    75,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      56,
+      25
+     ],
+     "rgb": "#878a88",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      25
+     ],
+     "rgb": "#6c706f",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      56,
+      15
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Game detection",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 75
+   }
+  },
+  {
+   "name": "QLabel[Switch mode]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    62,
+    495,
+    18
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      71
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      71
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      62
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Switch mode",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 61
+   }
+  },
+  {
+   "name": "QToolButton[AUTO-SWITCH]",
+   "class": "QToolButton",
+   "rect": [
+    19,
+    92,
+    244,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      141,
+      107
+     ],
+     "rgb": "#5e6863",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      107
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      141,
+      92
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "content": "AUTO-SWITCH",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 77
+   }
+  },
+  {
+   "name": "QToolButton[PROMPT FIRST]",
+   "class": "QToolButton",
+   "rect": [
+    271,
+    92,
+    243,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      392,
+      107
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      271,
+      107
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      392,
+      92
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "content": "PROMPT FIRST",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 82
+   }
+  },
+  {
+   "name": "QLabel[Fall back to desktop]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    134,
+    96,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      144
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      144
+     ],
+     "rgb": "#373d39",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      134
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Fall back to desktop",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 96
+   }
+  },
+  {
+   "name": "QLabel[Manual games]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    181,
+    495,
+    18
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      190
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      190
+     ],
+     "rgb": "#444946",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      181
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Manual games",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 67
+   }
+  },
+  {
+   "name": "QComboBox[Steam · Steam]",
+   "class": "QComboBox",
+   "rect": [
+    19,
+    211,
+    495,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      230
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      230
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      211
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "content": "Steam · Steam",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 77
+   }
+  },
+  {
+   "name": "QPushButton[Refresh windows]",
+   "class": "QPushButton",
+   "rect": [
+    19,
+    261,
+    157,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      97,
+      281
+     ],
+     "rgb": "#111613",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      281
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      97,
+      261
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Refresh windows",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 93
+   }
+  },
+  {
+   "name": "QPushButton[Add manual game]",
+   "class": "QPushButton",
+   "rect": [
+    188,
+    261,
+    157,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      281
+     ],
+     "rgb": "#d4d7d5",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      188,
+      281
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      261
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Add manual game",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 98
+   }
+  },
+  {
+   "name": "QPushButton[Block detection]",
+   "class": "QPushButton",
+   "rect": [
+    357,
+    261,
+    157,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      435,
+      281
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      357,
+      281
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      435,
+      261
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "content": "Block detection",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 88
+   }
+  },
+  {
+   "name": "QLabel[No manual game rules.]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    314,
+    495,
+    18
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      323
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      323
+     ],
+     "rgb": "#2c332e",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      314
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "No manual game rules.",
+    "px": 12,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 98
+   }
+  },
+  {
+   "name": "QLabel[Blocked from game detection]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    336,
+    495,
+    23
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      347
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      347
+     ],
+     "rgb": "#1e2320",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      336
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Blocked from game detection",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 159
+   }
+  },
+  {
+   "name": "QLabel[No blocked applications.]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    363,
+    495,
+    23
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      266,
+      374
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      374
+     ],
+     "rgb": "#1e2320",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      266,
+      363
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "No blocked applications.",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 131
+   }
+  }
+ ]
+}

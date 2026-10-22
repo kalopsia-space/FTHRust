@@ -1,0 +1,321 @@
+{
+ "schema": 1,
+ "screen": "clip-card",
+ "size": [
+  320,
+  268
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "cardThumb",
+   "class": "QFrame",
+   "rect": [
+    0,
+    0,
+    320,
+    180
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      160,
+      90
+     ],
+     "rgb": "#ecc6a9",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      90
+     ],
+     "rgb": "#ffffff",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      160,
+      0
+     ],
+     "rgb": "#ffffff",
+     "token": null
+    }
+   ]
+  },
+  {
+   "name": "cardDurationBadge",
+   "class": "QLabel",
+   "rect": [
+    262,
+    147,
+    48,
+    25
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      286,
+      159
+     ],
+     "rgb": "#121715",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      262,
+      159
+     ],
+     "rgb": "#121715",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      286,
+      147
+     ],
+     "rgb": "#161c19",
+     "token": null
+    }
+   ],
+   "text": {
+    "content": "0:00",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "advance": 24
+   }
+  },
+  {
+   "name": "cardBody",
+   "class": "QFrame",
+   "rect": [
+    0,
+    180,
+    320,
+    88
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      160,
+      224
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      224
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      160,
+      180
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "cardTitle",
+   "class": "_RenameLabel",
+   "rect": [
+    10,
+    190,
+    188,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      104,
+      206
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      10,
+      206
+     ],
+     "rgb": "#154c38",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      104,
+      190
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Overwatch_clip_from_04Oct2…",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "advance": 182
+   }
+  },
+  {
+   "name": "cardMetadata",
+   "class": "QLabel",
+   "rect": [
+    10,
+    225,
+    188,
+    33
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      104,
+      241
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      10,
+      241
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      104,
+      225
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "content": "Screenshot",
+    "px": 12,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "advance": 48
+   }
+  },
+  {
+   "name": "cardShareBtn",
+   "class": "_CardShareButton",
+   "rect": [
+    206,
+    198,
+    48,
+    52
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      230,
+      224
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      206,
+      224
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      230,
+      198
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ]
+  },
+  {
+   "name": "cardDeleteBtn",
+   "class": "QPushButton",
+   "rect": [
+    262,
+    198,
+    48,
+    52
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      286,
+      224
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    },
+    {
+     "role": "edge",
+     "at": [
+      262,
+      224
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    },
+    {
+     "role": "top",
+     "at": [
+      286,
+      198
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    }
+   ]
+  }
+ ]
+}
