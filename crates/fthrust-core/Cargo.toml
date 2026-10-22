@@ -1,0 +1,21 @@
+[package]
+name = "fthrust-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+md-5.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+zip.workspace = true
+tracing.workspace = true
+time.workspace = true
+nix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
