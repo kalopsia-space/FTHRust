@@ -28,7 +28,19 @@
 - Encoder capability discovery keys its cache on the loaded libavcodec, since FTHRust links FFmpeg instead of shelling out to an `ffmpeg` executable, and runs each one-frame probe in a child process (the app re-invoked with `--fthrust-probe-encoder`) so a crashing or hanging GPU driver costs one candidate instead of the whole app.
 - Starting a continuous recording refuses a path that already exists instead of truncating that file.
 - The FFmpeg wrappers are private to the media crate; the scaler and muxer validate frame geometry and stream indexes, and a zero-size encoder packet is copied as empty instead of dereferencing a null pointer.
+- Saving a clip no longer blocks the engine's command loop: saves run on their own thread, so status, pause, resume and shutdown keep flowing during a long mux.
+- The engine no longer relies on `PR_SET_PDEATHSIG` (which is per parent thread): it exits when the UI closes its stdin.
+- The shared-memory region (created with `shm_open` without exclusivity) is replaced by a per-user Unix socket that refuses to replace a live engine.
+- The cursor is composited into wlr-screencopy and ext-image-copy-capture frames (the reference captured without it).
+- Output transforms (rotated or flipped monitors) are undone before encoding; the reference encoded them rotated.
+- Recovery falls through to the next capture backend once the last good one has spent its retry budget, instead of retrying the same backend forever; transient conditions (compositor not answering, selected output absent) are waited out without consuming the budget.
+- Audio capture stops within a bounded time (the reference's unbounded `pa_simple_read` could wedge shutdown); audio runs on PipeWire directly, with both the desktop mix and the microphone captured by the engine.
+- The engine prints `FTHR_STARTUP_ERROR: <CODE>: <detail>` (and sends the same event) for every startup failure, so the UI can show a specific error instead of the generic Error 004.
+- A recording starts on an immediately requested keyframe instead of waiting up to a GOP for the next one.
+- v1/v2 wlr-screencopy compositors are handled (the reference could only finish on v3).
+- Clip saves carry one AAC track per captured source, labelled `Default Mix` and `Microphone`, and report which tracks were written.
 
 ## Added
 
 - `fthrust-media` crate: FFmpeg encoder with hardware candidates, encoded GOP ring, transactional MP4 writer, fragmented recorder, probe, thumbnails, capability cache and combined-audio policy, tested against reference fixtures and synthetic frames.
+- `fthrust-ipc`, `fthrust-wayland`, `fthrust-portal` and `fthrust-engine` crates: the capture daemon with ext-image-copy-capture, wlr-screencopy and ScreenCast-portal backends, PipeWire audio, recovery and health, replay saves, continuous recording and a JSON-over-Unix-socket protocol (`docs/engine-protocol.md`). A synthetic backend (`FTHRUST_SYNTHETIC_BACKEND=1`) lets the whole daemon run in CI.

@@ -107,7 +107,7 @@ impl Recorder {
         let mut audio = None;
         if let Some(a) = cfg.audio {
             let enc = AacEncoder::new(a.sample_rate, a.channels, mux.wants_global_header())?;
-            let index = mux.add_audio_stream(&enc)?;
+            let index = mux.add_audio_stream(&enc, "Default Mix")?;
             audio = Some((enc, index));
         }
         mux.write_header()?;

@@ -124,7 +124,7 @@ fn short_save_actual_mp4() {
     };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("clip.mp4");
-    let result = write_clip(&out, &video(&e, false), None, None).unwrap();
+    let result = write_clip(&out, &video(&e, false), &[], None).unwrap();
     assert_eq!(result.path, out);
     assert!(result.bytes_written > 0);
     assert!(!result.audio_included);
@@ -152,7 +152,7 @@ fn metadata_tags_present() {
     };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("clip.mp4");
-    write_clip(&out, &video(&e, true), None, None).unwrap();
+    write_clip(&out, &video(&e, true), &[], None).unwrap();
     let p = probe(&out);
     let get = |k: &str| {
         p.metadata
@@ -182,12 +182,13 @@ fn audio_is_muxed_as_aac_and_progress_is_reported() {
         samples: &samples,
         sample_rate: 48_000,
         channels: 2,
+        title: "Default Mix",
     };
     let progress = std::cell::Cell::new(0u64);
     let result = write_clip(
         &out,
         &video(&e, false),
-        Some(&audio),
+        &[audio],
         Some(&|bytes| progress.set(bytes)),
     )
     .unwrap();
@@ -220,8 +221,9 @@ fn audio_failure_degrades_to_video_only_and_is_reported() {
         samples: &samples,
         sample_rate: 0,
         channels: 2,
+        title: "Default Mix",
     };
-    let result = write_clip(&out, &video(&e, false), Some(&bad), None).unwrap();
+    let result = write_clip(&out, &video(&e, false), &[bad], None).unwrap();
     assert!(!result.audio_included);
     assert!(
         result.audio_error.is_some(),
@@ -238,7 +240,7 @@ fn refuses_existing_partial_and_empty_snapshot() {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("clip.mp4");
     std::fs::write(temporary_path_for(&out), b"leftover").unwrap();
-    let err = write_clip(&out, &video(&e, false), None, None).unwrap_err();
+    let err = write_clip(&out, &video(&e, false), &[], None).unwrap_err();
     assert_eq!(err.failure, Failure::TemporaryExists);
     assert!(!out.exists());
 
@@ -251,8 +253,99 @@ fn refuses_existing_partial_and_empty_snapshot() {
         ..video(&e, false)
     };
     let out2 = tmp.path().join("empty.mp4");
-    let err = write_clip(&out2, &v, None, None).unwrap_err();
+    let err = write_clip(&out2, &v, &[], None).unwrap_err();
     assert_eq!(err.failure, Failure::Writer);
     assert!(err.to_string().contains("no video packets"), "{err}");
     assert!(!out2.exists() && !temporary_path_for(&out2).exists());
+}
+
+fn tone(seconds: u32, hz: f32) -> Vec<f32> {
+    (0..seconds * 48_000)
+        .flat_map(|i| {
+            let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
+            [v, v]
+        })
+        .collect()
+}
+
+#[test]
+fn two_tracks_are_written_with_titles() {
+    let Some(e) = encode_twelve_seconds() else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("clip.mp4");
+    let (a, b) = (tone(5, 440.0), tone(5, 660.0));
+    let tracks = [
+        ClipAudio {
+            samples: &a,
+            sample_rate: 48_000,
+            channels: 2,
+            title: "Default Mix",
+        },
+        ClipAudio {
+            samples: &b,
+            sample_rate: 48_000,
+            channels: 2,
+            title: "Microphone",
+        },
+    ];
+    let result = write_clip(&out, &video(&e, true), &tracks, None).unwrap();
+    assert!(result.audio_included);
+    assert_eq!(result.audio_error, None);
+    assert_eq!(result.audio_tracks, ["Default Mix", "Microphone"]);
+    assert_eq!(probe(&out).streams, 3);
+    let desc = fthrust_media::combined_audio::descriptors_from_file(&out).unwrap();
+    assert_eq!(desc.len(), 2);
+    // The MP4 muxer carries the label as the track handler name (the
+    // combined-audio policy matches on either tag).
+    assert_eq!(
+        desc[0].handler_name.as_deref(),
+        Some("Default Mix"),
+        "{desc:?}"
+    );
+    assert_eq!(desc[1].handler_name.as_deref(), Some("Microphone"));
+    assert_eq!((desc[0].container_index, desc[1].container_index), (1, 2));
+}
+
+#[test]
+fn one_failing_track_is_skipped_and_named() {
+    let Some(e) = encode_twelve_seconds() else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("clip.mp4");
+    let good = tone(2, 440.0);
+    let tracks = [
+        ClipAudio {
+            samples: &good,
+            sample_rate: 0,
+            channels: 2,
+            title: "Default Mix",
+        },
+        ClipAudio {
+            samples: &good,
+            sample_rate: 48_000,
+            channels: 2,
+            title: "Microphone",
+        },
+    ];
+    let result = write_clip(&out, &video(&e, false), &tracks, None).unwrap();
+    assert!(result.audio_included, "the good track was written");
+    assert_eq!(result.audio_tracks, ["Microphone"]);
+    let err = result.audio_error.expect("the bad track is reported");
+    assert!(err.contains("Default Mix"), "{err}");
+    assert_eq!(probe(&out).streams, 2);
+    // An empty track is simply skipped, silently.
+    let tracks = [ClipAudio {
+        samples: &[],
+        sample_rate: 48_000,
+        channels: 2,
+        title: "Microphone",
+    }];
+    let out2 = tmp.path().join("clip2.mp4");
+    let result = write_clip(&out2, &video(&e, false), &tracks, None).unwrap();
+    assert!(
+        !result.audio_included && result.audio_error.is_none() && result.audio_tracks.is_empty()
+    );
 }

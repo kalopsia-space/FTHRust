@@ -1,0 +1,20 @@
+[package]
+name = "fthrust-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Wayland capture backends (ext-image-copy-capture, wlr-screencopy), outputs and shm pools for FTHRust"
+
+[dependencies]
+wayland-client.workspace = true
+wayland-backend.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+memmap2.workspace = true
+nix.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

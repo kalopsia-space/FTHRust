@@ -99,7 +99,13 @@ pub fn write_test_clip(path: &std::path::Path, seconds: u32, audio: bool) -> Opt
         samples: &samples,
         sample_rate: 48_000,
         channels: 2,
+        title: "Default Mix",
     };
-    write_clip(path, &video, audio.then_some(&track), None).unwrap();
+    let tracks: &[ClipAudio<'_>] = if audio {
+        std::slice::from_ref(&track)
+    } else {
+        &[]
+    };
+    write_clip(path, &video, tracks, None).unwrap();
     Some(())
 }
