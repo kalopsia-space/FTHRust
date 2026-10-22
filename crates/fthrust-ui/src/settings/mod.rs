@@ -3,8 +3,10 @@
 //! 24 px insets sliding horizontally between categories (220 ms
 //! InOutSine); Shift+Left/Right cycles the tabs.
 
+pub mod audio;
 pub mod clip;
 pub mod general;
+pub mod visuals;
 
 use egui::{Align, Color32, CornerRadius, Pos2, Rect, Ui, Vec2};
 
@@ -253,25 +255,50 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
 fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
-    let viewport = Rect::from_min_max(rect.min, Pos2::new(rect.max.x - 8.0, rect.max.y));
     let name = format!("settingsPage[{}]", tab.label());
+    // Qt shows the 8 px scrollbar only when the page is taller than the
+    // viewport; a page that fits spans the full width.
+    let height_id = egui::Id::unique(("settings-page-height", tab.label()));
+    let last_h: f32 = ui
+        .ctx()
+        .data_mut(|d| d.get_temp(height_id))
+        .unwrap_or(f32::INFINITY);
+    let bar = if last_h > rect.height() { 8.0 } else { 0.0 };
+    let viewport = Rect::from_min_max(rect.min, Pos2::new(rect.max.x - bar, rect.max.y));
     let mut area = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     scroll::vertical(&area, &t, &name)
         .max_height(rect.height())
         .show(&mut area, |ui| {
             ui.set_width(rect.width());
+            let right_margin = if tab == Tab::Audio {
+                0.0
+            } else {
+                PAGE_MARGIN_RIGHT
+            };
             let body = Rect::from_min_size(
                 Pos2::new(viewport.min.x, ui.cursor().min.y),
-                Vec2::new(viewport.width() - PAGE_MARGIN_RIGHT, f32::INFINITY),
+                Vec2::new(viewport.width() - right_margin, f32::INFINITY),
             );
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
             child.spacing_mut().item_spacing = Vec2::ZERO;
             match tab {
                 Tab::General => general::ui(&mut child, state),
                 Tab::Clip => clip::ui(&mut child, state),
+                Tab::Audio => audio::ui(&mut child, state),
+                Tab::Visuals => visuals::ui(&mut child, state),
                 _ => placeholder(&mut child, state, tab),
             }
-            let bottom = child.cursor().min.y + PAGE_MARGIN_BOTTOM;
+            let bottom = child.cursor().min.y
+                + if tab == Tab::Audio {
+                    0.0
+                } else {
+                    PAGE_MARGIN_BOTTOM
+                };
+            let content_h = bottom - body.min.y;
+            if (content_h - last_h).abs() > 0.5 {
+                ui.ctx().data_mut(|d| d.insert_temp(height_id, content_h));
+                ui.ctx().request_repaint();
+            }
             ui.allocate_rect(
                 Rect::from_min_max(body.min, Pos2::new(viewport.max.x, bottom)),
                 egui::Sense::hover(),

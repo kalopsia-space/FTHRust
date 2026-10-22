@@ -34,6 +34,8 @@ pub struct Combo {
     pub width: Option<f32>,
     /// Background token (`combo_qss(background)`).
     pub background: Color,
+    /// Height (Qt gives 36 to combos sharing a row with a 26 px icon button).
+    pub height: f32,
 }
 
 impl Combo {
@@ -45,12 +47,19 @@ impl Combo {
             enabled: true,
             width: None,
             background: Color::Surface3,
+            height: HEIGHT,
         }
     }
 
     /// Fixed width.
     pub fn with_width(mut self, w: f32) -> Combo {
         self.width = Some(w);
+        self
+    }
+
+    /// Fixed height.
+    pub fn with_height(mut self, h: f32) -> Combo {
+        self.height = h;
         self
     }
 
@@ -80,7 +89,7 @@ impl Combo {
         } else {
             Sense::hover()
         };
-        let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(w, HEIGHT), sense);
+        let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(w, self.height), sense);
         let popup_id = Id::unique(("fthrust-combo", name, resp.id));
         let mut open: bool = ui.ctx().data_mut(|d| d.get_temp(popup_id)).unwrap_or(false);
         if self.enabled && resp.clicked() {

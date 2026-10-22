@@ -284,6 +284,52 @@ impl IconCache {
         self.last_tint.get(&icon).copied().flatten()
     }
 
+    /// A texture for an arbitrary image file (Gary image, preview background),
+    /// decoded at its native size (`size_px` 0) or scaled to fit `size_px`.
+    pub fn file_texture(
+        &mut self,
+        ctx: &Context,
+        path: &Path,
+        size_px: f32,
+    ) -> Option<SizedTexture> {
+        let key = Key {
+            icon: Icon::Logo,
+            size: size_px.round() as u32,
+            tint: None,
+            source: path.to_path_buf(),
+        };
+        if !self.textures.contains_key(&key) {
+            let bytes = std::fs::read(path).ok()?;
+            let decoded = image::load_from_memory(&bytes).ok()?;
+            let img = if size_px > 0.0 {
+                decoded.resize(
+                    size_px as u32,
+                    size_px as u32,
+                    image::imageops::FilterType::Lanczos3,
+                )
+            } else {
+                decoded
+            };
+            let rgba = img.to_rgba8();
+            let color = ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                rgba.as_raw(),
+            );
+            let handle = ctx.load_texture(
+                format!("file:{}", path.display()),
+                color,
+                TextureOptions::LINEAR,
+            );
+            self.textures.insert(key.clone(), handle);
+        }
+        let handle = self.textures.get(&key)?;
+        let size = handle.size();
+        Some(SizedTexture::new(
+            handle.id(),
+            Vec2::new(size[0] as f32, size[1] as f32),
+        ))
+    }
+
     /// Drops every texture (Apply theme).
     pub fn clear(&mut self) {
         self.textures.clear();

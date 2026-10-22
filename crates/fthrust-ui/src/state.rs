@@ -371,7 +371,30 @@ pub struct AppState {
     pub settings_preset_selected: String,
     /// A transient status hint (plan 5 shows it on the capture card).
     pub status_hint: Option<String>,
+    /// Microphone `(level, peak)` in 0..1 (plan 5 feeds it).
+    pub mic_level: Option<(f32, f32)>,
+    /// Which Gary handle is being dragged (0 = MIN, 1 = MAX).
+    pub gary_drag: Option<u8>,
+    /// Microphone devices `(name, id)` (plan 5 fills).
+    pub mic_devices: Vec<(String, String)>,
+    /// Playback devices `(label, id)` for capture (plan 5 fills).
+    pub audio_devices: Vec<(String, String)>,
+    /// Camera device labels (plan 5 fills).
+    pub camera_devices: Vec<String>,
+    /// Refresh audio devices (plan 5 consumes).
+    pub refresh_audio_devices_requested: bool,
+    /// Refresh cameras (plan 5 consumes).
+    pub refresh_cameras_requested: bool,
+    /// Selected image layer index.
+    pub selected_image_layer: usize,
+    /// Overlay box drag in progress: `(kind, resizing, start rect)`.
+    pub overlay_drag: Option<(String, bool, FracRect)>,
+    /// Live overlay rects while dragging.
+    pub overlay_live: std::collections::HashMap<String, FracRect>,
 }
+
+/// An overlay rect as canvas fractions `(x, y, w, h)`.
+pub type FracRect = (f64, f64, f64, f64);
 
 /// Which folder a BROWSE button asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -382,6 +405,12 @@ pub enum BrowseKind {
     RecordingFolder,
     /// A folder to import clips from.
     ImportFolder,
+    /// Gary Mode image.
+    GaryImage,
+    /// Image overlay layers.
+    ImageLayers,
+    /// Overlay preview background image.
+    PreviewBackground,
 }
 
 /// Capture settings profile.
@@ -466,6 +495,16 @@ impl AppState {
             export_preset_selected: String::new(),
             settings_preset_selected: String::new(),
             status_hint: None,
+            mic_level: None,
+            gary_drag: None,
+            mic_devices: Vec::new(),
+            audio_devices: Vec::new(),
+            camera_devices: Vec::new(),
+            refresh_audio_devices_requested: false,
+            refresh_cameras_requested: false,
+            selected_image_layer: 0,
+            overlay_drag: None,
+            overlay_live: std::collections::HashMap::new(),
         })
     }
 
