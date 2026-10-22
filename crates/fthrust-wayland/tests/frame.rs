@@ -5,7 +5,7 @@ use fthrust_wayland::frame::{
 // wl_shm_format values (wayland.xml).
 const ARGB8888: u32 = 0;
 const XRGB8888: u32 = 1;
-const XBGR8888: u32 = 0x3433_4258; // 'XB24'
+const XBGR8888: u32 = 0x3432_4258; // 'XB24'
 const ABGR8888: u32 = 0x3432_4241; // 'AB24'
 const RGBX8888: u32 = 0x3432_5852; // 'RX24'
 const RGBA8888: u32 = 0x3432_4152; // 'RA24'

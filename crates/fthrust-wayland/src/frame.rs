@@ -243,7 +243,7 @@ pub fn normalize(view: &FrameView<'_>, out: &mut BgraFrame) -> Result<(), FrameE
         }
     } else {
         for y in 0..h {
-            for px in src_row(y).chunks_exact(4) {
+            for px in src_row(y).as_chunks::<4>().0 {
                 stage.extend_from_slice(&convert_pixel(view.layout, px));
             }
         }
