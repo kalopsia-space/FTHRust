@@ -4,6 +4,7 @@
 #![deny(missing_docs)]
 
 pub mod audio_timing;
+pub mod clip_writer;
 pub mod encoder;
 pub mod encoder_policy;
 pub mod ffi;

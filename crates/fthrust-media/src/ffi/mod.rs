@@ -4,9 +4,11 @@
 //! `unsafe` block carries a `SAFETY` comment.
 #![allow(unsafe_code)]
 
+pub mod aac;
 pub mod codec;
 pub mod frame;
 pub mod hw;
+pub mod mux;
 pub mod scaler;
 
 use ffmpeg_next::ffi;
