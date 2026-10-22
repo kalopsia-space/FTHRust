@@ -17,6 +17,18 @@ pub const FAMILY_400: &str = "oswald-400";
 pub const FAMILY_600: &str = "oswald-600";
 /// Named family for Oswald Bold.
 pub const FAMILY_700: &str = "oswald-700";
+/// Named family for the system monospace face (Qt's `font-family: monospace`),
+/// falling back to egui's bundled monospace.
+pub const MONO_FAMILY: &str = "qt-monospace";
+
+/// Candidate system monospace files, in Qt's fontconfig preference order
+/// on this platform.
+const MONO_CANDIDATES: [&str; 4] = [
+    "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+];
 
 /// Font weights the reference uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,13 +72,24 @@ impl Weight {
     }
 }
 
-static AVG_RATIO: OnceLock<Mutex<HashMap<String, f32>>> = OnceLock::new();
+/// Font-unit ratios Qt derives its integer metrics from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FaceMetrics {
+    /// `xAvgCharWidth / unitsPerEm`.
+    pub avg_width: f32,
+    /// `hhea.ascender / unitsPerEm`.
+    pub ascent: f32,
+    /// `-hhea.descender / unitsPerEm`.
+    pub descent: f32,
+}
 
-/// `xAvgCharWidth / unitsPerEm` from a TrueType/OpenType file (Qt's
-/// `QFontMetrics::averageCharWidth` is this ratio times the pixel size).
-pub fn os2_avg_ratio(bytes: &[u8]) -> Option<f32> {
+static METRICS: OnceLock<Mutex<HashMap<String, FaceMetrics>>> = OnceLock::new();
+
+/// Reads the OS/2 average width and hhea ascent/descent ratios from a
+/// TrueType/OpenType file (Qt's `QFontMetrics` rounds these per size).
+pub fn face_metrics(bytes: &[u8]) -> Option<FaceMetrics> {
     let num = u16::from_be_bytes([*bytes.get(4)?, *bytes.get(5)?]) as usize;
-    let (mut os2, mut head) = (None, None);
+    let (mut os2, mut head, mut hhea) = (None, None, None);
     for i in 0..num {
         let o = 12 + 16 * i;
         let tag = bytes.get(o..o + 4)?;
@@ -74,35 +97,71 @@ pub fn os2_avg_ratio(bytes: &[u8]) -> Option<f32> {
         match tag {
             b"OS/2" => os2 = Some(off),
             b"head" => head = Some(off),
+            b"hhea" => hhea = Some(off),
             _ => {}
         }
     }
-    let (os2, head) = (os2?, head?);
-    let xavg = i16::from_be_bytes([*bytes.get(os2 + 2)?, *bytes.get(os2 + 3)?]) as f32;
+    let (os2, head, hhea) = (os2?, head?, hhea?);
+    let i16_at = |o: usize| -> Option<i16> {
+        Some(i16::from_be_bytes([*bytes.get(o)?, *bytes.get(o + 1)?]))
+    };
+    let xavg = i16_at(os2 + 2)? as f32;
     let upem = u16::from_be_bytes([*bytes.get(head + 18)?, *bytes.get(head + 19)?]) as f32;
-    (upem > 0.0).then_some(xavg / upem)
+    let asc = i16_at(hhea + 4)? as f32;
+    let desc = i16_at(hhea + 6)? as f32;
+    (upem > 0.0).then_some(FaceMetrics {
+        avg_width: xavg / upem,
+        ascent: asc / upem,
+        descent: -desc / upem,
+    })
 }
 
-fn remember_avg(key: &str, bytes: &[u8]) {
-    if let Some(r) = os2_avg_ratio(bytes) {
-        AVG_RATIO
+fn remember_metrics(key: &str, bytes: &[u8]) {
+    if let Some(m) = face_metrics(bytes) {
+        METRICS
             .get_or_init(Default::default)
             .lock()
             .unwrap()
-            .insert(key.to_owned(), r);
+            .insert(key.to_owned(), m);
     }
+}
+
+fn metrics_for(family_key: &str) -> FaceMetrics {
+    METRICS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(family_key)
+        .copied()
+        .unwrap_or(FaceMetrics {
+            avg_width: 0.465,
+            ascent: 1.193,
+            descent: 0.289,
+        })
 }
 
 /// Qt's integer `averageCharWidth()` for a role at `px`.
 pub fn avg_char_width(px: f32, weight: Weight) -> f32 {
-    let ratio = AVG_RATIO
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap()
-        .get(weight.family())
-        .copied()
-        .unwrap_or(0.465);
-    (ratio * px).round()
+    (metrics_for(weight.family()).avg_width * px).round()
+}
+
+/// Qt's `QFontMetrics::height()`: `round(ascent) + round(descent)`.
+pub fn qt_height(px: f32, weight: Weight) -> f32 {
+    let m = metrics_for(weight.family());
+    (m.ascent * px).round() + (m.descent * px).round()
+}
+
+/// [`qt_wrapped_line_height`] for a named family (the monospace face).
+pub fn qt_wrapped_line_height_named(family_key: &str, px: f32) -> f32 {
+    let m = metrics_for(family_key);
+    ((m.ascent + m.descent) * px).ceil()
+}
+
+/// The height of one line in a word-wrapped `QLabel` (`QTextLine`):
+/// `ceil(ascent + descent)`.
+pub fn qt_wrapped_line_height(px: f32, weight: Weight) -> f32 {
+    let m = metrics_for(weight.family());
+    ((m.ascent + m.descent) * px).ceil()
 }
 
 /// The named family under which a theme font file is registered.
@@ -119,7 +178,7 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
     for (family, path) in &tokens.font_files {
         if let Ok(bytes) = std::fs::read(path) {
             let key = theme_family(family);
-            remember_avg(&key, &bytes);
+            remember_metrics(&key, &bytes);
             defs.font_data
                 .insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
             defs.families
@@ -141,7 +200,7 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
         let key = weight.family().to_owned();
         match std::fs::read(dir.join(file)) {
             Ok(bytes) => {
-                remember_avg(&key, &bytes);
+                remember_metrics(&key, &bytes);
                 defs.font_data
                     .insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
             }
@@ -168,6 +227,27 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
         .cloned()
         .unwrap_or_default();
     defs.families.insert(FontFamily::Proportional, body);
+    // System monospace (what Qt resolves `monospace` to), else egui's.
+    let mut mono_chain: Vec<String> = Vec::new();
+    for path in MONO_CANDIDATES {
+        if let Ok(bytes) = std::fs::read(path) {
+            remember_metrics(MONO_FAMILY, &bytes);
+            defs.font_data.insert(
+                MONO_FAMILY.to_owned(),
+                Arc::new(FontData::from_owned(bytes)),
+            );
+            mono_chain.push(MONO_FAMILY.to_owned());
+            break;
+        }
+    }
+    mono_chain.extend(
+        defs.families
+            .get(&FontFamily::Monospace)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    defs.families
+        .insert(FontFamily::Name(MONO_FAMILY.into()), mono_chain);
     ctx.set_fonts(defs);
 }
 

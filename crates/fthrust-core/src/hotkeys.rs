@@ -348,6 +348,20 @@ impl HotkeyBindings {
         self.controller.get(id).map(String::as_str)
     }
 
+    /// Sets (or clears, with an empty combo) the keyboard binding for `id`.
+    /// The combo is normalised; an unknown id is added.
+    pub fn set_keyboard(&mut self, id: &str, combo: &str) {
+        let value = normalize_keyboard_combo(combo).unwrap_or_default();
+        self.map.insert(id.to_string(), value);
+    }
+
+    /// Clears the controller binding for `id`.
+    pub fn clear_controller(&mut self, id: &str) {
+        if let Some(v) = self.controller.get_mut(id) {
+            v.clear();
+        }
+    }
+
     /// The whole keyboard map (action id to combo).
     pub fn keyboard_map(&self) -> &BTreeMap<String, String> {
         &self.map

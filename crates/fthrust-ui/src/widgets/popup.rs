@@ -48,6 +48,74 @@ pub struct PanelResponse {
     pub rect: Rect,
 }
 
+/// Draws the popup shell (SURFACE_2, 1 px BORDER_HI, r6) at `pos` with
+/// `width`, laying `content` out inside the border, and returns the rect.
+/// Tests render popups through this at the origin.
+pub fn draw_frame(
+    ui: &mut Ui,
+    t: &Tokens,
+    name: &str,
+    pos: Pos2,
+    width: f32,
+    content: impl FnOnce(&mut Ui),
+) -> Rect {
+    draw_frame_with_opacity(ui, t, name, pos, width, 1.0, content)
+}
+
+fn draw_frame_with_opacity(
+    ui: &mut Ui,
+    t: &Tokens,
+    name: &str,
+    pos: Pos2,
+    width: f32,
+    opacity: f32,
+    content: impl FnOnce(&mut Ui),
+) -> Rect {
+    let bg_idx = ui.painter().add(egui::Shape::Noop);
+    let border_idx = ui.painter().add(egui::Shape::Noop);
+    let inner = ui.scope_builder(
+        egui::UiBuilder::new().max_rect(Rect::from_min_size(
+            pos + Vec2::new(1.0, 1.0),
+            Vec2::new(width - 2.0, f32::INFINITY),
+        )),
+        |ui| {
+            ui.set_min_width(width - 2.0);
+            content(ui);
+        },
+    );
+    let bottom = inner.response.rect.max.y + 1.0;
+    let rect = Rect::from_min_max(pos, Pos2::new(pos.x + width, bottom));
+    let radius = CornerRadius::same(geom::RADIUS as u8);
+    // `Painter::set` bypasses the ui opacity, so the shell fades by hand.
+    ui.painter().set(
+        bg_idx,
+        egui::Shape::rect_filled(
+            rect,
+            radius,
+            t.color(Color::Surface2).gamma_multiply(opacity),
+        ),
+    );
+    ui.painter().set(
+        border_idx,
+        egui::Shape::rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, t.color(Color::BorderHi).gamma_multiply(opacity)),
+            StrokeKind::Inside,
+        ),
+    );
+    fidelity::mark(ui, name, rect)
+        .sample(
+            "fill",
+            Pos2::new(rect.min.x + 5.0, rect.center().y),
+            Color::Surface2,
+        )
+        .edge(Color::BorderHi)
+        .done();
+    ui.allocate_rect(rect, egui::Sense::hover());
+    rect
+}
+
 /// A popup panel anchored to a widget rect.
 pub struct Panel<'a> {
     name: &'a str,
@@ -133,7 +201,6 @@ impl<'a> Panel<'a> {
         }
         let id = Id::unique(("fthrust-popup", self.name));
         let name = self.name.to_owned();
-        let min_width = self.min_width;
         let tokens = t.clone();
         let inner = Area::new(id)
             .order(Order::Foreground)
@@ -142,46 +209,7 @@ impl<'a> Panel<'a> {
             .interactable(true)
             .show(&ctx, |ui| {
                 ui.set_opacity(opacity);
-                ui.set_min_width(min_width);
-                let bg_idx = ui.painter().add(egui::Shape::Noop);
-                let border_idx = ui.painter().add(egui::Shape::Noop);
-                let inner = ui.scope_builder(
-                    egui::UiBuilder::new()
-                        .max_rect(Rect::from_min_size(pos, Vec2::new(w, f32::INFINITY))),
-                    |ui| {
-                        ui.set_min_width(min_width);
-                        content(ui);
-                    },
-                );
-                let mut rect = inner.response.rect;
-                rect.set_width(rect.width().max(min_width));
-                let radius = CornerRadius::same(geom::RADIUS as u8);
-                ui.painter().set(
-                    bg_idx,
-                    egui::Shape::rect_filled(
-                        rect,
-                        radius,
-                        tokens.color(Color::Surface2).gamma_multiply(opacity),
-                    ),
-                );
-                ui.painter().set(
-                    border_idx,
-                    egui::Shape::rect_stroke(
-                        rect,
-                        radius,
-                        Stroke::new(1.0, tokens.color(Color::BorderHi).gamma_multiply(opacity)),
-                        StrokeKind::Inside,
-                    ),
-                );
-                fidelity::mark(ui, name.as_str(), rect)
-                    .sample(
-                        "fill",
-                        Pos2::new(rect.min.x + 5.0, rect.center().y),
-                        Color::Surface2,
-                    )
-                    .edge(Color::BorderHi)
-                    .done();
-                rect
+                draw_frame_with_opacity(ui, &tokens, &name, pos, w, opacity, content)
             });
         let rect = inner.inner;
         let size = rect.size();

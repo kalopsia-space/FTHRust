@@ -60,6 +60,8 @@
     "leading": 0,
     "line_spacing": 17,
     "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 75,
     "advance": 75
    }
   },
@@ -116,6 +118,8 @@
     "leading": 0,
     "line_spacing": 17,
     "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 62,
     "advance": 61
    }
   },
@@ -173,6 +177,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 77,
     "advance": 77
    }
   },
@@ -230,6 +236,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 83,
     "advance": 82
    }
   },
@@ -286,6 +294,8 @@
     "leading": 0,
     "line_spacing": 17,
     "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 96,
     "advance": 96
    }
   },
@@ -342,11 +352,13 @@
     "leading": 0,
     "line_spacing": 17,
     "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 68,
     "advance": 67
    }
   },
   {
-   "name": "QComboBox[Steam · Steam]",
+   "name": "QComboBox[◐ FTHR-Clips linux-2.0 Rust port · ◐ FTH]",
    "class": "QComboBox",
    "rect": [
     19,
@@ -362,8 +374,8 @@
       266,
       230
      ],
-     "rgb": "#141b17",
-     "token": "CARD_BG_HI"
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
     },
     {
      "role": "edge",
@@ -388,7 +400,7 @@
     "matched_family": "Oswald",
     "matched_weight": 400,
     "matched_px": 15,
-    "content": "Steam · Steam",
+    "content": "◐ FTHR-Clips linux-2.0 Rust port · ◐ FTHR-Clips linux-2.0 Rust port",
     "px": 15,
     "weight": 400,
     "family": "Oswald",
@@ -398,7 +410,9 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
-    "advance": 77
+    "bounding_height": 22,
+    "bounding_width": 379,
+    "advance": 379
    }
   },
   {
@@ -454,6 +468,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 94,
     "advance": 93
    }
   },
@@ -510,6 +526,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 98,
     "advance": 98
    }
   },
@@ -566,6 +584,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 88,
     "advance": 88
    }
   },
@@ -622,6 +642,8 @@
     "leading": 0,
     "line_spacing": 17,
     "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 98,
     "advance": 98
    }
   },
@@ -678,6 +700,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 159,
     "advance": 159
    }
   },
@@ -734,6 +758,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 132,
     "advance": 131
    }
   }

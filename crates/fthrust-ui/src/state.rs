@@ -313,6 +313,44 @@ pub struct AppState {
     pub editor_requested: Option<usize>,
     /// Rail editor close requested (plan 6 consumes).
     pub editor_close_requested: Option<usize>,
+    /// Keyboard / controller bindings (`hotkeys.json`).
+    pub hotkeys: fthrust_core::hotkeys::HotkeyBindings,
+    /// Bindings changed since the hotkey service last read them (plan 5).
+    pub hotkeys_changed: bool,
+    /// The desktop portal owns the shortcuts (plan 5 sets it).
+    pub hotkeys_portal_active: bool,
+    /// Action id currently recording a chord.
+    pub hotkey_recording: Option<String>,
+    /// Hotkey socket path shown in the setup instructions.
+    pub hotkey_socket_path: String,
+    /// `nc` executable shown in the setup instructions.
+    pub nc_path: String,
+    /// Detected compositor (`hyprland`, `kwin`, `gnome`, `unknown`, `none`).
+    pub compositor: String,
+    /// Running windows for game detection (plan 5 fills, `display_name`s).
+    pub running_windows: Vec<String>,
+    /// Selected running window index.
+    pub running_window_index: usize,
+    /// Capture settings profile shown in the popup.
+    pub capture_profile: CaptureProfile,
+    /// A capture setting changed that needs an engine restart (Apply shows).
+    pub restart_pending: bool,
+    /// Apply clicked: restart the engine (plan 5 consumes).
+    pub engine_restart_requested: bool,
+    /// Refresh the running-window list (plan 5 consumes).
+    pub refresh_windows_requested: bool,
+    /// Open the desktop's shortcut settings (plan 5 consumes).
+    pub open_desktop_shortcuts_requested: bool,
+}
+
+/// Capture settings profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CaptureProfile {
+    /// Replay clips.
+    #[default]
+    Clips,
+    /// Manual recordings.
+    Recording,
 }
 
 impl AppState {
@@ -326,6 +364,16 @@ impl AppState {
                 .get_bool("error_notifications_enabled")
                 .unwrap_or(true),
         );
+        let (hotkeys, _) = fthrust_core::hotkeys::HotkeyBindings::load(&paths)
+            .unwrap_or_else(|_| (fthrust_core::hotkeys::HotkeyBindings::defaults(), false));
+        let hotkey_socket_path = fthrust_core::runtime_dir()
+            .map(|d| d.join("hotkey.sock").display().to_string())
+            .unwrap_or_else(|_| "<socket unavailable>".into());
+        let nc_path = ["/usr/bin/nc", "/bin/nc", "/usr/local/bin/nc"]
+            .iter()
+            .find(|p| Path::new(p).exists())
+            .map(|p| (*p).to_owned())
+            .unwrap_or_else(|| "nc".into());
         Ok(AppState {
             paths,
             settings,
@@ -348,6 +396,20 @@ impl AppState {
             record_requested: false,
             editor_requested: None,
             editor_close_requested: None,
+            hotkeys,
+            hotkeys_changed: false,
+            hotkeys_portal_active: false,
+            hotkey_recording: None,
+            hotkey_socket_path,
+            nc_path,
+            compositor: crate::popups::hotkeys::detect_compositor(),
+            running_windows: Vec::new(),
+            running_window_index: 0,
+            capture_profile: CaptureProfile::Clips,
+            restart_pending: false,
+            engine_restart_requested: false,
+            refresh_windows_requested: false,
+            open_desktop_shortcuts_requested: false,
         })
     }
 

@@ -173,6 +173,7 @@ pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
         Page::Clips => crate::pages::clips_placeholder(ui, state),
         Page::Settings => crate::pages::settings_page(ui, state),
     });
+    crate::popups::draw_all(ui, state);
     if bar_h > 0.0 {
         let bar_rect = Rect::from_min_size(
             Pos2::new(screen.min.x, screen.max.y - bar_h),

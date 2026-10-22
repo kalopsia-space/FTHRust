@@ -100,6 +100,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 79,
     "advance": 79
    }
   },
@@ -196,6 +198,8 @@
     "leading": 0,
     "line_spacing": 25,
     "avg_char_width": 8,
+    "bounding_height": 25,
+    "bounding_width": 174,
     "advance": 174
    }
   },
@@ -252,6 +256,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 17,
     "advance": 16
    }
   }

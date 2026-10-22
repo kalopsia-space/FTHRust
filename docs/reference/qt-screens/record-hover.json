@@ -100,6 +100,8 @@
     "leading": 0,
     "line_spacing": 25,
     "avg_char_width": 9,
+    "bounding_height": 25,
+    "bounding_width": 74,
     "advance": 74
    }
   },
@@ -156,6 +158,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 269,
     "advance": 269
    }
   },
@@ -452,6 +456,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 217,
     "advance": 216
    }
   },
@@ -508,6 +514,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 37,
     "advance": 37
    }
   },
@@ -564,6 +572,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 109,
     "advance": 108
    }
   },
@@ -620,6 +630,8 @@
     "leading": 0,
     "line_spacing": 30,
     "avg_char_width": 10,
+    "bounding_height": 30,
+    "bounding_width": 55,
     "advance": 56
    }
   },
@@ -676,6 +688,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 44,
     "advance": 44
    }
   },
@@ -732,6 +746,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 58,
     "advance": 57
    }
   },
@@ -829,6 +845,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 25,
     "advance": 25
    }
   },
@@ -886,6 +904,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 42,
     "advance": 42
    }
   },
@@ -1022,6 +1042,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 45,
     "advance": 45
    }
   },
@@ -1078,6 +1100,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 41,
     "advance": 41
    }
   },
@@ -1134,6 +1158,8 @@
     "leading": 0,
     "line_spacing": 22,
     "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 40,
     "advance": 40
    }
   },
@@ -1190,6 +1216,8 @@
     "leading": 0,
     "line_spacing": 39,
     "avg_char_width": 13,
+    "bounding_height": 39,
+    "bounding_width": 120,
     "advance": 121
    }
   }

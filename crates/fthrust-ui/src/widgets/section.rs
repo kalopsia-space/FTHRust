@@ -5,7 +5,7 @@ use egui::{Align, Color32, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use super::{galley, paint_text};
 use crate::fidelity;
-use crate::fonts::Weight;
+use crate::fonts::{self, Weight};
 use crate::tokens::{Color, Tokens, geom, size};
 
 /// A label in `color`, `px`, `weight`; sized to its text (Qt `QLabel`).
@@ -20,7 +20,10 @@ pub fn label(
     name: Option<&str>,
 ) -> Response {
     let g = galley(ui, text, px, weight, t.color(color));
-    let size = Vec2::new(g.size().x.round(), g.size().y.round());
+    let size = Vec2::new(
+        g.size().x.round(),
+        fonts::qt_wrapped_line_height(px, weight),
+    );
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name
@@ -28,6 +31,58 @@ pub fn label(
         .unwrap_or_else(|| format!("QLabel[{}]", &text[..text.len().min(40)]));
     fidelity::mark(ui, name, rect).text(text, px, weight).done();
     resp
+}
+
+/// A label in a fixed-size cell (Qt layout-stretched label): text left,
+/// vertically centred.
+#[allow(clippy::too_many_arguments)]
+pub fn label_in(
+    ui: &mut Ui,
+    t: &Tokens,
+    rect: Rect,
+    text: &str,
+    px: f32,
+    weight: Weight,
+    color: Color,
+    name: Option<&str>,
+) {
+    let g = galley(ui, text, px, weight, t.color(color));
+    paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
+    let name = name
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("QLabel[{}]", &text[..text.len().min(40)]));
+    fidelity::mark(ui, name, rect).text(text, px, weight).done();
+}
+
+/// A word-wrapped label of `width` (Qt `setWordWrap(True)`), optionally
+/// with QSS `padding-top`; the height follows Qt's wrapped-label rule.
+#[allow(clippy::too_many_arguments)]
+pub fn label_wrapped(
+    ui: &mut Ui,
+    t: &Tokens,
+    text: &str,
+    px: f32,
+    weight: Weight,
+    color: Color,
+    width: f32,
+    padding_top: f32,
+) -> Rect {
+    let (_, text_h) = super::qt_wrapped_label_height(ui, text, px, weight, width);
+    let h = text_h + padding_top;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
+    let g = ui.painter().layout(
+        text.to_owned(),
+        fonts::id(px, weight),
+        t.color(color),
+        width,
+    );
+    let y = rect.min.y + padding_top + ((text_h - g.size().y) / 2.0).floor().max(0.0);
+    ui.painter()
+        .galley(Pos2::new(rect.min.x, y), g, t.color(color));
+    fidelity::mark(ui, format!("QLabel[{}]", &text[..text.len().min(40)]), rect)
+        .text(text, px, weight)
+        .done();
+    rect
 }
 
 /// A label that takes the available width (Qt expanding label), text left.
@@ -41,7 +96,10 @@ pub fn label_wide(
     name: Option<&str>,
 ) -> Response {
     let g = galley(ui, text, px, weight, t.color(color));
-    let size = Vec2::new(ui.available_width(), g.size().y.round());
+    let size = Vec2::new(
+        ui.available_width(),
+        fonts::qt_wrapped_line_height(px, weight),
+    );
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
     paint_text(ui, g, rect, Align::Min, 0.0, t.color(color));
     let name = name

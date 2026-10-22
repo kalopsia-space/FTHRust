@@ -116,6 +116,8 @@ def _text_info(w: QWidget):
             'leading': fm.leading(),
             'line_spacing': fm.lineSpacing(),
             'avg_char_width': fm.averageCharWidth(),
+            'bounding_height': fm.boundingRect(text.split('\n')[0]).height(),
+            'bounding_width': fm.boundingRect(text.split('\n')[0]).width(),
             'advance': fm.horizontalAdvance(text.split('\n')[0]),
         }
     return None

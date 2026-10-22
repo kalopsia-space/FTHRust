@@ -9,6 +9,7 @@ pub mod fonts;
 pub mod icons;
 pub mod motion;
 pub mod pages;
+pub mod popups;
 pub mod shell;
 pub mod state;
 pub mod theme;

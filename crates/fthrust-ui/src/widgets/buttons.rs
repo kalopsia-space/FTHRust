@@ -550,3 +550,77 @@ pub fn elide(ui: &Ui, text: &str, max_w: f32) -> String {
     }
     "…".to_owned()
 }
+
+/// A checkable 30 px `QToolButton` segment (`_profile_button_qss`,
+/// `_mode_button_qss`): SURFACE_1, 1 px BORDER, r6, TEXT_DIM 14 px 600;
+/// hover ACCENT border + TEXT; checked ACCENT_SOFT + ACCENT border + ACCENT
+/// text; disabled SURFACE_1 / BORDER / TEXT_MUTED.
+#[allow(clippy::too_many_arguments)]
+pub fn segment_button(
+    ui: &mut Ui,
+    t: &Tokens,
+    text: &str,
+    checked: bool,
+    enabled: bool,
+    width: f32,
+    name: &str,
+) -> Response {
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 30.0), sense);
+    let hovered = enabled && resp.hovered();
+    let blend = motion::hover(
+        ui.ctx(),
+        resp.id.with("hover"),
+        hovered && !checked,
+        t.reduce_motion,
+    );
+    let (bg, border, fg) = if !enabled {
+        (
+            t.color(Color::Surface1),
+            t.color(Color::Border),
+            t.color(Color::TextMuted),
+        )
+    } else if checked {
+        (
+            t.color(Color::AccentSoft),
+            t.color(Color::Accent),
+            t.color(Color::Accent),
+        )
+    } else {
+        (
+            t.color(Color::Surface1),
+            lerp(t.color(Color::Border), t.color(Color::Accent), blend),
+            lerp(t.color(Color::TextDim), t.color(Color::Text), blend),
+        )
+    };
+    let radius = CornerRadius::same(geom::RADIUS as u8);
+    ui.painter().rect_filled(rect, radius, bg);
+    ui.painter()
+        .rect_stroke(rect, radius, Stroke::new(1.0, border), StrokeKind::Inside);
+    let g = galley(ui, text, size::LABEL, Weight::W600, fg);
+    paint_text(ui, g, rect, Align::Center, 0.0, fg);
+    let fill = if !enabled {
+        Color::Surface1
+    } else if checked {
+        Color::AccentSoft
+    } else {
+        Color::Surface1
+    };
+    let edge = if !enabled {
+        Color::Border
+    } else if checked {
+        Color::Accent
+    } else {
+        Color::Border
+    };
+    fidelity::mark(ui, name, rect)
+        .sample("fill", egui::pos2(rect.min.x + 4.0, rect.center().y), fill)
+        .edge(edge)
+        .text(text, size::LABEL, Weight::W600)
+        .done();
+    resp
+}

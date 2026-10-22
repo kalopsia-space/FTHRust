@@ -100,6 +100,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 60,
     "advance": 60
    }
   },
@@ -196,6 +198,8 @@
     "leading": 0,
     "line_spacing": 25,
     "avg_char_width": 8,
+    "bounding_height": 25,
+    "bounding_width": 174,
     "advance": 175
    }
   },
@@ -252,6 +256,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 15,
     "advance": 14
    }
   },
@@ -308,6 +314,8 @@
     "leading": 0,
     "line_spacing": 21,
     "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 19,
     "advance": 18
    }
   }
