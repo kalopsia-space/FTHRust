@@ -474,7 +474,128 @@ def c_save_state(payload):
     return out
 
 
+def _probe_payload(avg, real='60/1', video_bitrate='6000000',
+                   format_bitrate='6200000', duration='30.0'):
+    return {
+        'streams': [
+            {'index': 0, 'codec_type': 'video', 'width': 1920, 'height': 1080,
+             'avg_frame_rate': avg, 'r_frame_rate': real, 'duration': duration,
+             'bit_rate': video_bitrate},
+            {'index': 1, 'codec_type': 'audio', 'bit_rate': '192000'},
+        ],
+        'format': {'duration': duration, 'size': '23250000',
+                   'bit_rate': format_bitrate},
+    }
+
+
+def c_media_metadata(payload):
+    """Inputs copied from reference/tests/test_media_metadata.py."""
+    from core import media_metadata as mm
+    docs = {}
+    for rational in ('24/1', '25/1', '30000/1001', '30/1', '50/1',
+                     '60000/1001', '60/1', '120/1', '240/1'):
+        docs[f'avg-{rational.replace("/", "_")}'] = _probe_payload(rational)
+    docs['vfr-average-over-real'] = _probe_payload('30000/1001', real='60/1')
+    configured = _probe_payload('30000/1001', real='60/1')
+    configured['format']['tags'] = {'fthr_frame_rate': '144/1',
+                                    'fthr_video_bitrate_bps': '25000000'}
+    docs['fthr-configured-overrides'] = configured
+    docs['missing-average-falls-back-to-real'] = _probe_payload('0/0', real='25/1')
+    docs['missing-rates-and-bitrate-not-invented'] = _probe_payload(
+        '0/0', real='N/A', video_bitrate='N/A')
+    size_fallback = _probe_payload('60/1', video_bitrate='N/A',
+                                   format_bitrate='N/A', duration='10')
+    size_fallback['format']['size'] = '1000000'
+    docs['total-bitrate-size-fallback'] = size_fallback
+    docs['absurd-rate-rejected'] = _probe_payload('100000/1', real='1/0')
+    docs['no-video-stream'] = {'streams': [{'index': 0, 'codec_type': 'audio'}]}
+    docs['no-streams-key'] = {'format': {}}
+    cases = []
+    for name, doc in docs.items():
+        meta = mm.parse_ffprobe_video_metadata(doc)
+        expected = None
+        if meta is not None:
+            expected = {
+                'duration_seconds': meta.duration_seconds,
+                'width': meta.width, 'height': meta.height,
+                'average_fps': meta.average_fps, 'real_fps': meta.real_fps,
+                'video_bitrate_bps': meta.video_bitrate_bps,
+                'total_bitrate_bps': meta.total_bitrate_bps,
+                'fps_source': meta.fps_source,
+                'fps_text': mm.format_fps(meta.average_fps),
+                'video_bitrate_text': mm.format_bitrate(meta.video_bitrate_bps),
+            }
+        cases.append({'name': name, 'ffprobe': doc, 'expected': expected})
+    frame_rates = [(v, mm.parse_frame_rate(v)) for v in (
+        '24/1', '30000/1001', '0/0', 'N/A', '', None, '1/0', '2000/1',
+        '59.94', 'abc', '1000/1', '1001/1')]
+    bitrate_text = [(v, mm.format_bitrate(v)) for v in (
+        None, 0, 500, 999_999, 1_000_000, 6_000_000, 25_500_000)]
+    fps_text = [(v, mm.format_fps(v)) for v in (
+        None, 0.0, 29.97002997, 30.0, 59.94005994, 144.0, 23.976)]
+    return {'cases': cases, 'frame_rate_cases': frame_rates,
+            'bitrate_text_cases': bitrate_text, 'fps_text_cases': fps_text}
+
+
+def c_combined_audio(payload):
+    """Inputs copied from reference/tests/test_combined_audio_policy.py."""
+    from core import combined_audio_policy as cap
+    def s(index, audio_index, title=None):
+        return cap.AudioStreamDescriptor(container_index=index,
+                                         audio_index=audio_index, title=title)
+    selections = []
+    def sel(name, manifest, streams):
+        selections.append({
+            'name': name, 'manifest': manifest,
+            'streams': [{'container_index': x.container_index,
+                         'audio_index': x.audio_index, 'title': x.title,
+                         'handler_name': x.handler_name} for x in streams],
+            'expected': list(cap.select_combined_audio_streams(manifest, streams)),
+        })
+    sel('manifest-system-and-mic', {'sources': [
+        {'stream_index': 1, 'source_type': 'system', 'display_name': 'Default Mix'},
+        {'stream_index': 2, 'source_type': 'application', 'display_name': 'Game'},
+        {'stream_index': 3, 'source_type': 'microphone', 'display_name': 'Microphone'},
+    ]}, (s(1, 0), s(2, 1), s(3, 2)))
+    sel('manifest-application-only', {'sources': [
+        {'stream_index': 1, 'source_type': 'application', 'display_name': 'Game'},
+        {'stream_index': 2, 'source_type': 'application', 'display_name': 'Chat'},
+    ]}, (s(1, 0), s(2, 1)))
+    sel('legacy-labels', None, (s(1, 0, 'System Audio'), s(2, 1, 'Microphone'),
+                                s(3, 2, 'Game')))
+    sel('legacy-unlabeled-keeps-all', None, (s(1, 0), s(2, 1)))
+    sel('legacy-mixed-case-labels', None, (s(1, 0, '  MIC audio '), s(2, 1, 'x')))
+    probe_streams = [
+        {'index': 0, 'codec_type': 'video'},
+        {'index': 3, 'codec_type': 'audio', 'tags': {'handler_name': 'System Audio'}},
+        {'index': 7, 'codec_type': 'audio', 'tags': {'title': 'Microphone'}},
+        {'index': 9, 'codec_type': 'audio', 'tags': {'title': 5}},
+    ]
+    descriptors = [{'container_index': d.container_index,
+                    'audio_index': d.audio_index, 'title': d.title,
+                    'handler_name': d.handler_name}
+                   for d in cap.descriptors_from_ffprobe_streams(probe_streams)]
+    filters = {str(list(ix)): cap.build_combined_audio_filter(ix)
+               for ix in ((0, 2), (3,), (0, 1, 2))}
+    return {'selections': selections, 'probe_streams': probe_streams,
+            'descriptors': descriptors, 'filters': filters}
+
+
+def c_encoder_caps(payload):
+    from core import encoder_capabilities as ec
+    backends = [
+        {'key': key, 'label': label, 'supports_presets': presets,
+         'codec_names': [[codec, list(names)] for codec, names in table]}
+        for key, label, presets, table in ec._platform_backends('linux')
+    ]
+    return {'backends': backends, 'cache_version': ec._cache_version('linux'),
+            'backend_keys': list(ec._platform_backend_keys('linux')),
+            'vaapi_device_default': '/dev/dri/renderD128'}
+
+
 CASES = {
+    'media-metadata': c_media_metadata, 'combined-audio': c_combined_audio,
+    'encoder-caps': c_encoder_caps,
     'settings': c_settings, 'theme-defaults': c_theme_defaults,
     'theme': c_theme, 'navigation': c_navigation, 'hotkeys': c_hotkeys,
     'hotkeys-legacy': c_hotkeys_legacy, 'error-codes': c_error_codes,
@@ -533,8 +654,11 @@ def run_case(case, payload=None, files=None):
         return _rewrite_home(result, {str(home), tmp})
 
 
-def write_json(rel, data):
-    path = OUT / rel
+MEDIA_OUT = ROOT / 'crates' / 'fthrust-media' / 'tests' / 'fixtures'
+
+
+def write_json(rel, data, out=None):
+    path = (out or OUT) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True,
                                ensure_ascii=False) + '\n', encoding='utf-8')
@@ -632,6 +756,10 @@ def main():
     write_json('capture-config.json', run_case('capture-config'))
     write_json('save-state.json', run_case('save-state'))
     write_json('capture-health.json', run_case('capture-health'))
+
+    write_json('media-metadata.json', run_case('media-metadata'), MEDIA_OUT)
+    write_json('combined-audio-policy.json', run_case('combined-audio'), MEDIA_OUT)
+    write_json('encoder-capabilities.json', run_case('encoder-caps'), MEDIA_OUT)
 
 
 if __name__ == '__main__':

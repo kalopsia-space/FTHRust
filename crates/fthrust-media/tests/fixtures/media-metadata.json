@@ -1,0 +1,722 @@
+{
+  "bitrate_text_cases": [
+    [
+      null,
+      "Unavailable"
+    ],
+    [
+      0,
+      "Unavailable"
+    ],
+    [
+      500,
+      "0 kbps"
+    ],
+    [
+      999999,
+      "1000 kbps"
+    ],
+    [
+      1000000,
+      "1 Mbps"
+    ],
+    [
+      6000000,
+      "6 Mbps"
+    ],
+    [
+      25500000,
+      "25.5 Mbps"
+    ]
+  ],
+  "cases": [
+    {
+      "expected": {
+        "average_fps": 24.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "24 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "24/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-24_1"
+    },
+    {
+      "expected": {
+        "average_fps": 25.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "25 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "25/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-25_1"
+    },
+    {
+      "expected": {
+        "average_fps": 29.97002997002997,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "29.97 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "30000/1001",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-30000_1001"
+    },
+    {
+      "expected": {
+        "average_fps": 30.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "30 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "30/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-30_1"
+    },
+    {
+      "expected": {
+        "average_fps": 50.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "50 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "50/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-50_1"
+    },
+    {
+      "expected": {
+        "average_fps": 59.94005994005994,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "59.94 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "60000/1001",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-60000_1001"
+    },
+    {
+      "expected": {
+        "average_fps": 60.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "60 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "60/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-60_1"
+    },
+    {
+      "expected": {
+        "average_fps": 120.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "120 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "120/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-120_1"
+    },
+    {
+      "expected": {
+        "average_fps": 240.0,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "240 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "240/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "avg-240_1"
+    },
+    {
+      "expected": {
+        "average_fps": 29.97002997002997,
+        "duration_seconds": 30.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "29.97 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "30000/1001",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "vfr-average-over-real"
+    },
+    {
+      "expected": {
+        "average_fps": 144.0,
+        "duration_seconds": 30.0,
+        "fps_source": "fthr_frame_rate",
+        "fps_text": "144 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 25000000,
+        "video_bitrate_text": "25 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000",
+          "tags": {
+            "fthr_frame_rate": "144/1",
+            "fthr_video_bitrate_bps": "25000000"
+          }
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "30000/1001",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "fthr-configured-overrides"
+    },
+    {
+      "expected": {
+        "average_fps": 25.0,
+        "duration_seconds": 30.0,
+        "fps_source": "r_frame_rate",
+        "fps_text": "25 FPS",
+        "height": 1080,
+        "real_fps": 25.0,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "0/0",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "25/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "missing-average-falls-back-to-real"
+    },
+    {
+      "expected": {
+        "average_fps": null,
+        "duration_seconds": 30.0,
+        "fps_source": null,
+        "fps_text": "Unavailable",
+        "height": 1080,
+        "real_fps": null,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": null,
+        "video_bitrate_text": "Unavailable",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "0/0",
+            "bit_rate": "N/A",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "N/A",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "missing-rates-and-bitrate-not-invented"
+    },
+    {
+      "expected": {
+        "average_fps": 60.0,
+        "duration_seconds": 10.0,
+        "fps_source": "avg_frame_rate",
+        "fps_text": "60 FPS",
+        "height": 1080,
+        "real_fps": 60.0,
+        "total_bitrate_bps": 800000,
+        "video_bitrate_bps": null,
+        "video_bitrate_text": "Unavailable",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "N/A",
+          "duration": "10",
+          "size": "1000000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "60/1",
+            "bit_rate": "N/A",
+            "codec_type": "video",
+            "duration": "10",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "60/1",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "total-bitrate-size-fallback"
+    },
+    {
+      "expected": {
+        "average_fps": null,
+        "duration_seconds": 30.0,
+        "fps_source": null,
+        "fps_text": "Unavailable",
+        "height": 1080,
+        "real_fps": null,
+        "total_bitrate_bps": 6200000,
+        "video_bitrate_bps": 6000000,
+        "video_bitrate_text": "6 Mbps",
+        "width": 1920
+      },
+      "ffprobe": {
+        "format": {
+          "bit_rate": "6200000",
+          "duration": "30.0",
+          "size": "23250000"
+        },
+        "streams": [
+          {
+            "avg_frame_rate": "100000/1",
+            "bit_rate": "6000000",
+            "codec_type": "video",
+            "duration": "30.0",
+            "height": 1080,
+            "index": 0,
+            "r_frame_rate": "1/0",
+            "width": 1920
+          },
+          {
+            "bit_rate": "192000",
+            "codec_type": "audio",
+            "index": 1
+          }
+        ]
+      },
+      "name": "absurd-rate-rejected"
+    },
+    {
+      "expected": null,
+      "ffprobe": {
+        "streams": [
+          {
+            "codec_type": "audio",
+            "index": 0
+          }
+        ]
+      },
+      "name": "no-video-stream"
+    },
+    {
+      "expected": null,
+      "ffprobe": {
+        "format": {}
+      },
+      "name": "no-streams-key"
+    }
+  ],
+  "fps_text_cases": [
+    [
+      null,
+      "Unavailable"
+    ],
+    [
+      0.0,
+      "Unavailable"
+    ],
+    [
+      29.97002997,
+      "29.97 FPS"
+    ],
+    [
+      30.0,
+      "30 FPS"
+    ],
+    [
+      59.94005994,
+      "59.94 FPS"
+    ],
+    [
+      144.0,
+      "144 FPS"
+    ],
+    [
+      23.976,
+      "23.98 FPS"
+    ]
+  ],
+  "frame_rate_cases": [
+    [
+      "24/1",
+      24.0
+    ],
+    [
+      "30000/1001",
+      29.97002997002997
+    ],
+    [
+      "0/0",
+      null
+    ],
+    [
+      "N/A",
+      null
+    ],
+    [
+      "",
+      null
+    ],
+    [
+      null,
+      null
+    ],
+    [
+      "1/0",
+      null
+    ],
+    [
+      "2000/1",
+      null
+    ],
+    [
+      "59.94",
+      59.94
+    ],
+    [
+      "abc",
+      null
+    ],
+    [
+      "1000/1",
+      1000.0
+    ],
+    [
+      "1001/1",
+      null
+    ]
+  ]
+}

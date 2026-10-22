@@ -1,0 +1,205 @@
+{
+  "descriptors": [
+    {
+      "audio_index": 0,
+      "container_index": 3,
+      "handler_name": "System Audio",
+      "title": null
+    },
+    {
+      "audio_index": 1,
+      "container_index": 7,
+      "handler_name": null,
+      "title": "Microphone"
+    },
+    {
+      "audio_index": 2,
+      "container_index": 9,
+      "handler_name": null,
+      "title": null
+    }
+  ],
+  "filters": {
+    "[0, 1, 2]": "[0:a:0]aresample=first_pts=0:async=0[audio_input_0];[0:a:1]aresample=first_pts=0:async=0[audio_input_1];[0:a:2]aresample=first_pts=0:async=0[audio_input_2];[audio_input_0][audio_input_1][audio_input_2]amix=inputs=3:normalize=0:duration=longest:dropout_transition=0,alimiter=limit=0.98:level=disabled[aout]",
+    "[0, 2]": "[0:a:0]aresample=first_pts=0:async=0[audio_input_0];[0:a:2]aresample=first_pts=0:async=0[audio_input_1];[audio_input_0][audio_input_1]amix=inputs=2:normalize=0:duration=longest:dropout_transition=0,alimiter=limit=0.98:level=disabled[aout]",
+    "[3]": "[0:a:3]anull[aout]"
+  },
+  "probe_streams": [
+    {
+      "codec_type": "video",
+      "index": 0
+    },
+    {
+      "codec_type": "audio",
+      "index": 3,
+      "tags": {
+        "handler_name": "System Audio"
+      }
+    },
+    {
+      "codec_type": "audio",
+      "index": 7,
+      "tags": {
+        "title": "Microphone"
+      }
+    },
+    {
+      "codec_type": "audio",
+      "index": 9,
+      "tags": {
+        "title": 5
+      }
+    }
+  ],
+  "selections": [
+    {
+      "expected": [
+        0,
+        2
+      ],
+      "manifest": {
+        "sources": [
+          {
+            "display_name": "Default Mix",
+            "source_type": "system",
+            "stream_index": 1
+          },
+          {
+            "display_name": "Game",
+            "source_type": "application",
+            "stream_index": 2
+          },
+          {
+            "display_name": "Microphone",
+            "source_type": "microphone",
+            "stream_index": 3
+          }
+        ]
+      },
+      "name": "manifest-system-and-mic",
+      "streams": [
+        {
+          "audio_index": 0,
+          "container_index": 1,
+          "handler_name": null,
+          "title": null
+        },
+        {
+          "audio_index": 1,
+          "container_index": 2,
+          "handler_name": null,
+          "title": null
+        },
+        {
+          "audio_index": 2,
+          "container_index": 3,
+          "handler_name": null,
+          "title": null
+        }
+      ]
+    },
+    {
+      "expected": [],
+      "manifest": {
+        "sources": [
+          {
+            "display_name": "Game",
+            "source_type": "application",
+            "stream_index": 1
+          },
+          {
+            "display_name": "Chat",
+            "source_type": "application",
+            "stream_index": 2
+          }
+        ]
+      },
+      "name": "manifest-application-only",
+      "streams": [
+        {
+          "audio_index": 0,
+          "container_index": 1,
+          "handler_name": null,
+          "title": null
+        },
+        {
+          "audio_index": 1,
+          "container_index": 2,
+          "handler_name": null,
+          "title": null
+        }
+      ]
+    },
+    {
+      "expected": [
+        0,
+        1
+      ],
+      "manifest": null,
+      "name": "legacy-labels",
+      "streams": [
+        {
+          "audio_index": 0,
+          "container_index": 1,
+          "handler_name": null,
+          "title": "System Audio"
+        },
+        {
+          "audio_index": 1,
+          "container_index": 2,
+          "handler_name": null,
+          "title": "Microphone"
+        },
+        {
+          "audio_index": 2,
+          "container_index": 3,
+          "handler_name": null,
+          "title": "Game"
+        }
+      ]
+    },
+    {
+      "expected": [
+        0,
+        1
+      ],
+      "manifest": null,
+      "name": "legacy-unlabeled-keeps-all",
+      "streams": [
+        {
+          "audio_index": 0,
+          "container_index": 1,
+          "handler_name": null,
+          "title": null
+        },
+        {
+          "audio_index": 1,
+          "container_index": 2,
+          "handler_name": null,
+          "title": null
+        }
+      ]
+    },
+    {
+      "expected": [
+        0
+      ],
+      "manifest": null,
+      "name": "legacy-mixed-case-labels",
+      "streams": [
+        {
+          "audio_index": 0,
+          "container_index": 1,
+          "handler_name": null,
+          "title": "  MIC audio "
+        },
+        {
+          "audio_index": 1,
+          "container_index": 2,
+          "handler_name": null,
+          "title": "x"
+        }
+      ]
+    }
+  ]
+}

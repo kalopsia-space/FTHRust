@@ -1,0 +1,117 @@
+{
+  "backend_keys": [
+    "nvenc",
+    "amf",
+    "qsv",
+    "software"
+  ],
+  "backends": [
+    {
+      "codec_names": [
+        [
+          "h264",
+          [
+            "h264_nvenc"
+          ]
+        ],
+        [
+          "hevc",
+          [
+            "hevc_nvenc"
+          ]
+        ],
+        [
+          "av1",
+          [
+            "av1_nvenc"
+          ]
+        ]
+      ],
+      "key": "nvenc",
+      "label": "NVIDIA NVENC",
+      "supports_presets": true
+    },
+    {
+      "codec_names": [
+        [
+          "h264",
+          [
+            "h264_vaapi",
+            "h264_amf"
+          ]
+        ],
+        [
+          "hevc",
+          [
+            "hevc_vaapi",
+            "hevc_amf"
+          ]
+        ],
+        [
+          "av1",
+          [
+            "av1_vaapi",
+            "av1_amf"
+          ]
+        ]
+      ],
+      "key": "amf",
+      "label": "VA-API (AMD / Intel)",
+      "supports_presets": false
+    },
+    {
+      "codec_names": [
+        [
+          "h264",
+          [
+            "h264_qsv"
+          ]
+        ],
+        [
+          "hevc",
+          [
+            "hevc_qsv"
+          ]
+        ],
+        [
+          "av1",
+          [
+            "av1_qsv"
+          ]
+        ]
+      ],
+      "key": "qsv",
+      "label": "Intel Quick Sync",
+      "supports_presets": false
+    },
+    {
+      "codec_names": [
+        [
+          "h264",
+          [
+            "libopenh264"
+          ]
+        ],
+        [
+          "hevc",
+          [
+            "libkvazaar"
+          ]
+        ],
+        [
+          "av1",
+          [
+            "libsvtav1",
+            "libaom-av1",
+            "librav1e"
+          ]
+        ]
+      ],
+      "key": "software",
+      "label": "Software",
+      "supports_presets": false
+    }
+  ],
+  "cache_version": 3,
+  "vaapi_device_default": "/dev/dri/renderD128"
+}
