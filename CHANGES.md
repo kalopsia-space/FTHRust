@@ -2,6 +2,10 @@
 
 ## Fixed
 
+- Settings pages keep their real width when a scrollbar appears instead of reflowing wrapped labels under it; the Audio page hides the scrollbar when it fits.
+- A navigation chord that conflicts with another binding is reported next to the bindings and the old binding is kept, instead of silently overwriting it.
+- Theme edits are a draft until Apply theme; Reset all restores every default in one step.
+
 - Settings file that is valid JSON but not an object is quarantined instead of crashing the loader.
 - A failed quarantine rename and undecodable settings files no longer stop startup; defaults are used as in the reference's intent.
 - Hotkeys loader drops non-string bindings instead of failing on the whole file.
@@ -41,6 +45,8 @@
 - Clip saves carry one AAC track per captured source, labelled `Default Mix` and `Microphone`, and report which tracks were written.
 
 ## Added
+
+- `fthrust-ui` crate: the egui shell. Theme tokens, fonts and icons from the same assets, a frameless Wayland window with the title strip, toolbar, navigation rail, error bar, all seven Settings tabs, the four toolbar popups and the dialogs, each held to the PySide6 reference by a marker-for-marker fidelity gate (`docs/ui-fidelity.md`). Visuals change on Apply theme; performance presets and keyboard navigation chords are recorded and validated through the core crate.
 
 - `fthrust-media` crate: FFmpeg encoder with hardware candidates, encoded GOP ring, transactional MP4 writer, fragmented recorder, probe, thumbnails, capability cache and combined-audio policy, tested against reference fixtures and synthetic frames.
 - `fthrust-ipc`, `fthrust-wayland`, `fthrust-portal` and `fthrust-engine` crates: the capture daemon with ext-image-copy-capture, wlr-screencopy and ScreenCast-portal backends, PipeWire audio, recovery and health, replay saves, continuous recording and a JSON-over-Unix-socket protocol (`docs/engine-protocol.md`). A synthetic backend (`FTHRUST_SYNTHETIC_BACKEND=1`) lets the whole daemon run in CI.

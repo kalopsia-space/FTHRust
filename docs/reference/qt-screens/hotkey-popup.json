@@ -1,0 +1,1951 @@
+{
+ "schema": 1,
+ "screen": "hotkey-popup",
+ "size": [
+  550,
+  526
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QLabel[HOTKEYS]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    15,
+    512,
+    35
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      32
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      32
+     ],
+     "rgb": "#494e4a",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      15
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "HOTKEYS",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 43,
+    "advance": 43
+   }
+  },
+  {
+   "name": "qt_scrollarea_viewport",
+   "class": "QWidget",
+   "rect": [
+    19,
+    62,
+    512,
+    344
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      234
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      234
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      62
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "hotkeyActionRow",
+   "class": "QFrame",
+   "rect": [
+    19,
+    62,
+    512,
+    79
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      101
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      101
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      62
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[CAPTURE CLIP]",
+   "class": "QLabel",
+   "rect": [
+    32,
+    73,
+    108,
+    57
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      86,
+      101
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      32,
+      101
+     ],
+     "rgb": "#535756",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      86,
+      73
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "CAPTURE CLIP",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 81,
+    "advance": 81
+   }
+  },
+  {
+   "name": "QLabel[Keyboard]",
+   "class": "QLabel",
+   "rect": [
+    148,
+    73,
+    181,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      238,
+      83
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      83
+     ],
+     "rgb": "#323936",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      238,
+      73
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Keyboard",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 45,
+    "advance": 44
+   }
+  },
+  {
+   "name": "QLabel[Controller]",
+   "class": "QLabel",
+   "rect": [
+    337,
+    73,
+    181,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      427,
+      83
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      83
+     ],
+     "rgb": "#474f4b",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      427,
+      73
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Controller",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 50,
+    "advance": 49
+   }
+  },
+  {
+   "name": "_KeyboardBindingButton[F9]",
+   "class": "_KeyboardBindingButton",
+   "rect": [
+    148,
+    100,
+    127,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      211,
+      115
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      115
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      211,
+      100
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "F9",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 15,
+    "advance": 14
+   }
+  },
+  {
+   "name": "QPushButton[Clear]",
+   "class": "QPushButton",
+   "rect": [
+    283,
+    100,
+    46,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      306,
+      115
+     ],
+     "rgb": "#6b736f",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      283,
+      115
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      306,
+      100
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "_ControllerBindingButton[Add]",
+   "class": "_ControllerBindingButton",
+   "rect": [
+    337,
+    100,
+    127,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      400,
+      115
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      115
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      400,
+      100
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "Add",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 23,
+    "advance": 23
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#2",
+   "class": "QPushButton",
+   "rect": [
+    472,
+    100,
+    46,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      495,
+      115
+     ],
+     "rgb": "#555e59",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      472,
+      115
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    },
+    {
+     "role": "top",
+     "at": [
+      495,
+      100
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "hotkeyActionRow#2",
+   "class": "QFrame",
+   "rect": [
+    19,
+    151,
+    512,
+    78
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      190
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      190
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      151
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[SCREENSHOT]",
+   "class": "QLabel",
+   "rect": [
+    32,
+    162,
+    108,
+    56
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      86,
+      190
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      32,
+      190
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      86,
+      162
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "SCREENSHOT",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 73,
+    "advance": 73
+   }
+  },
+  {
+   "name": "QLabel[Keyboard]#2",
+   "class": "QLabel",
+   "rect": [
+    148,
+    162,
+    181,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      238,
+      172
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      172
+     ],
+     "rgb": "#323936",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      238,
+      162
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Keyboard",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 45,
+    "advance": 44
+   }
+  },
+  {
+   "name": "QLabel[Controller]#2",
+   "class": "QLabel",
+   "rect": [
+    337,
+    162,
+    181,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      427,
+      172
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      172
+     ],
+     "rgb": "#474f4b",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      427,
+      162
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Controller",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 50,
+    "advance": 49
+   }
+  },
+  {
+   "name": "_KeyboardBindingButton[F12]",
+   "class": "_KeyboardBindingButton",
+   "rect": [
+    148,
+    188,
+    127,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      211,
+      203
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      203
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      211,
+      188
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "F12",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 21,
+    "advance": 20
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#3",
+   "class": "QPushButton",
+   "rect": [
+    283,
+    188,
+    46,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      306,
+      203
+     ],
+     "rgb": "#6b736f",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      283,
+      203
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      306,
+      188
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "_ControllerBindingButton[Add]#2",
+   "class": "_ControllerBindingButton",
+   "rect": [
+    337,
+    188,
+    127,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      400,
+      203
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      203
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      400,
+      188
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "Add",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 23,
+    "advance": 23
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#4",
+   "class": "QPushButton",
+   "rect": [
+    472,
+    188,
+    46,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      495,
+      203
+     ],
+     "rgb": "#555e59",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      472,
+      203
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    },
+    {
+     "role": "top",
+     "at": [
+      495,
+      188
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "hotkeyActionRow#3",
+   "class": "QFrame",
+   "rect": [
+    19,
+    239,
+    512,
+    79
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      278
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      278
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      239
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[CONFIRM GAME]",
+   "class": "QLabel",
+   "rect": [
+    32,
+    250,
+    108,
+    57
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      86,
+      278
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      32,
+      278
+     ],
+     "rgb": "#535756",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      86,
+      250
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "CONFIRM GAME",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 87,
+    "advance": 86
+   }
+  },
+  {
+   "name": "QLabel[Keyboard]#3",
+   "class": "QLabel",
+   "rect": [
+    148,
+    250,
+    181,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      238,
+      260
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      260
+     ],
+     "rgb": "#323936",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      238,
+      250
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Keyboard",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 45,
+    "advance": 44
+   }
+  },
+  {
+   "name": "QLabel[Controller]#3",
+   "class": "QLabel",
+   "rect": [
+    337,
+    250,
+    181,
+    21
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      427,
+      260
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      260
+     ],
+     "rgb": "#474f4b",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      427,
+      250
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Controller",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 50,
+    "advance": 49
+   }
+  },
+  {
+   "name": "_KeyboardBindingButton[F8]",
+   "class": "_KeyboardBindingButton",
+   "rect": [
+    148,
+    277,
+    127,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      211,
+      292
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      292
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      211,
+      277
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "F8",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 15,
+    "advance": 14
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#5",
+   "class": "QPushButton",
+   "rect": [
+    283,
+    277,
+    46,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      306,
+      292
+     ],
+     "rgb": "#6b736f",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      283,
+      292
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      306,
+      277
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "_ControllerBindingButton[Add]#3",
+   "class": "_ControllerBindingButton",
+   "rect": [
+    337,
+    277,
+    127,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      400,
+      292
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      292
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      400,
+      277
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "Add",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 23,
+    "advance": 23
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#6",
+   "class": "QPushButton",
+   "rect": [
+    472,
+    277,
+    46,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      495,
+      292
+     ],
+     "rgb": "#555e59",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      472,
+      292
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    },
+    {
+     "role": "top",
+     "at": [
+      495,
+      277
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "hotkeyActionRow#4",
+   "class": "QFrame",
+   "rect": [
+    19,
+    328,
+    512,
+    78
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      367
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      367
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      328
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[DISMISS GAME]",
+   "class": "QLabel",
+   "rect": [
+    32,
+    339,
+    108,
+    56
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      86,
+      367
+     ],
+     "rgb": "#dee1df",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      32,
+      367
+     ],
+     "rgb": "#2b302d",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      86,
+      339
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "DISMISS GAME",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 82,
+    "advance": 82
+   }
+  },
+  {
+   "name": "QLabel[Keyboard]#4",
+   "class": "QLabel",
+   "rect": [
+    148,
+    339,
+    181,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      238,
+      349
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      349
+     ],
+     "rgb": "#323936",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      238,
+      339
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Keyboard",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 45,
+    "advance": 44
+   }
+  },
+  {
+   "name": "QLabel[Controller]#4",
+   "class": "QLabel",
+   "rect": [
+    337,
+    339,
+    181,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      427,
+      349
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      349
+     ],
+     "rgb": "#474f4b",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      427,
+      339
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Controller",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 50,
+    "advance": 49
+   }
+  },
+  {
+   "name": "_KeyboardBindingButton[F7]",
+   "class": "_KeyboardBindingButton",
+   "rect": [
+    148,
+    365,
+    127,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      211,
+      380
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      148,
+      380
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      211,
+      365
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "F7",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 13,
+    "advance": 13
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#7",
+   "class": "QPushButton",
+   "rect": [
+    283,
+    365,
+    46,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      306,
+      380
+     ],
+     "rgb": "#6b736f",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      283,
+      380
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      306,
+      365
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "_ControllerBindingButton[Add]#4",
+   "class": "_ControllerBindingButton",
+   "rect": [
+    337,
+    365,
+    127,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      400,
+      380
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      337,
+      380
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      400,
+      365
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "Add",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 23,
+    "advance": 23
+   }
+  },
+  {
+   "name": "QPushButton[Clear]#8",
+   "class": "QPushButton",
+   "rect": [
+    472,
+    365,
+    46,
+    30
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      495,
+      380
+     ],
+     "rgb": "#555e59",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      472,
+      380
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    },
+    {
+     "role": "top",
+     "at": [
+      495,
+      365
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clear",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 26,
+    "advance": 25
+   }
+  },
+  {
+   "name": "QLabel[Bind your preferred keys to these comman]",
+   "class": "QLabel",
+   "rect": [
+    19,
+    418,
+    512,
+    91
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      275,
+      463
+     ],
+     "rgb": "#5c6560",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      19,
+      463
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      275,
+      418
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Noto Sans Mono",
+    "matched_weight": 500,
+    "matched_px": 12,
+    "content": "Bind your preferred keys to these commands:  echo -n \"save_clip\" | /usr/bin/nc -U /run/user/1000/fthr/hotkey.sock echo -",
+    "px": 12,
+    "weight": 500,
+    "family": "monospace",
+    "ascent": 13,
+    "descent": 4,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 8,
+    "bounding_height": 16,
+    "bounding_width": 306,
+    "advance": 309
+   }
+  }
+ ]
+}

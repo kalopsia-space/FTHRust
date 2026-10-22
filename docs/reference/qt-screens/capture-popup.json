@@ -1,0 +1,887 @@
+{
+ "schema": 1,
+ "screen": "capture-popup",
+ "size": [
+  460,
+  363
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QToolButton[Clips]",
+   "class": "QToolButton",
+   "rect": [
+    21,
+    17,
+    205,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      123,
+      32
+     ],
+     "rgb": "#1ecc91",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      32
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      123,
+      17
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "checked": true,
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Clips",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 28,
+    "advance": 28
+   }
+  },
+  {
+   "name": "QToolButton[Recording]",
+   "class": "QToolButton",
+   "rect": [
+    234,
+    17,
+    205,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      336,
+      32
+     ],
+     "rgb": "#a0aba5",
+     "token": "TEXT_DIM"
+    },
+    {
+     "role": "edge",
+     "at": [
+      234,
+      32
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      336,
+      17
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Recording",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 58,
+    "advance": 57
+   }
+  },
+  {
+   "name": "QLabel[Clip length]",
+   "class": "QLabel",
+   "rect": [
+    21,
+    59,
+    92,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      78
+     ],
+     "rgb": "#292e2b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      78
+     ],
+     "rgb": "#6c706f",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      59
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Clip length",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 53,
+    "advance": 52
+   }
+  },
+  {
+   "name": "_DropdownCombo[30s]",
+   "class": "_DropdownCombo",
+   "rect": [
+    129,
+    59,
+    310,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      284,
+      78
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      78
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      284,
+      59
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "30s",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 21,
+    "advance": 21
+   }
+  },
+  {
+   "name": "QPushButton[Add custom clip length…]",
+   "class": "QPushButton",
+   "rect": [
+    21,
+    109,
+    418,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      230,
+      129
+     ],
+     "rgb": "#3d413e",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      129
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      230,
+      109
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Add custom clip length…",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 138,
+    "advance": 138
+   }
+  },
+  {
+   "name": "QLabel[Framerate]",
+   "class": "QLabel",
+   "rect": [
+    21,
+    162,
+    92,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      181
+     ],
+     "rgb": "#dbdedc",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      181
+     ],
+     "rgb": "#4d514e",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      162
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Framerate",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 49,
+    "advance": 48
+   }
+  },
+  {
+   "name": "_DropdownCombo[60]",
+   "class": "_DropdownCombo",
+   "rect": [
+    129,
+    162,
+    310,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      284,
+      181
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      181
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      284,
+      162
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "60",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 15,
+    "advance": 16
+   }
+  },
+  {
+   "name": "QLabel[Resolution]",
+   "class": "QLabel",
+   "rect": [
+    21,
+    212,
+    92,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      231
+     ],
+     "rgb": "#e6e9e7",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      231
+     ],
+     "rgb": "#4d514e",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      212
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Resolution",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 51,
+    "advance": 51
+   }
+  },
+  {
+   "name": "_DropdownCombo[Source]",
+   "class": "_DropdownCombo",
+   "rect": [
+    129,
+    212,
+    310,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      284,
+      231
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      231
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      284,
+      212
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "Source",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 37,
+    "advance": 37
+   }
+  },
+  {
+   "name": "QLabel[Quality]",
+   "class": "QLabel",
+   "rect": [
+    21,
+    262,
+    92,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      281
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      281
+     ],
+     "rgb": "#6c706f",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      262
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Quality",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 35,
+    "advance": 34
+   }
+  },
+  {
+   "name": "_DropdownCombo[Medium]",
+   "class": "_DropdownCombo",
+   "rect": [
+    129,
+    262,
+    310,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      284,
+      281
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      281
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      284,
+      262
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "Medium",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 43,
+    "advance": 43
+   }
+  },
+  {
+   "name": "QLabel[Custom bitrate]",
+   "class": "QLabel",
+   "rect": [
+    21,
+    312,
+    92,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      67,
+      329
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      21,
+      329
+     ],
+     "rgb": "#6c706f",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      67,
+      312
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Custom bitrate",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 72,
+    "advance": 71
+   }
+  },
+  {
+   "name": "fthrNumberSpin",
+   "class": "_NumberSpinBox",
+   "rect": [
+    129,
+    312,
+    310,
+    34
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      284,
+      329
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      329
+     ],
+     "rgb": "#262f2a",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      284,
+      312
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit",
+   "class": "QLineEdit",
+   "rect": [
+    129,
+    319,
+    1,
+    20
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      129,
+      329
+     ],
+     "rgb": "#262f2a",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      129,
+      329
+     ],
+     "rgb": "#262f2a",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      129,
+      319
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "25000 kbps",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 79,
+    "advance": 79
+   }
+  },
+  {
+   "name": "fthrStepDown",
+   "class": "IconButton",
+   "rect": [
+    382,
+    313,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      396,
+      329
+     ],
+     "rgb": "#2c3130",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      382,
+      329
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      396,
+      313
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  },
+  {
+   "name": "fthrStepUp",
+   "class": "IconButton",
+   "rect": [
+    410,
+    313,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      424,
+      329
+     ],
+     "rgb": "#828584",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      410,
+      329
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      424,
+      313
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    }
+   ]
+  }
+ ]
+}

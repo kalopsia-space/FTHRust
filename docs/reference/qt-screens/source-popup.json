@@ -1,0 +1,185 @@
+{
+ "schema": 1,
+ "screen": "source-popup",
+ "size": [
+  300,
+  148
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QLabel[Capture source]",
+   "class": "QLabel",
+   "rect": [
+    17,
+    15,
+    266,
+    18
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      150,
+      24
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      17,
+      24
+     ],
+     "rgb": "#6c706f",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      150,
+      15
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 12,
+    "content": "Capture source",
+    "px": 12,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 74,
+    "advance": 73
+   }
+  },
+  {
+   "name": "_DropdownCombo[Desktop]",
+   "class": "_DropdownCombo",
+   "rect": [
+    17,
+    45,
+    266,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      150,
+      64
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      17,
+      64
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      150,
+      45
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "Desktop",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 44,
+    "advance": 44
+   }
+  },
+  {
+   "name": "_DropdownCombo[First Screen (Default)]",
+   "class": "_DropdownCombo",
+   "rect": [
+    17,
+    95,
+    266,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      150,
+      114
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      17,
+      114
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      150,
+      95
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "First Screen (Default)",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 115,
+    "advance": 115
+   }
+  }
+ ]
+}

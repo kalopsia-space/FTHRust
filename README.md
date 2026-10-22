@@ -10,6 +10,16 @@ Design: [docs/superpowers/specs/2026-10-22-fthrust-design.md](docs/superpowers/s
 
 Derived from FTHR Clips by FTHR-Community, GPL-3.0-only.
 
+## Running the UI
+
+```sh
+cargo run -p fthrust-ui --release        # the FTHR Clips window (Wayland)
+FTHRUST_ASSETS=/path/to/assets cargo run -p fthrust-ui   # assets elsewhere than ./assets
+```
+
+`fthrust --version` prints the version. The UI needs a Wayland session; the
+engine is started by the UI (plan 5) or by hand as below.
+
 ## Running the engine by hand
 
 The capture daemon is a separate binary. For debugging it can be driven

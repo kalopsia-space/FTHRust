@@ -1,0 +1,1737 @@
+{
+ "schema": 1,
+ "screen": "export-preset",
+ "size": [
+  420,
+  447
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "fthrDialogHeader",
+   "class": "_DialogHeader",
+   "rect": [
+    0,
+    0,
+    420,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      210,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      210,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "fthrDialogTitle",
+   "class": "QLabel",
+   "rect": [
+    12,
+    0,
+    101,
+    37
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      62,
+      18
+     ],
+     "rgb": "#c4c8c6",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      12,
+      18
+     ],
+     "rgb": "#303531",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      62,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "New export preset",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 101,
+    "advance": 101
+   }
+  },
+  {
+   "name": "fthrDialogClose",
+   "class": "IconButton",
+   "rect": [
+    384,
+    3,
+    30,
+    30
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      399,
+      18
+     ],
+     "rgb": "#707974",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      384,
+      18
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      399,
+      3
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[Name]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    54,
+    31,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      31,
+      74
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      74
+     ],
+     "rgb": "#161817",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      31,
+      54
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Name",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 31,
+    "advance": 31
+   }
+  },
+  {
+   "name": "QLabel[Target file size]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    102,
+    78,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      55,
+      119
+     ],
+     "rgb": "#a6a9a8",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      119
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      55,
+      102
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Target file size",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 78,
+    "advance": 78
+   }
+  },
+  {
+   "name": "presetStepper",
+   "class": "_PresetDoubleSpinBox",
+   "rect": [
+    108,
+    102,
+    296,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      119
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      119
+     ],
+     "rgb": "#2a322d",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      102
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit",
+   "class": "QLineEdit",
+   "rect": [
+    108,
+    109,
+    1,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      108,
+      119
+     ],
+     "rgb": "#2a322d",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      119
+     ],
+     "rgb": "#2a322d",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      108,
+      109
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "25.0 MB",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 50,
+    "advance": 50
+   }
+  },
+  {
+   "name": "presetStepDown",
+   "class": "IconButton",
+   "rect": [
+    347,
+    103,
+    28,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      361,
+      119
+     ],
+     "rgb": "#343b36",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      347,
+      119
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      361,
+      103
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "presetStepUp",
+   "class": "IconButton",
+   "rect": [
+    375,
+    103,
+    28,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      389,
+      119
+     ],
+     "rgb": "#8c9790",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      375,
+      119
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      389,
+      103
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QCheckBox[Limit resolution]",
+   "class": "QCheckBox",
+   "rect": [
+    108,
+    144,
+    296,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      157
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      157
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      144
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
+    "content": "Limit resolution",
+    "px": 17,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "leading": 0,
+    "line_spacing": 25,
+    "avg_char_width": 8,
+    "bounding_height": 25,
+    "bounding_width": 96,
+    "advance": 96
+   }
+  },
+  {
+   "name": "QLabel[Resolution]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    178,
+    57,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      44,
+      195
+     ],
+     "rgb": "#515453",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      195
+     ],
+     "rgb": "#161817",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      44,
+      178
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Resolution",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 57,
+    "advance": 57
+   }
+  },
+  {
+   "name": "presetStepper#2",
+   "class": "_PresetSpinBox",
+   "rect": [
+    108,
+    178,
+    118,
+    34
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      167,
+      195
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      167,
+      178
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit#2",
+   "class": "QLineEdit",
+   "rect": [
+    108,
+    185,
+    1,
+    20
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      108,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      108,
+      185
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "1920",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 30,
+    "advance": 30
+   }
+  },
+  {
+   "name": "presetStepDown#2",
+   "class": "IconButton",
+   "rect": [
+    169,
+    179,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      183,
+      195
+     ],
+     "rgb": "#313633",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      169,
+      195
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      183,
+      179
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "presetStepUp#2",
+   "class": "IconButton",
+   "rect": [
+    197,
+    179,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      211,
+      195
+     ],
+     "rgb": "#838684",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      197,
+      195
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      211,
+      179
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[×]",
+   "class": "QLabel",
+   "rect": [
+    226,
+    178,
+    60,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      195
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      226,
+      195
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      178
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "×",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 6,
+    "advance": 6
+   }
+  },
+  {
+   "name": "presetStepper#3",
+   "class": "_PresetSpinBox",
+   "rect": [
+    286,
+    178,
+    118,
+    34
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      345,
+      195
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      286,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      345,
+      178
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit#3",
+   "class": "QLineEdit",
+   "rect": [
+    286,
+    185,
+    1,
+    20
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      286,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      286,
+      195
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      286,
+      185
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "1080",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 30,
+    "advance": 30
+   }
+  },
+  {
+   "name": "presetStepDown#3",
+   "class": "IconButton",
+   "rect": [
+    347,
+    179,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      361,
+      195
+     ],
+     "rgb": "#313633",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      347,
+      195
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      361,
+      179
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "presetStepUp#3",
+   "class": "IconButton",
+   "rect": [
+    375,
+    179,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      389,
+      195
+     ],
+     "rgb": "#838684",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      375,
+      195
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      389,
+      179
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QCheckBox[Limit frame rate]",
+   "class": "QCheckBox",
+   "rect": [
+    108,
+    220,
+    296,
+    26
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      233
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      233
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      220
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "checked": false,
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 17,
+    "content": "Limit frame rate",
+    "px": 17,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 20,
+    "descent": 5,
+    "height": 25,
+    "leading": 0,
+    "line_spacing": 25,
+    "avg_char_width": 8,
+    "bounding_height": 25,
+    "bounding_width": 99,
+    "advance": 100
+   }
+  },
+  {
+   "name": "QLabel[Frame rate]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    254,
+    59,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      45,
+      271
+     ],
+     "rgb": "#131615",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      271
+     ],
+     "rgb": "#161817",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      45,
+      254
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Frame rate",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 58,
+    "advance": 58
+   }
+  },
+  {
+   "name": "presetStepper#4",
+   "class": "_PresetDoubleSpinBox",
+   "rect": [
+    108,
+    254,
+    296,
+    34
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      271
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      271
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      254
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit#4",
+   "class": "QLineEdit",
+   "rect": [
+    108,
+    261,
+    1,
+    20
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      108,
+      271
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      271
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      108,
+      261
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "60.00 FPS",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 61,
+    "advance": 61
+   }
+  },
+  {
+   "name": "presetStepDown#4",
+   "class": "IconButton",
+   "rect": [
+    347,
+    255,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      361,
+      271
+     ],
+     "rgb": "#313633",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      347,
+      271
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      361,
+      255
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "presetStepUp#4",
+   "class": "IconButton",
+   "rect": [
+    375,
+    255,
+    28,
+    32
+   ],
+   "enabled": false,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      389,
+      271
+     ],
+     "rgb": "#838684",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      375,
+      271
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      389,
+      255
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[Video codec]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    296,
+    66,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      49,
+      315
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      315
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      49,
+      296
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Video codec",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 66,
+    "advance": 65
+   }
+  },
+  {
+   "name": "WheelSafeComboBox[H.264 (reviewed runtime)]",
+   "class": "WheelSafeComboBox",
+   "rect": [
+    108,
+    296,
+    296,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      315
+     ],
+     "rgb": "#424744",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      315
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      296
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "H.264 (reviewed runtime)",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 138,
+    "advance": 138
+   }
+  },
+  {
+   "name": "QLabel[Audio]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    342,
+    31,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      31,
+      359
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      359
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      31,
+      342
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 15,
+    "content": "Audio",
+    "px": 15,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 31,
+    "advance": 30
+   }
+  },
+  {
+   "name": "presetStepper#5",
+   "class": "_PresetSpinBox",
+   "rect": [
+    108,
+    342,
+    296,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      256,
+      359
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      359
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      256,
+      342
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ]
+  },
+  {
+   "name": "qt_spinbox_lineedit#5",
+   "class": "QLineEdit",
+   "rect": [
+    108,
+    349,
+    1,
+    20
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      108,
+      359
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      108,
+      359
+     ],
+     "rgb": "#dde1de",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      108,
+      349
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "128 kbps AAC",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 81,
+    "advance": 81
+   }
+  },
+  {
+   "name": "presetStepDown#5",
+   "class": "IconButton",
+   "rect": [
+    347,
+    343,
+    28,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      361,
+      359
+     ],
+     "rgb": "#343b36",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      347,
+      359
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      361,
+      343
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "presetStepUp#5",
+   "class": "IconButton",
+   "rect": [
+    375,
+    343,
+    28,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      389,
+      359
+     ],
+     "rgb": "#8c9790",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      375,
+      359
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      389,
+      343
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QPushButton[Cancel]",
+   "class": "QPushButton",
+   "rect": [
+    223,
+    392,
+    72,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      259,
+      412
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "edge",
+     "at": [
+      223,
+      412
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    },
+    {
+     "role": "top",
+     "at": [
+      259,
+      392
+     ],
+     "rgb": "#49584f",
+     "token": "BORDER_HI"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Cancel",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 37,
+    "advance": 37
+   }
+  },
+  {
+   "name": "QPushButton[Save preset]",
+   "class": "QPushButton",
+   "rect": [
+    303,
+    392,
+    101,
+    41
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      353,
+      412
+     ],
+     "rgb": "#189c6f",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      303,
+      412
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      353,
+      392
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Save preset",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 65,
+    "advance": 65
+   }
+  }
+ ]
+}

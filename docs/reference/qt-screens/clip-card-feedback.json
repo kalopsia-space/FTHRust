@@ -1,0 +1,403 @@
+{
+ "schema": 1,
+ "screen": "clip-card-feedback",
+ "size": [
+  320,
+  268
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "cardThumb",
+   "class": "QFrame",
+   "rect": [
+    0,
+    0,
+    320,
+    180
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      160,
+      90
+     ],
+     "rgb": "#ecc6a9",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      90
+     ],
+     "rgb": "#ffffff",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      160,
+      0
+     ],
+     "rgb": "#ffffff",
+     "token": null
+    }
+   ]
+  },
+  {
+   "name": "cardDurationBadge",
+   "class": "QLabel",
+   "rect": [
+    262,
+    147,
+    48,
+    25
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      286,
+      159
+     ],
+     "rgb": "#121715",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      262,
+      159
+     ],
+     "rgb": "#121715",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      286,
+      147
+     ],
+     "rgb": "#161c19",
+     "token": null
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 14,
+    "content": "0:00",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 25,
+    "advance": 24
+   }
+  },
+  {
+   "name": "cardActionFeedback",
+   "class": "QLabel",
+   "rect": [
+    8,
+    8,
+    112,
+    31
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      64,
+      23
+     ],
+     "rgb": "#303834",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      8,
+      23
+     ],
+     "rgb": "#16bf87",
+     "token": "ACCENT_DIM"
+    },
+    {
+     "role": "top",
+     "at": [
+      64,
+      8
+     ],
+     "rgb": "#16bf87",
+     "token": "ACCENT_DIM"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 14,
+    "content": "Upload requested",
+    "px": 14,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 89,
+    "advance": 88
+   }
+  },
+  {
+   "name": "cardBody",
+   "class": "QFrame",
+   "rect": [
+    0,
+    180,
+    320,
+    88
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      160,
+      224
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      224
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      160,
+      180
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "cardTitle",
+   "class": "_RenameLabel",
+   "rect": [
+    10,
+    190,
+    188,
+    32
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      104,
+      206
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      10,
+      206
+     ],
+     "rgb": "#154c38",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      104,
+      190
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 15,
+    "content": "Overwatch_clip_from_04Oct2…",
+    "px": 15,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 8,
+    "bounding_height": 22,
+    "bounding_width": 183,
+    "advance": 182
+   }
+  },
+  {
+   "name": "cardMetadata",
+   "class": "QLabel",
+   "rect": [
+    10,
+    225,
+    188,
+    33
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      104,
+      241
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      10,
+      241
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      104,
+      225
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 12,
+    "content": "Screenshot",
+    "px": 12,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 14,
+    "descent": 3,
+    "height": 17,
+    "leading": 0,
+    "line_spacing": 17,
+    "avg_char_width": 6,
+    "bounding_height": 18,
+    "bounding_width": 49,
+    "advance": 48
+   }
+  },
+  {
+   "name": "cardShareBtn",
+   "class": "_CardShareButton",
+   "rect": [
+    206,
+    198,
+    48,
+    52
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      230,
+      224
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      206,
+      224
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      230,
+      198
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ]
+  },
+  {
+   "name": "cardDeleteBtn",
+   "class": "QPushButton",
+   "rect": [
+    262,
+    198,
+    48,
+    52
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      286,
+      224
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    },
+    {
+     "role": "edge",
+     "at": [
+      262,
+      224
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    },
+    {
+     "role": "top",
+     "at": [
+      286,
+      198
+     ],
+     "rgb": "#b84f45",
+     "token": "DELETE"
+    }
+   ]
+  }
+ ]
+}
