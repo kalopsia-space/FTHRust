@@ -326,8 +326,8 @@ pub struct AppState {
     pub hotkey_recording: Option<String>,
     /// Hotkey socket path shown in the setup instructions.
     pub hotkey_socket_path: String,
-    /// `nc` executable shown in the setup instructions.
-    pub nc_path: String,
+    /// This executable, the compositor's hotkey client (`fthrust --hotkey`).
+    pub client_exe: String,
     /// Detected compositor (`hyprland`, `kwin`, `gnome`, `unknown`, `none`).
     pub compositor: String,
     /// Running windows for game detection (plan 5 fills, `display_name`s).
@@ -484,11 +484,9 @@ impl AppState {
             .unwrap_or_else(|_| "<socket unavailable>".into());
         let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
         let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
-        let nc_path = ["/usr/bin/nc", "/bin/nc", "/usr/local/bin/nc"]
-            .iter()
-            .find(|p| Path::new(p).exists())
-            .map(|p| (*p).to_owned())
-            .unwrap_or_else(|| "nc".into());
+        let client_exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "fthrust".into());
         Ok(AppState {
             paths,
             settings,
@@ -516,7 +514,7 @@ impl AppState {
             hotkeys_portal_active: false,
             hotkey_recording: None,
             hotkey_socket_path,
-            nc_path,
+            client_exe,
             compositor: crate::popups::hotkeys::detect_compositor(),
             running_windows: Vec::new(),
             running_window_index: 0,
@@ -584,6 +582,9 @@ impl AppState {
         }
         let mut state = AppState::load(paths).expect("state");
         state.tokens.wayland = true;
+        // A client path whose bind command is as wide as the reference's
+        // `echo | nc -U` line, so the Qt popup references still apply.
+        state.client_exe = "/opt/fthrust/bin/xxxxxxxxxxxxxxxxxxxxx/fthrust".into();
         state
     }
 

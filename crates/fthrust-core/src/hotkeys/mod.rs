@@ -4,6 +4,8 @@
 //! nested `{keyboard, controller}` per action, and a legacy top-level
 //! `keyboard` map). [`HotkeyBindings::load`] reads all of them.
 
+pub mod hyprland;
+
 use crate::error::{CoreError, Result};
 use crate::{FthrPaths, read_json, write_json_atomic};
 use serde_json::{Map, Value};

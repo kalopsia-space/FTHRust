@@ -57,28 +57,14 @@ pub fn detect_compositor() -> String {
     "x11".into()
 }
 
-fn socket_command(action: &str, nc: &str, sock: &str) -> String {
-    format!("echo -n \"{action}\" | {nc} -U {sock}")
-}
-
-/// `HotkeyManager.setup_instructions`.
-pub fn setup_instructions(compositor: &str, nc: &str, sock: &str) -> String {
-    let commands: Vec<String> = ["save_clip", "save_screenshot"]
-        .iter()
-        .map(|a| socket_command(a, nc, sock))
-        .collect();
-    let (heading, rendered): (&str, Vec<String>) = match compositor {
-        "kwin" => (
-            "KDE: System Settings -> Keyboard -> Shortcuts -> Add New -> Command or Script",
-            commands,
-        ),
-        "gnome" => (
-            "GNOME: Settings → Keyboard → Custom Shortcuts",
-            commands.iter().map(|c| format!("bash -c '{c}'")).collect(),
-        ),
-        _ => ("Bind your preferred keys to these commands:", commands),
-    };
-    format!("{heading}\n\n{}", rendered.join("\n"))
+/// `HotkeyManager.setup_instructions` with the `fthrust --hotkey` client
+/// command (`fthrust_core::hotkeys::hyprland::setup_instructions`).
+pub fn setup_instructions(compositor: &str, client_exe: &str, sock: &str) -> String {
+    fthrust_core::hotkeys::hyprland::setup_instructions(
+        compositor,
+        std::path::Path::new(client_exe),
+        std::path::Path::new(sock),
+    )
 }
 
 /// The rows, in order: CAPTURE CLIP, CLIP <len> per custom length, SCREENSHOT, CONFIRM GAME, DISMISS GAME.
@@ -244,8 +230,13 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
     let w = inner.width();
     // Footer text first: Qt's layout gives the wrapped label's hint slack to the title.
     let portal = state.hotkeys_portal_active;
-    let instructions = (!portal)
-        .then(|| setup_instructions(&state.compositor, &state.nc_path, &state.hotkey_socket_path));
+    let instructions = (!portal).then(|| {
+        setup_instructions(
+            &state.compositor,
+            &state.client_exe,
+            &state.hotkey_socket_path,
+        )
+    });
     // Qt sizes the popup at its hint width (the widest row hint: borders,
     // margins, label, 100 px keyboard button, Clear, 108 px controller
     // button, Clear and four 8 px gaps) and shows it at the 550 px minimum.
