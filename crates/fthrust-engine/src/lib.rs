@@ -3,5 +3,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod cli;
+pub mod devices;
+
 /// Crate version, printed by `fthrust-engine --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
