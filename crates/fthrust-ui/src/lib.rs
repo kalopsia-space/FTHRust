@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod fonts;
 pub mod theme;
 pub mod tokens;
 
