@@ -51,9 +51,11 @@ impl SettingsStore {
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let file = paths.settings_file();
         let base = defaults(&paths);
-        let (mut data, existed) = match read_json(&file) {
-            Ok(Some(Value::Object(loaded))) => (merge_one_level(base.clone(), loaded), true),
-            Ok(None) => (base.clone(), false),
+        let (mut data, loaded, existed) = match read_json(&file) {
+            Ok(Some(Value::Object(loaded))) => {
+                (merge_one_level(base.clone(), loaded.clone()), loaded, true)
+            }
+            Ok(None) => (base.clone(), Map::new(), false),
             // Non-object content and any read/parse failure (including
             // invalid UTF-8) are quarantined, as the reference does.
             Ok(Some(_)) | Err(_) => {
@@ -67,10 +69,10 @@ impl SettingsStore {
                         target.display()
                     );
                 }
-                (base.clone(), false)
+                (base.clone(), Map::new(), false)
             }
         };
-        let changed = migrate::migrate(&mut data, &paths, existed);
+        let changed = migrate::migrate(&mut data, &loaded, &paths, existed);
         let mut store = Self {
             paths,
             data,
