@@ -2,6 +2,7 @@
 //!
 //! Mirrors the Python `ThemeManager` persisted in `~/.fthr/theme/theme.json`.
 
+mod archive;
 mod defaults;
 mod migrate;
 
@@ -86,6 +87,18 @@ fn check_ext(source: &Path, allowed: &[&str], what: &str) -> Result<String> {
             source.display()
         )))
     }
+}
+
+/// Copies `source` to `dest` unless both name the same file (copying a file
+/// onto itself would truncate it).
+fn copy_unless_same(source: &Path, dest: &Path) -> Result<()> {
+    if let (Ok(a), Ok(b)) = (source.canonicalize(), dest.canonicalize())
+        && a == b
+    {
+        return Ok(());
+    }
+    std::fs::copy(source, dest)?;
+    Ok(())
 }
 
 impl ThemeStore {
@@ -198,16 +211,19 @@ impl ThemeStore {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| logical.to_string());
         let name = format!("{stem}.{ext}");
-        std::fs::copy(source, self.paths.theme_icons_dir().join(&name))?;
+        copy_unless_same(source, &self.paths.theme_icons_dir().join(&name))?;
         self.data.icons.insert(logical.to_string(), name);
         Ok(())
     }
 
     /// Copies `source` into the sounds folder as `<key>.<source ext>`.
     pub fn set_custom_sound(&mut self, key: &str, source: &Path) -> Result<()> {
+        if !CUSTOMIZABLE_SOUNDS.contains(&key) {
+            return Err(CoreError::Invalid(format!("unknown sound key: {key}")));
+        }
         let ext = check_ext(source, SOUND_EXTS, "sound")?;
         let name = format!("{key}.{ext}");
-        std::fs::copy(source, self.paths.theme_sounds_dir().join(&name))?;
+        copy_unless_same(source, &self.paths.theme_sounds_dir().join(&name))?;
         self.data.sounds.insert(key.to_string(), name);
         Ok(())
     }
@@ -230,7 +246,7 @@ impl ThemeStore {
             .ok_or_else(|| CoreError::Invalid("font path has no file name".into()))?
             .to_string_lossy()
             .into_owned();
-        std::fs::copy(source, self.paths.theme_fonts_dir().join(&name))?;
+        copy_unless_same(source, &self.paths.theme_fonts_dir().join(&name))?;
         for f in families {
             self.data.font_files.insert(f.to_string(), name.clone());
         }
