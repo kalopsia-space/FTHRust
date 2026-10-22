@@ -39,3 +39,7 @@ memmap2 = "0.9"
 crossbeam-channel = "0.5"
 libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
+egui = "0.37"
+egui_extras = { version = "0.37", features = ["svg", "image"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
