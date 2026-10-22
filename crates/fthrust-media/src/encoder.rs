@@ -159,6 +159,37 @@ impl Encoder {
         })
     }
 
+    /// Whether `name` exists and completes a real one-frame 640×360 encode
+    /// (registration alone does not prove a driver works).
+    pub fn encoder_works(name: &'static str) -> bool {
+        if crate::init().is_err() || !RawEncoder::exists(name) {
+            return false;
+        }
+        let cfg = EncoderConfig {
+            src_width: 640,
+            src_height: 360,
+            enc_width: 640,
+            enc_height: 360,
+            fps: 30,
+            bitrate_kbps: 4000,
+            codec: Codec::Auto,
+            encoder: EncoderPref::Auto,
+            preset: 4,
+        };
+        let Ok(raw) = Self::try_open(name, &cfg) else {
+            return false;
+        };
+        let Ok(mut encoder) = Self::finish_open(raw, &cfg) else {
+            return false;
+        };
+        let black = vec![0u8; 640 * 360 * 4];
+        let mut out = Vec::new();
+        encoder
+            .encode(&black, 640 * 4, 640, 360, 0, &mut out)
+            .is_ok()
+            && encoder.flush(&mut out).is_ok()
+    }
+
     /// Name of the encoder in use.
     pub fn active_codec(&self) -> &'static str {
         self.raw.name()
@@ -295,4 +326,9 @@ impl Encoder {
         let last = self.pending.back().map_or(0, |t| t.wall_time_ns);
         self.drain(last, out)
     }
+}
+
+/// Free-function form of [`Encoder::encoder_works`].
+pub fn encoder_works(name: &'static str) -> bool {
+    Encoder::encoder_works(name)
 }

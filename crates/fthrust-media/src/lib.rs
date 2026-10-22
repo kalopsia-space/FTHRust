@@ -4,7 +4,9 @@
 #![deny(missing_docs)]
 
 pub mod audio_timing;
+pub mod capabilities;
 pub mod clip_writer;
+pub mod combined_audio;
 pub mod encoder;
 pub mod encoder_policy;
 pub mod ffi;
@@ -12,6 +14,7 @@ pub mod probe;
 pub mod recorder;
 pub mod replay_interval;
 pub mod ring;
+pub mod thumbnail;
 pub mod transactional_save;
 
 use std::sync::OnceLock;
