@@ -3,6 +3,7 @@
 
 mod atomic_json;
 pub mod clip_files;
+pub mod clip_metadata;
 mod error;
 pub mod error_codes;
 pub mod export_presets;
