@@ -391,13 +391,33 @@ pub struct AppState {
     pub overlay_drag: Option<(String, bool, FracRect)>,
     /// Live overlay rects while dragging.
     pub overlay_live: std::collections::HashMap<String, FracRect>,
+    /// The theme draft (`theme.json`), saved on every Customize change.
+    pub theme: fthrust_core::theme::ThemeStore,
+    /// Open Customize sections.
+    pub customize_open: [bool; 6],
+    /// Export the theme as a ZIP (plan 5 opens the save picker).
+    pub theme_export_requested: bool,
+    /// Preview a notification sound (plan 5 plays it).
+    pub sound_preview_requested: Option<String>,
+    /// Open the export jobs dialog (plan 6).
+    pub export_jobs_requested: bool,
+    /// Keyboard navigation bindings.
+    pub nav: fthrust_core::navigation::NavigationBindings,
+    /// Last binding error shown on the Shortcuts page.
+    pub shortcut_error: String,
+    /// Action currently recording a navigation chord.
+    pub shortcut_recording: Option<String>,
+    /// Keys collected for the chord so far.
+    pub shortcut_pending: Vec<String>,
+    /// Keys currently held.
+    pub shortcut_down: std::collections::BTreeSet<String>,
 }
 
 /// An overlay rect as canvas fractions `(x, y, w, h)`.
 pub type FracRect = (f64, f64, f64, f64);
 
 /// Which folder a BROWSE button asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrowseKind {
     /// Clips storage folder.
     ClipsFolder,
@@ -411,6 +431,14 @@ pub enum BrowseKind {
     ImageLayers,
     /// Overlay preview background image.
     PreviewBackground,
+    /// A theme ZIP to import.
+    ThemeArchive,
+    /// A font file for a role (`display` / `body`).
+    FontFile(String),
+    /// A custom icon file for a logical icon.
+    IconFile(String),
+    /// A custom sound file for a sound key.
+    SoundFile(String),
 }
 
 /// Capture settings profile.
@@ -439,6 +467,8 @@ impl AppState {
         let hotkey_socket_path = fthrust_core::runtime_dir()
             .map(|d| d.join("hotkey.sock").display().to_string())
             .unwrap_or_else(|_| "<socket unavailable>".into());
+        let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
+        let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
         let nc_path = ["/usr/bin/nc", "/bin/nc", "/usr/local/bin/nc"]
             .iter()
             .find(|p| Path::new(p).exists())
@@ -505,6 +535,16 @@ impl AppState {
             selected_image_layer: 0,
             overlay_drag: None,
             overlay_live: std::collections::HashMap::new(),
+            theme,
+            customize_open: [false; 6],
+            theme_export_requested: false,
+            sound_preview_requested: None,
+            export_jobs_requested: false,
+            nav,
+            shortcut_error: String::new(),
+            shortcut_recording: None,
+            shortcut_pending: Vec::new(),
+            shortcut_down: std::collections::BTreeSet::new(),
         })
     }
 

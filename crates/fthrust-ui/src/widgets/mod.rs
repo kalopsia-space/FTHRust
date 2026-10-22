@@ -5,6 +5,7 @@
 pub mod accordion;
 pub mod buttons;
 pub mod check;
+pub mod color;
 pub mod combo;
 pub mod dialog;
 pub mod input;

@@ -34,12 +34,20 @@ pub fn section(
 ) -> Response {
     let w = ui.available_width();
     let start = ui.cursor().min;
-    let header_rect = Rect::from_min_size(start, Vec2::new(w, HEADER_H));
+    // The section frame has a 1 px border; the header and body sit inside it.
+    let header_rect =
+        Rect::from_min_size(start + Vec2::new(1.0, 1.0), Vec2::new(w - 2.0, HEADER_H));
     let radius = CornerRadius::same(geom::RADIUS_CARD as u8);
     // Paint the card background first; its height is known after the body.
     let bg_idx = ui.painter().add(egui::Shape::Noop);
     let border_idx = ui.painter().add(egui::Shape::Noop);
-    let (hrect, resp) = ui.allocate_exact_size(header_rect.size(), Sense::click());
+    ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover()); // top border row
+    let (row, resp) = ui.allocate_exact_size(Vec2::new(w, HEADER_H), Sense::click());
+    let hrect = Rect::from_min_max(
+        Pos2::new(row.min.x + 1.0, row.min.y),
+        Pos2::new(row.max.x - 1.0, row.max.y),
+    );
+    let _ = header_rect;
     if resp.clicked() {
         *open = !*open;
     }
@@ -65,7 +73,7 @@ pub fn section(
             Vec2::new(g.size().x.ceil(), hrect.height()),
         );
         paint_text(ui, g, nrect, Align::Min, 0.0, t.color(Color::Accent));
-        fidelity::mark(ui, format!("{name}/number"), nrect)
+        fidelity::mark(ui, format!("QLabel[{number}]"), nrect)
             .text(number, size::BODY_L, Weight::W600)
             .done();
         x += nrect.width() + 12.0;
@@ -76,29 +84,36 @@ pub fn section(
         Vec2::new(g.size().x.ceil(), hrect.height()),
     );
     paint_text(ui, g, trect, Align::Min, 0.0, t.color(Color::Text));
-    fidelity::mark(ui, format!("{name}/title"), trect)
+    fidelity::mark(ui, format!("QLabel[{title}]"), trect)
         .text(title, size::BODY_L, Weight::W600)
         .done();
     dropdown_arrow(ui, t, icons, hrect, *open, 14.0, 16.0);
-    let mut total = Rect::from_min_size(start, Vec2::new(w, HEADER_H));
+    let mut total = Rect::from_min_size(start, Vec2::new(w, HEADER_H + 2.0));
     if *open {
         let inner = ui.scope_builder(
             egui::UiBuilder::new().max_rect(Rect::from_min_size(
-                Pos2::new(start.x + BODY_MARGIN, hrect.max.y + BODY_MARGIN),
-                Vec2::new(w - BODY_MARGIN * 2.0, f32::INFINITY),
+                Pos2::new(start.x + 1.0 + BODY_MARGIN, hrect.max.y + BODY_MARGIN),
+                Vec2::new(w - 2.0 - BODY_MARGIN * 2.0, f32::INFINITY),
             )),
             |ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(0.0, BODY_SPACING);
+                // Bodies lay their own spacing out (Qt adds one wrapper widget).
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                let _ = BODY_SPACING;
                 body(ui);
             },
         );
         let body_rect = inner.response.rect;
-        let bottom = body_rect.max.y + BODY_MARGIN;
+        let bottom = body_rect.max.y + BODY_MARGIN + 1.0; // body margin + bottom border row
         ui.allocate_rect(
-            Rect::from_min_max(hrect.left_bottom(), Pos2::new(hrect.max.x, bottom)),
+            Rect::from_min_max(
+                Pos2::new(start.x, hrect.max.y),
+                Pos2::new(start.x + w, bottom),
+            ),
             Sense::hover(),
         );
         total = Rect::from_min_max(start, Pos2::new(start.x + w, bottom));
+    } else {
+        ui.allocate_exact_size(Vec2::new(w, 1.0), Sense::hover()); // bottom border row
     }
     ui.painter().set(
         bg_idx,
@@ -121,6 +136,17 @@ pub fn section(
         Stroke::new(1.0, t.color(Color::Border)),
         StrokeKind::Inside,
     );
+    let header_name = match name.strip_prefix("accordionSection") {
+        Some(n) => format!("accordionHeader{n}"),
+        None => format!("{name}/header"),
+    };
+    fidelity::mark(ui, header_name, hrect)
+        .sample(
+            "fill",
+            Pos2::new(hrect.min.x + 4.0, hrect.center().y),
+            Color::Surface3,
+        )
+        .done();
     fidelity::mark(ui, name, total)
         .sample(
             "fill",

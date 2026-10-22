@@ -330,6 +330,11 @@ impl IconCache {
         ))
     }
 
+    /// No textures cached.
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
+
     /// Drops every texture (Apply theme).
     pub fn clear(&mut self) {
         self.textures.clear();

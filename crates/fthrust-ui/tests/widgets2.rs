@@ -125,8 +125,8 @@ fn accordion_header_and_body_toggle() {
     let m = r.marker("typographySection").unwrap();
     assert_eq!(
         m.rect.size(),
-        Vec2::new(400.0, 44.0),
-        "collapsed: header only"
+        Vec2::new(400.0, 46.0),
+        "collapsed: bordered header"
     );
     assert_eq!(
         r.pixel(Pos2::new(20.0, 42.0)),
@@ -137,8 +137,8 @@ fn accordion_header_and_body_toggle() {
         r.pixel(Pos2::new(200.0, 42.0)),
         Some(t.color(Color::Surface3))
     );
-    let num = r.marker("typographySection/number").unwrap();
-    assert_eq!(num.rect.min.x, 36.0, "16 px header margin");
+    let num = r.marker("QLabel[01]").unwrap();
+    assert_eq!(num.rect.min.x, 37.0, "1 px border + 16 px header margin");
     assert_eq!(num.text.as_ref().unwrap().px, 17.0);
     assert_eq!(num.text.as_ref().unwrap().weight, Weight::W600);
     let mut open = true;
@@ -161,8 +161,8 @@ fn accordion_header_and_body_toggle() {
     let m = r.marker("typographySection").unwrap();
     assert_eq!(
         m.rect.height(),
-        44.0 + 16.0 + 50.0 + 16.0,
-        "expanded: body margins 16"
+        2.0 + 44.0 + 16.0 + 50.0 + 16.0,
+        "expanded: borders + body margins 16"
     );
     let mut open = false;
     let mut h = common::harness(CANVAS, 1.0, &t, |ui| {

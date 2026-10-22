@@ -5,7 +5,10 @@
 
 pub mod audio;
 pub mod clip;
+pub mod customize;
 pub mod general;
+pub mod performance;
+pub mod shortcuts;
 pub mod visuals;
 
 use egui::{Align, Color32, CornerRadius, Pos2, Rect, Ui, Vec2};
@@ -255,6 +258,11 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
 fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
+    if tab == Tab::Customize {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        customize::ui(&mut child, state);
+        return;
+    }
     let name = format!("settingsPage[{}]", tab.label());
     // Qt shows the 8 px scrollbar only when the page is taller than the
     // viewport; a page that fits spans the full width.
@@ -270,10 +278,9 @@ fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
         .max_height(rect.height())
         .show(&mut area, |ui| {
             ui.set_width(rect.width());
-            let right_margin = if tab == Tab::Audio {
-                0.0
-            } else {
-                PAGE_MARGIN_RIGHT
+            let right_margin = match tab {
+                Tab::Audio | Tab::Shortcuts => 0.0,
+                _ => PAGE_MARGIN_RIGHT,
             };
             let body = Rect::from_min_size(
                 Pos2::new(viewport.min.x, ui.cursor().min.y),
@@ -286,13 +293,15 @@ fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
                 Tab::Clip => clip::ui(&mut child, state),
                 Tab::Audio => audio::ui(&mut child, state),
                 Tab::Visuals => visuals::ui(&mut child, state),
-                _ => placeholder(&mut child, state, tab),
+                Tab::Performance => performance::ui(&mut child, state),
+                Tab::Shortcuts => shortcuts::ui(&mut child, state),
+                Tab::Customize => unreachable!("customize has its own layout"),
             }
             let bottom = child.cursor().min.y
-                + if tab == Tab::Audio {
-                    0.0
-                } else {
-                    PAGE_MARGIN_BOTTOM
+                + match tab {
+                    Tab::Audio | Tab::Shortcuts => 0.0,
+                    Tab::Performance => 20.0,
+                    _ => PAGE_MARGIN_BOTTOM,
                 };
             let content_h = bottom - body.min.y;
             if (content_h - last_h).abs() > 0.5 {
@@ -304,11 +313,6 @@ fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
                 egui::Sense::hover(),
             );
         });
-}
-
-fn placeholder(ui: &mut Ui, state: &mut AppState, tab: Tab) {
-    let t = state.tokens.clone();
-    crate::widgets::section::flat_header(ui, &t, tab.label(), tab.label());
 }
 
 /// Vertical spacing (`layout.addSpacing`).
