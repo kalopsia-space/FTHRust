@@ -188,6 +188,18 @@ impl SettingsStore {
     }
 }
 
+/// Expands and lexically normalises a stored directory string.
+///
+/// Returns `None` when `raw` is empty or does not expand to an absolute path.
+pub(crate) fn resolve_storage_path(raw: &str, paths: &FthrPaths) -> Option<PathBuf> {
+    if raw.is_empty() {
+        return None;
+    }
+    let home = paths.root().parent().map(Path::to_path_buf);
+    let clean = normalize(Path::new(&expand(raw, home.as_deref())));
+    clean.is_absolute().then_some(clean)
+}
+
 /// Expands a leading `~` and `$VAR` / `${VAR}`; unknown variables stay as written.
 fn expand(s: &str, home: Option<&Path>) -> String {
     let mut rest = s;

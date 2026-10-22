@@ -43,9 +43,12 @@ pub(crate) fn migrate(
         );
     }
     if !loaded.contains_key("recording_directory")
-        && let Some(clips) = data.get("clips_directory").and_then(Value::as_str)
+        && let Some(clips) = data
+            .get("clips_directory")
+            .and_then(Value::as_str)
+            .and_then(|raw| super::resolve_storage_path(raw, paths))
     {
-        let rec = std::path::Path::new(clips).join("Recordings");
+        let rec = clips.join("Recordings");
         data.insert("recording_directory".into(), json!(rec.to_string_lossy()));
     }
 
