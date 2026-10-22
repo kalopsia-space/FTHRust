@@ -1,5 +1,9 @@
 [advisories]
 unmaintained = "all"
+# zbus 5.x sub-crates are marked unmaintained in favour of zbus 6, but
+# ashpd 0.13 (the only portal crate) pins zbus ^5. Revisit when ashpd 0.14
+# lands on zbus 6.
+ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
 
 [licenses]
 allow = [
@@ -16,4 +20,5 @@ allow = [
     "MIT-0",
     "bzip2-1.0.6",
     "WTFPL",
+    "Apache-2.0 WITH LLVM-exception",
 ]

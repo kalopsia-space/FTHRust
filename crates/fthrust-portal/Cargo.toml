@@ -1,0 +1,21 @@
+[package]
+name = "fthrust-portal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "xdg-desktop-portal ScreenCast session and PipeWire video stream for FTHRust"
+
+[dependencies]
+fthrust-core = { path = "../fthrust-core" }
+fthrust-wayland = { path = "../fthrust-wayland" }
+ashpd.workspace = true
+zbus.workspace = true
+pipewire.workspace = true
+libspa.workspace = true
+tokio.workspace = true
+nix.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
