@@ -3,6 +3,8 @@
 
 mod atomic_json;
 pub mod audio_manifest;
+pub mod capture_config;
+pub mod capture_health;
 pub mod clip_files;
 pub mod clip_metadata;
 mod error;
@@ -15,6 +17,8 @@ pub mod media_identity;
 pub mod navigation;
 mod paths;
 pub mod presets;
+pub mod recovery_tracker;
+pub mod save_state;
 pub mod settings;
 pub mod theme;
 pub mod thumbnails;
