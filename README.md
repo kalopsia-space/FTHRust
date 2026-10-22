@@ -9,3 +9,20 @@ cloud, no telemetry.
 Design: [docs/superpowers/specs/2026-10-22-fthrust-design.md](docs/superpowers/specs/2026-10-22-fthrust-design.md)
 
 Derived from FTHR Clips by FTHR-Community, GPL-3.0-only.
+
+## Running the engine by hand
+
+The capture daemon is a separate binary. For debugging it can be driven
+without the UI:
+
+```sh
+cargo run -p fthrust-engine -- --socket "$XDG_RUNTIME_DIR/fthrust/engine.sock"
+cargo run -p fthrust-engine -- --list-playback-devices
+FTHR_CAPTURE_BACKEND=wlr cargo run -p fthrust-engine -- --socket /tmp/engine.sock
+```
+
+It prints `FTHRUST_ENGINE_READY <socket>` and then speaks the protocol in
+`docs/engine-protocol.md` (length-prefixed JSON). It exits when its stdin
+is closed, so run it from a shell that keeps stdin open. The interactive
+portal path can be exercised with
+`FTHRUST_PORTAL_TEST=1 cargo test -p fthrust-portal --test portal_live`.
