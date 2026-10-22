@@ -4,6 +4,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod theme;
+pub mod tokens;
+
 /// Crate version, printed by `fthrust --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
