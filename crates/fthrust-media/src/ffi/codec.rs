@@ -191,7 +191,7 @@ impl RawEncoder {
                     data,
                     pts: p.pts,
                     dts: p.dts,
-                    keyframe: p.flags & ffi::AV_PKT_FLAG_KEY as i32 != 0,
+                    keyframe: p.flags & ffi::AV_PKT_FLAG_KEY != 0,
                 };
                 ffi::av_packet_unref(self.pkt);
                 packet
