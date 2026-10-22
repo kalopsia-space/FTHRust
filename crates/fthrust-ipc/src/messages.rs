@@ -224,8 +224,9 @@ pub enum Event {
         /// Normalisation warnings, one per clamped field.
         warnings: Vec<String>,
     },
-    /// State changed, or a heartbeat with state.
-    Status(StatusSnapshot),
+    /// State changed, or a heartbeat with state (boxed: it is by far the
+    /// largest variant).
+    Status(Box<StatusSnapshot>),
     /// The save was admitted and is running.
     SaveStarted {
         /// From the command.

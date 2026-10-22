@@ -93,7 +93,7 @@ fn roundtrip_command_and_event() {
             code: "DESKTOP_AUDIO_UNAVAILABLE".into(),
             detail: "no server".into(),
         },
-        Event::Status(snapshot()),
+        Event::Status(Box::new(snapshot())),
         Event::SaveResult {
             request_id: 1,
             result: Err("nope".into()),

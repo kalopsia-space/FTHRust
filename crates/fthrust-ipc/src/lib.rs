@@ -6,6 +6,7 @@
 pub mod config;
 pub mod framing;
 mod messages;
+pub mod transport;
 
 use std::path::PathBuf;
 
