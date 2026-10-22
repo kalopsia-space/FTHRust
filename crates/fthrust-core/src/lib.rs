@@ -3,6 +3,7 @@
 
 mod atomic_json;
 mod error;
+pub mod navigation;
 mod paths;
 pub mod settings;
 
