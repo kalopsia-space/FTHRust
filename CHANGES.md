@@ -4,6 +4,8 @@
 
 - Exports run in-process through FFmpeg's libraries instead of the `ffmpeg` command line; the same graphs, encoders and validation apply.
 - A sped-up export of several kept ranges keeps every range's video: speed now applies to each range's audio before the concat (the reference sped audio up after it, so `-shortest` cut the later ranges).
+- Ctrl+Q in the editor is only the quick crop: egui's built-in Ctrl+Q quit (which closed the whole app while a clip was still loading) and its Ctrl+plus/minus zoom are off.
+- The reference's "FFMPEG NOT FOUND" error cannot occur: there is no `ffmpeg` binary to find.
 - A ready share window offers "Copy path" and "Open folder" instead of dragging the file out: winit cannot start a file drag on Wayland.
 - Leaving an editor (minimize, clip navigation) is refused only while one of its shares runs; queued exports keep running while you browse, as the jobs window promises. The reference's guard watched a per-editor export thread that nothing starts any more.
 
