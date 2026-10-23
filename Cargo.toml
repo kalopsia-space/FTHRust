@@ -47,6 +47,13 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
+russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
+keyring-core = "1"
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+getrandom = "0.3"
+hmac = "0.13"
+sha1 = "0.11"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }
