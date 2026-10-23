@@ -3,6 +3,7 @@
 //! card at 60 Hz; without layer-shell a desktop notification is sent instead.
 
 pub mod capture_card;
+pub mod gary;
 pub mod surface;
 
 use std::path::PathBuf;

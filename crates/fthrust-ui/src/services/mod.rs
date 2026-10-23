@@ -13,6 +13,7 @@ pub mod game;
 pub mod hotkey_client;
 pub mod hotkeys;
 pub mod instance;
+pub mod mic_level;
 pub mod playback;
 pub mod portal_shortcuts;
 pub mod recording;
@@ -262,6 +263,10 @@ pub struct Services {
     epoch: std::time::Instant,
     finalizer: finalize::Finalizer,
     camera: camera::CameraService,
+    mic_level: Option<mic_level::MicLevel>,
+    mic_level_retry: f64,
+    gary: Option<crate::overlay::gary::GaryOverlay>,
+    gary_key: Option<String>,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
     test_commands: Option<Vec<Command>>,
@@ -330,6 +335,10 @@ impl Services {
             epoch: std::time::Instant::now(),
             finalizer: finalize::Finalizer::new(),
             camera: camera::CameraService::new(),
+            mic_level: None,
+            mic_level_retry: 0.0,
+            gary: None,
+            gary_key: None,
             clock_offset: 0.0,
             wall_override: None,
             test_commands: None,
@@ -548,6 +557,10 @@ impl Services {
             epoch: std::time::Instant::now(),
             finalizer: finalize::Finalizer::new(),
             camera: camera::CameraService::new(),
+            mic_level: None,
+            mic_level_retry: 0.0,
+            gary: None,
+            gary_key: None,
             clock_offset: 0.0,
             wall_override: None,
             test_commands: Some(Vec::new()),
@@ -934,6 +947,9 @@ impl Services {
             for outcome in self.finalizer.poll() {
                 finalize::apply(state, &outcome);
             }
+            if self.test_commands.is_none() {
+                self.tick_mic_and_gary(state, now);
+            }
         }
         if self
             .instance
@@ -1264,6 +1280,93 @@ impl Services {
         }
     }
 
+    /// The mic level stream (Audio page meter, Gary) and the Gary thread.
+    fn tick_mic_and_gary(&mut self, state: &mut AppState, now: f64) {
+        use crate::state::{Page, Tab};
+        let audio_on = state
+            .settings
+            .get_bool("audio_capture_enabled")
+            .unwrap_or(true);
+        let gary_on = state.flag("gary_mode_enabled", false) && audio_on;
+        let audio_page = state.page == Page::Settings && state.settings_tab == Tab::Audio;
+        let target = state
+            .settings
+            .get_str("mic_device_id")
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let gain = state
+            .settings
+            .get_i64("mic_volume")
+            .unwrap_or(100)
+            .clamp(0, 200) as f32
+            / 100.0;
+        if audio_page || gary_on {
+            let stale = self
+                .mic_level
+                .as_ref()
+                .is_none_or(|m| m.config != (target.clone(), gain));
+            if stale && now >= self.mic_level_retry {
+                self.mic_level = None;
+                match mic_level::MicLevel::start(target, gain) {
+                    Ok(m) => self.mic_level = Some(m),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mic level unavailable");
+                        self.mic_level_retry = now + 5.0;
+                    }
+                }
+            }
+        } else {
+            self.mic_level = None;
+        }
+        state.mic_level = self.mic_level.as_ref().map(|m| m.read());
+        if audio_page && self.mic_level.is_some() {
+            self.outbox
+                .ctx
+                .request_repaint_after(std::time::Duration::from_millis(60));
+        }
+        // Gary: started on first use, told about every change.
+        if gary_on && self.gary.is_none() {
+            self.gary = Some(crate::overlay::gary::GaryOverlay::start(crate::assets_dir()));
+        }
+        if let Some(g) = &self.gary {
+            let (low, high) = fthrust_core::gary::clamp_thresholds(
+                state
+                    .settings
+                    .get_i64("gary_min_level")
+                    .unwrap_or(fthrust_core::gary::DEFAULT_MIN),
+                state
+                    .settings
+                    .get_i64("gary_max_level")
+                    .unwrap_or(fthrust_core::gary::DEFAULT_MAX),
+            );
+            let image = state
+                .settings
+                .get_str("gary_image_path")
+                .filter(|p| !p.is_empty())
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_file());
+            let output = state
+                .settings
+                .get_str("notification_monitor")
+                .filter(|m| !m.is_empty() && *m != "auto")
+                .map(str::to_owned);
+            let key = format!(
+                "{gary_on}|{low}|{high}|{image:?}|{output:?}|{}",
+                self.mic_level.is_some()
+            );
+            if self.gary_key.as_deref() != Some(&key) {
+                self.gary_key = Some(key);
+                g.set(crate::overlay::gary::GarySettings {
+                    enabled: gary_on,
+                    thresholds: (low, high),
+                    image,
+                    output,
+                    meter: self.mic_level.as_ref().map(|m| m.meter()),
+                });
+            }
+        }
+    }
+
     /// The reference's exit order, part one: exports are cancelled (12 s
     /// bound) and a running manual recording is stopped and finalised
     /// (bounded) before anything else goes away.
@@ -1273,6 +1376,8 @@ impl Services {
         crate::editor::share::close_all(state);
         self.finalizer.shutdown(std::time::Duration::from_secs(5));
         self.camera.shutdown();
+        self.gary = None;
+        self.mic_level = None;
         state
             .export_queue
             .shutdown(std::time::Duration::from_secs(12));

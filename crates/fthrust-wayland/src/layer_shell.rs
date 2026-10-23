@@ -11,7 +11,7 @@ use raw_window_handle::{
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
 };
 use wayland_client::protocol::{
-    wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_surface,
+    wl_callback, wl_compositor, wl_output, wl_region, wl_registry, wl_shm, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -69,6 +69,7 @@ delegate_core!(
 );
 delegate_noop!(LayerState: ignore wl_compositor::WlCompositor);
 delegate_noop!(LayerState: ignore wl_surface::WlSurface);
+delegate_noop!(LayerState: ignore wl_region::WlRegion);
 delegate_noop!(LayerState: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for LayerState {
@@ -137,7 +138,21 @@ impl HasWindowHandle for SurfaceHandles {
     }
 }
 
-/// An overlay-layer surface anchored top-right.
+/// Where a layer surface goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// Top-right corner, `size` with `margins` `(top, right, bottom, left)`.
+    Corner {
+        /// Size in pixels.
+        size: (u32, u32),
+        /// Margins.
+        margins: (i32, i32, i32, i32),
+    },
+    /// The whole output, click-through (Gary mode).
+    Fullscreen,
+}
+
+/// An overlay-layer surface (top-right corner or the whole output).
 pub struct LayerSurface {
     ops: WaylandOps<LayerState>,
     surface: wl_surface::WlSurface,
@@ -159,6 +174,19 @@ impl LayerSurface {
         margins: (i32, i32, i32, i32),
         namespace: &str,
     ) -> Result<LayerSurface, LayerError> {
+        LayerSurface::create_placed(output, Placement::Corner { size, margins }, namespace)
+    }
+
+    /// Creates the surface with `placement` (see [`LayerSurface::create`]).
+    pub fn create_placed(
+        output: Option<&str>,
+        placement: Placement,
+        namespace: &str,
+    ) -> Result<LayerSurface, LayerError> {
+        let (size, margins) = match placement {
+            Placement::Corner { size, margins } => (size, margins),
+            Placement::Fullscreen => ((0, 0), (0, 0, 0, 0)),
+        };
         let conn = connect_display()?;
         let queue = conn.new_event_queue::<LayerState>();
         let qh = queue.handle();
@@ -209,9 +237,27 @@ impl LayerSurface {
             (),
         );
         layer_surface.set_size(size.0, size.1);
-        layer_surface
-            .set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Right);
-        layer_surface.set_exclusive_zone(0);
+        match placement {
+            Placement::Corner { .. } => {
+                layer_surface.set_anchor(
+                    zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Right,
+                );
+                layer_surface.set_exclusive_zone(0);
+            }
+            Placement::Fullscreen => {
+                layer_surface.set_anchor(
+                    zwlr_layer_surface_v1::Anchor::Top
+                        | zwlr_layer_surface_v1::Anchor::Right
+                        | zwlr_layer_surface_v1::Anchor::Bottom
+                        | zwlr_layer_surface_v1::Anchor::Left,
+                );
+                layer_surface.set_exclusive_zone(-1);
+                // An empty input region: every click goes through.
+                let region = compositor.create_region(&qh, ());
+                surface.set_input_region(Some(&region));
+                region.destroy();
+            }
+        }
         layer_surface.set_margin(margins.0, margins.1, margins.2, margins.3);
         layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
