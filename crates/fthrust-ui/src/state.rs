@@ -418,6 +418,16 @@ pub struct AppState {
     pub shortcut_pending: Vec<String>,
     /// Keys currently held.
     pub shortcut_down: std::collections::BTreeSet<String>,
+    /// The clips library (plan 5).
+    pub library: crate::library::model::Library,
+    /// Per-clip readiness.
+    pub readiness: fthrust_core::clip_readiness::ClipReadinessRegistry,
+    /// Library scroll offset.
+    pub library_scroll: f32,
+    /// The keyboard-selected clip.
+    pub selected_clip: Option<std::path::PathBuf>,
+    /// Inline rename in progress: the clip and its draft name.
+    pub rename_draft: Option<(std::path::PathBuf, String)>,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -482,6 +492,9 @@ impl AppState {
         let hotkey_socket_path = fthrust_core::runtime_dir()
             .map(|d| d.join("hotkey.sock").display().to_string())
             .unwrap_or_else(|_| "<socket unavailable>".into());
+        let clips_root = settings
+            .clips_directory()
+            .unwrap_or_else(|_| paths.default_clips_directory());
         let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
         let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
         let client_exe = std::env::current_exe()
@@ -560,6 +573,11 @@ impl AppState {
             shortcut_recording: None,
             shortcut_pending: Vec::new(),
             shortcut_down: std::collections::BTreeSet::new(),
+            library: crate::library::model::Library::new(clips_root),
+            readiness: fthrust_core::clip_readiness::ClipReadinessRegistry::new(),
+            library_scroll: 0.0,
+            selected_clip: None,
+            rename_draft: None,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,

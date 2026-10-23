@@ -8,6 +8,7 @@ pub mod dialogs;
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
+pub mod library;
 pub mod motion;
 pub mod pages;
 pub mod popups;
