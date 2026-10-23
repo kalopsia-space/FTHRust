@@ -30,6 +30,7 @@ pub mod clip_writer;
 pub mod combined_audio;
 pub mod encoder;
 pub mod encoder_policy;
+pub mod export;
 pub(crate) mod ffi;
 pub mod playback;
 pub mod probe;

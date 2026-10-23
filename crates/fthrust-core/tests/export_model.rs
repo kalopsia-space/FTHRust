@@ -168,11 +168,15 @@ fn concat_graph_two_ranges() {
     assert_eq!(
         p.filter_graph.as_deref(),
         Some(
-            "[0:v]trim=start=0.000000:end=1.000000,setpts=PTS-STARTPTS,setpts=PTS/1.5[v0];[0:v]trim=start=2.000000:end=3.000000,setpts=PTS-STARTPTS,setpts=PTS/1.5[v1];[0:a:0]volume=1.000000[src0];[0:a:1]volume=0.000000[src1];[src0][src1]amix=inputs=2:normalize=0,volume=1.000000,alimiter=limit=0.98:level=disabled,volume=0.800000[amixed];[amixed]asplit=2[amix0][amix1];[amix0]atrim=start=0.000000:end=1.000000,asetpts=PTS-STARTPTS[a0];[amix1]atrim=start=2.000000:end=3.000000,asetpts=PTS-STARTPTS[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout];[aout]atempo=1.5[aspeed]"
+            "[0:v]trim=start=0.000000:end=1.000000,setpts=PTS-STARTPTS,setpts=PTS/1.5[v0];[0:v]trim=start=2.000000:end=3.000000,setpts=PTS-STARTPTS,setpts=PTS/1.5[v1];[0:a:0]volume=1.000000[src0];[0:a:1]volume=0.000000[src1];[src0][src1]amix=inputs=2:normalize=0,volume=1.000000,alimiter=limit=0.98:level=disabled,volume=0.800000[amixed];[amixed]asplit=2[amix0][amix1];[amix0]atrim=start=0.000000:end=1.000000,asetpts=PTS-STARTPTS,atempo=1.5[a0];[amix1]atrim=start=2.000000:end=3.000000,asetpts=PTS-STARTPTS,atempo=1.5[a1];[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]"
         )
     );
     assert_eq!(p.video_map, MapRef::Label("vout".into()));
-    assert_eq!(p.audio_map, Some(MapRef::Label("aspeed".into())));
+    // Speed applies per range on both streams, so the segments line up in
+    // the concat (the reference sped audio up after the concat, which
+    // padded every segment to its unsped audio length; `-shortest` then cut
+    // off the later ranges' video).
+    assert_eq!(p.audio_map, Some(MapRef::Label("aout".into())));
     assert_eq!(p.video, VideoOut::Encode);
     assert_eq!(p.audio, AudioOut::Encode { kbps: 320 });
     assert!(p.shortest);

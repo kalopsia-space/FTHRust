@@ -138,6 +138,11 @@ pub fn plan(spec: &ExportSpec) -> Result<GraphPlan, String> {
             video_labels.push(format!("[v{i}]"));
         }
         let n = ranges.len();
+        // Audio speed per range, like the video's setpts, so each segment's
+        // audio and video have the same length in the concat.
+        let range_speed = speed_audio
+            .as_ref()
+            .map_or(String::new(), |sa| format!(",{sa}"));
         let mut audio_labels = Vec::new();
         let mut has_audio = spec.has_audio;
         if use_audio_filter {
@@ -149,7 +154,7 @@ pub fn plan(spec: &ExportSpec) -> Result<GraphPlan, String> {
                 f.push(format!("{out}asplit={n}{split}"));
                 for (i, (s, e)) in ranges.iter().enumerate() {
                     f.push(format!(
-                        "[amix{i}]atrim=start={s:.6}:end={e:.6},asetpts=PTS-STARTPTS[a{i}]"
+                        "[amix{i}]atrim=start={s:.6}:end={e:.6},asetpts=PTS-STARTPTS{range_speed}[a{i}]"
                     ));
                     audio_labels.push(format!("[a{i}]"));
                 }
@@ -159,7 +164,7 @@ pub fn plan(spec: &ExportSpec) -> Result<GraphPlan, String> {
             f.push(format!("[0:a:0]asplit={n}{split}"));
             for (i, (s, e)) in ranges.iter().enumerate() {
                 f.push(format!(
-                    "[adirect{i}]atrim=start={s:.6}:end={e:.6},asetpts=PTS-STARTPTS[a{i}]"
+                    "[adirect{i}]atrim=start={s:.6}:end={e:.6},asetpts=PTS-STARTPTS{range_speed}[a{i}]"
                 ));
                 audio_labels.push(format!("[a{i}]"));
             }
@@ -182,14 +187,7 @@ pub fn plan(spec: &ExportSpec) -> Result<GraphPlan, String> {
         if let Some(w) = watermark {
             f.extend(watermark_filters(w, "vbase", "vout"));
         }
-        let mut audio_map = None;
-        if with_audio {
-            audio_map = Some(MapRef::Label("aout".into()));
-            if let Some(sa) = &speed_audio {
-                f.push(format!("[aout]{sa}[aspeed]"));
-                audio_map = Some(MapRef::Label("aspeed".into()));
-            }
-        }
+        let audio_map = with_audio.then(|| MapRef::Label("aout".into()));
         return Ok(GraphPlan {
             seek_s: None,
             duration_s: None,
