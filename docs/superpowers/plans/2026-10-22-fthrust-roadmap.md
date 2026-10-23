@@ -18,7 +18,8 @@ the exact Rust interfaces the earlier ones end up with.
 | 6b (shipped 2026-10-23; gate `cargo test --workspace`, fidelity incl. 6 editor screens, bench `editor.sh`) | `2026-10-23-fthrust-plan-6b-editor.md` | Editor: the editor layer and control bar, trim timeline and segments, undo, drafts, sidebar panels, crop and stretch dialogs, sessions in the rail, clip navigation, keyboard shortcuts (`docs/editor.md`). | 5, 6a |
 | 6c (shipped 2026-10-23; gate `cargo test --workspace`, fidelity incl. 6 export/share screens, bench `export.sh`) | `2026-10-23-fthrust-plan-6c-export.md` | In-process export (graphs, runner, validation, software fallback), export queue and the Exports window, share picker and share windows with size presets, watermark, the live crop/stretch/colour preview, the editor's export checks (`docs/export.md`). | 6b |
 | 6d (shipped 2026-10-23; gate `cargo test --workspace`, bench `overlays.sh`) | `2026-10-23-fthrust-plan-6d-overlays.md` | Post-save overlays (image layers and the webcam in one pass, Finalizing readiness), camera ring and service over libavdevice, mic level meter, Gary mode layer-shell overlay, file and folder pickers through the portal (`docs/overlays.md`). | 5, 6c |
-| 7 | plan-7-uploader-packaging | `fthrust-uploader` (Catbox, SFTP, custom), consent flow, upload settings UI wiring, AppImage build, CI gates, THIRD_PARTY_NOTICES, docs, qualification notes. | 5, 6c, 6d |
+| 7a | `2026-10-23-fthrust-plan-7a-uploader.md` | `fthrust-uploader` (Catbox, SFTP, custom) behind the consent dialogs, keyring passwords, upload settings widget, card/editor/menu actions, queue and toasts, isolation gate (`docs/uploads.md`). | 5, 6c, 6d |
+| 7b | plan-7b-packaging | AppImage build with the pinned LGPL FFmpeg, desktop file `space.kalopsia.fthrust`, CI gates (glibc, linkage, licences, version, assets), release workflow, THIRD_PARTY_NOTICES, qualification notes. | 7a |
 
 Rules that apply to every plan:
 
