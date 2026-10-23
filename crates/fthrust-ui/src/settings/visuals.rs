@@ -841,7 +841,21 @@ fn overlay_stage(ui: &mut Ui, state: &mut AppState, rect: Rect, bg_path: &str) {
             10.0 / 255.0
         });
         ui.painter().rect_filled(content, 0.0, tint);
-        if !kind.starts_with("image") {
+        // The live camera frame, letterboxed ("fit") in the box.
+        let live = (kind == "camera" && *enabled)
+            .then(|| camera_texture(ui, state))
+            .flatten();
+        if let Some(tex) = &live {
+            let size = tex.size_vec2();
+            let scale = (content.width() / size.x).min(content.height() / size.y);
+            ui.painter().image(
+                tex.id(),
+                Rect::from_center_size(content.center(), size * scale),
+                Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        if !kind.starts_with("image") && live.is_none() {
             let text = if kind == "camera" {
                 "CAMERA PREVIEW"
             } else {
@@ -966,5 +980,20 @@ fn overlay_stage(ui: &mut Ui, state: &mut AppState, rect: Rect, bg_path: &str) {
     }
     if !state.overlay_live.is_empty() {
         ui.ctx().request_repaint();
+    }
+}
+
+/// The camera preview as a texture, re-uploaded when a new frame arrives.
+fn camera_texture(ui: &Ui, state: &mut AppState) -> Option<egui::TextureHandle> {
+    let (seq, img) = state.camera_preview.as_ref()?;
+    match &state.camera_preview_texture {
+        Some((s, tex)) if s == seq => Some(tex.clone()),
+        _ => {
+            let tex =
+                ui.ctx()
+                    .load_texture("camera-preview", img.clone(), egui::TextureOptions::LINEAR);
+            state.camera_preview_texture = Some((*seq, tex.clone()));
+            Some(tex)
+        }
     }
 }

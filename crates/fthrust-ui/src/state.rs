@@ -394,6 +394,10 @@ pub struct AppState {
     pub refresh_audio_devices_requested: bool,
     /// Refresh cameras (plan 5 consumes).
     pub refresh_cameras_requested: bool,
+    /// The newest camera frame for the Visuals preview `(sequence, image)`.
+    pub camera_preview: Option<(u64, egui::ColorImage)>,
+    /// Its uploaded texture.
+    pub camera_preview_texture: Option<(u64, egui::TextureHandle)>,
     /// Selected image layer index.
     pub selected_image_layer: usize,
     /// Overlay box drag in progress: `(kind, resizing, start rect)`.
@@ -660,6 +664,8 @@ impl AppState {
             camera_devices: Vec::new(),
             refresh_audio_devices_requested: false,
             refresh_cameras_requested: false,
+            camera_preview: None,
+            camera_preview_texture: None,
             selected_image_layer: 0,
             overlay_drag: None,
             overlay_live: std::collections::HashMap::new(),

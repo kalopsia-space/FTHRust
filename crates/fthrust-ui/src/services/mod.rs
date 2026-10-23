@@ -3,9 +3,11 @@
 //! [`Request`]s the UI sets as `AppState` flags; nothing else touches the
 //! state from another thread.
 
+pub mod camera;
 pub mod diagnostics;
 pub mod engine;
 pub mod export;
+pub mod finalize;
 pub mod focus;
 pub mod game;
 pub mod hotkey_client;
@@ -258,6 +260,8 @@ pub struct Services {
     portal_cleared: std::collections::BTreeSet<String>,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
+    finalizer: finalize::Finalizer,
+    camera: camera::CameraService,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
     test_commands: Option<Vec<Command>>,
@@ -324,6 +328,8 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            finalizer: finalize::Finalizer::new(),
+            camera: camera::CameraService::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: None,
@@ -540,6 +546,8 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            finalizer: finalize::Finalizer::new(),
+            camera: camera::CameraService::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: Some(Vec::new()),
@@ -748,6 +756,21 @@ impl Services {
                 } => state
                     .error_bar
                     .push(&title, &detail, level, actions, None, true),
+                save::SaveAction::Finalize { path, end, seconds } => {
+                    let duration_s = if seconds > 0 {
+                        f64::from(seconds)
+                    } else {
+                        fthrust_media::export::media_facts(&path).map_or(30.0, |f| f.duration_s)
+                    };
+                    self.finalizer.submit(finalize::FinalizeJob {
+                        clip: path,
+                        end,
+                        duration_s,
+                        layers: fthrust_core::finalize::image_layers(&state.settings),
+                        camera: self.camera.for_save(state),
+                        camera_rect: fthrust_core::finalize::camera_rect(&state.settings),
+                    });
+                }
                 save::SaveAction::Diag { event, fields } => {
                     diagnostics::emit(state, "clip_save", &event, fields)
                 }
@@ -902,6 +925,16 @@ impl Services {
     /// Applies pending events to the state, then turns request flags into
     /// requests.
     pub fn tick(&mut self, state: &mut AppState) {
+        {
+            let now = self.now();
+            if self.test_commands.is_none() {
+                self.camera.ensure_scanned();
+            }
+            self.camera.tick(state, now);
+            for outcome in self.finalizer.poll() {
+                finalize::apply(state, &outcome);
+            }
+        }
         if self
             .instance
             .as_ref()
@@ -1182,6 +1215,10 @@ impl Services {
                     }
                 }
                 "edit-game-crop" => state.popups.game.show(),
+                "open-camera-settings" => {
+                    state.page = crate::state::Page::Settings;
+                    state.settings_tab = crate::state::Tab::Visuals;
+                }
                 "configure-shortcuts" => state.open_desktop_shortcuts_requested = true,
                 "learn-more" => crate::shell::open_url("https://github.com/kalopsia-space/FTHRust"),
                 other => tracing::debug!(other, "unknown error-bar action"),
@@ -1222,6 +1259,7 @@ impl Services {
                     true,
                 ),
             },
+            Request::RefreshCameras => self.camera.refresh(),
             other => tracing::debug!(?other, "request without a consumer yet"),
         }
     }
@@ -1233,6 +1271,8 @@ impl Services {
         // `_perform_full_shutdown`: close the share windows (cancelling
         // their exports), then cancel queued exports with a bounded wait.
         crate::editor::share::close_all(state);
+        self.finalizer.shutdown(std::time::Duration::from_secs(5));
+        self.camera.shutdown();
         state
             .export_queue
             .shutdown(std::time::Duration::from_secs(12));
