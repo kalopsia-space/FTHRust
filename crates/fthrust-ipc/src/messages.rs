@@ -91,9 +91,10 @@ pub enum Command {
 }
 
 /// Continuous-recording state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum RecordingState {
     /// Not recording.
+    #[default]
     Idle,
     /// Writing to `path` since `started_ns` (CLOCK_MONOTONIC).
     Recording {
@@ -124,7 +125,7 @@ pub enum SourceStatus {
 }
 
 /// Both audio sources.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioStatus {
     /// The desktop (sink monitor) source.
     pub system: SourceStatus,
@@ -148,7 +149,7 @@ pub struct SavedClip {
 }
 
 /// The engine's state, pushed on change and on every heartbeat.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatusSnapshot {
     /// Encoded frames since start.
     pub frames_captured: u64,

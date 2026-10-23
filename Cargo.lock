@@ -1585,6 +1585,7 @@ dependencies = [
  "fthrust-ipc",
  "fthrust-media",
  "image",
+ "nix",
  "notify",
  "resvg",
  "serde",

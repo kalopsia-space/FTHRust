@@ -462,6 +462,8 @@ pub struct AppState {
     pub storage_error_reported: bool,
     /// A second launch asked for the window (the shell focuses it).
     pub activation_requested: bool,
+    /// The engine is connected (Record and Save are allowed).
+    pub engine_connected: bool,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -629,6 +631,7 @@ impl AppState {
             diagnostics: None,
             storage_error_reported: false,
             activation_requested: false,
+            engine_connected: false,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,

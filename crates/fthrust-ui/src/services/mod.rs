@@ -4,8 +4,10 @@
 //! state from another thread.
 
 pub mod diagnostics;
+pub mod engine;
 pub mod hotkey_client;
 pub mod instance;
+pub mod status;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -45,6 +47,10 @@ pub enum Event {
     },
     /// Remove a keyed incident (recovered).
     IncidentCleared(String),
+    /// The engine's active encoder name (settings label).
+    EncoderActive(String),
+    /// Engine connection state for the pages (Record button, Save).
+    EngineConnected(bool),
 }
 
 impl PartialEq for ScanEvent {
@@ -133,6 +139,7 @@ pub struct Services {
     test_requests: Option<Vec<Request>>,
     scan_roots: (PathBuf, Vec<PathBuf>),
     instance: Option<instance::Instance>,
+    engine: Option<engine::EngineDriver>,
 }
 
 impl Services {
@@ -161,6 +168,7 @@ impl Services {
             test_requests: None,
             scan_roots: (state.library.clips_root.clone(), imported),
             instance: None,
+            engine: None,
         };
         services.attach_scan(scan);
         services
@@ -200,7 +208,72 @@ impl Services {
             test_requests: Some(Vec::new()),
             scan_roots: (PathBuf::new(), Vec::new()),
             instance: None,
+            engine: None,
         }
+    }
+
+    /// Starts the engine supervisor for `engine` (the binary) on `socket`
+    /// with extra environment, and launches it with the current settings.
+    pub fn start_engine_with(
+        &mut self,
+        engine: PathBuf,
+        socket: PathBuf,
+        env: Vec<(String, String)>,
+        state: &AppState,
+    ) {
+        let Some(handle) = self.runtime() else {
+            return;
+        };
+        let driver = engine::EngineDriver::start(
+            handle,
+            self.outbox.clone(),
+            engine,
+            socket,
+            env,
+            state.paths.engine_log(),
+        );
+        if let Ok(config) = engine::engine_config(state) {
+            driver.request(engine::Input::Start(config));
+        }
+        self.engine = Some(driver);
+    }
+
+    /// Starts the engine found next to the executable (or `$FTHRUST_ENGINE`).
+    pub fn start_engine(&mut self, state: &AppState) {
+        match (engine::discover_engine(None), fthrust_ipc::socket_path()) {
+            (Some(engine), Ok(socket)) => self.start_engine_with(engine, socket, Vec::new(), state),
+            (None, _) => {
+                let Some(handle) = self.runtime() else {
+                    return;
+                };
+                let driver = engine::EngineDriver::start(
+                    handle,
+                    self.outbox.clone(),
+                    PathBuf::from("fthrust-engine"),
+                    PathBuf::from("engine.sock"),
+                    Vec::new(),
+                    state.paths.engine_log(),
+                );
+                driver.request(engine::Input::SpawnFailed {
+                    detail: "engine executable not found".into(),
+                    missing: true,
+                });
+                self.engine = Some(driver);
+            }
+            (_, Err(e)) => tracing::error!("engine socket path: {e}"),
+        }
+    }
+
+    /// Kills the engine process outright (tests of the exit path).
+    pub fn kill_engine_for_tests(&self) {
+        if let Some(d) = &self.engine {
+            d.kill_process();
+        }
+    }
+
+    /// The engine supervisor's save admission (plan 5 save flow).
+    pub fn engine(&self) -> Option<&engine::EngineDriver> {
+        self.engine.as_ref()
     }
 
     /// Keeps the instance lock and activation listener alive.
@@ -273,12 +346,69 @@ impl Services {
                 // Served by the dialogs module (`dialogs::service`).
                 state.diagnostic_export_requested = true;
             }
+            Request::RestartEngine => {
+                if let Some(d) = &self.engine {
+                    match engine::engine_config(state) {
+                        Ok(config) => d.request(engine::Input::Restart {
+                            config,
+                            allow_recording_prepare: false,
+                            explicit: false,
+                        }),
+                        Err(e) => state.error_bar.push(
+                            "SETTINGS APPLY FAILED",
+                            &e,
+                            Level::Error,
+                            vec![],
+                            None,
+                            true,
+                        ),
+                    }
+                }
+            }
+            Request::ErrorAction(id) => match id.as_str() {
+                "restart" | "restart-capture" => {
+                    if let Some(d) = &self.engine
+                        && let Ok(config) = engine::engine_config(state)
+                    {
+                        d.request(engine::Input::Restart {
+                            config,
+                            allow_recording_prepare: false,
+                            explicit: true,
+                        });
+                    }
+                }
+                "open-folder" => {
+                    if let Ok(dir) = state.settings.clips_directory() {
+                        let _ = std::fs::create_dir_all(&dir);
+                        crate::shell::open_url(&dir.display().to_string());
+                    }
+                }
+                "open-recordings" => {
+                    if let Ok(dir) = state.settings.recording_directory() {
+                        let _ = std::fs::create_dir_all(&dir);
+                        crate::shell::open_url(&dir.display().to_string());
+                    }
+                }
+                "open-settings" | "open-audio-settings" => {
+                    state.page = crate::state::Page::Settings;
+                    if id == "open-audio-settings" {
+                        state.settings_tab = crate::state::Tab::Audio;
+                    }
+                }
+                "edit-game-crop" => state.popups.game.show(),
+                "configure-shortcuts" => state.open_desktop_shortcuts_requested = true,
+                "learn-more" => crate::shell::open_url("https://github.com/kalopsia-space/FTHRust"),
+                other => tracing::debug!(other, "unknown error-bar action"),
+            },
             other => tracing::debug!(?other, "request without a consumer yet"),
         }
     }
 
     /// Stops every service (bounded).
     pub fn shutdown(mut self) {
+        if let Some(engine) = self.engine.take() {
+            engine.shutdown();
+        }
         if let Some(scan) = self.scan.take() {
             scan.stop();
         }
@@ -348,6 +478,11 @@ fn apply_event(state: &mut AppState, ev: Event) {
             .push(&title, &detail, level, actions, key, dismiss_on_action),
         Event::IncidentCleared(key) => {
             state.error_bar.remove_by_key(&key);
+        }
+        Event::EncoderActive(codec) => state.active_encoder = Some(codec),
+        Event::EngineConnected(on) => {
+            state.engine_connected = on;
+            state.record_enabled = on;
         }
     }
 }
