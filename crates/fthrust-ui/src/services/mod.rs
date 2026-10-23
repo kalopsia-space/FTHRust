@@ -3,6 +3,7 @@
 //! [`Request`]s the UI sets as `AppState` flags; nothing else touches the
 //! state from another thread.
 
+pub mod browse;
 pub mod camera;
 pub mod diagnostics;
 pub mod engine;
@@ -124,6 +125,13 @@ pub enum Event {
     Engine(fthrust_ipc::Event),
     /// Show a capture card.
     Card(CardKind),
+    /// A file chooser answered: the paths (empty on cancel) or the error.
+    Picked {
+        /// What was asked for.
+        kind: crate::state::BrowseKind,
+        /// The result.
+        paths: Result<Vec<PathBuf>, String>,
+    },
     /// Play a sound cue.
     Sound(String),
     /// The engine's active (applied) capture configuration.
@@ -950,6 +958,15 @@ impl Services {
             if self.test_commands.is_none() {
                 self.tick_mic_and_gary(state, now);
             }
+            if let Some(kind) = state.browse_requested.take()
+                && let Some(handle) = self.runtime()
+            {
+                let outbox = self.outbox.clone();
+                handle.spawn(async move {
+                    let paths = browse::pick(&kind).await;
+                    outbox.send(Event::Picked { kind, paths });
+                });
+            }
         }
         if self
             .instance
@@ -1076,6 +1093,16 @@ impl Services {
                     apply_event(state, Event::Status { text, style });
                 }
                 Event::Card(card) => self.show_card(state, card),
+                Event::Picked { kind, paths } => match paths {
+                    Ok(paths) => browse::apply(state, kind, paths),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "file chooser unavailable");
+                        state.dialogs.push_message(
+                            "File chooser unavailable",
+                            format!("The desktop file chooser could not open: {e}"),
+                        );
+                    }
+                },
                 other => apply_event(state, other),
             }
         }
@@ -1510,6 +1537,16 @@ fn apply_event(state: &mut AppState, ev: Event) {
         | Event::Toplevels(_)
         | Event::GameDetectionAvailability(_) => {}
         Event::Card(card) => state.pending_cards.push(card),
+        Event::Picked {
+            kind,
+            paths: Ok(paths),
+        } => browse::apply(state, kind, paths),
+        Event::Picked { paths: Err(e), .. } => {
+            state.dialogs.push_message(
+                "File chooser unavailable",
+                format!("The desktop file chooser could not open: {e}"),
+            );
+        }
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
             state.engine_connected = on;

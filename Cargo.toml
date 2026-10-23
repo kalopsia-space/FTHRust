@@ -33,7 +33,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 pipewire = { version = "0.10", features = ["v0_3_49"] }
 libspa = "0.10"
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "screenshot", "global_shortcuts", "notification"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "screenshot", "global_shortcuts", "notification", "file_chooser"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 memmap2 = "0.9"
 raw-window-handle = "0.6"

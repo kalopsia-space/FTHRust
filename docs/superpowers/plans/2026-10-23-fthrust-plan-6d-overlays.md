@@ -97,6 +97,14 @@ docs/overlays.md
 - [ ] Step 2: FAIL. Step 3: Implement. Step 4: PASS; clippy. Live check on Hyprland through the bench only (never the user's screens).
 - [ ] Step 5: Commit `feat(ui): mic level meter and Gary mode overlay`.
 
+### Task 5b: File and folder pickers (added during execution)
+
+**Files:** Create `crates/fthrust-ui/src/services/browse.rs`, `crates/fthrust-ui/tests/browse.rs`, `docs/superpowers/notes-pickers-reference.md`; Modify `services/mod.rs` (`Event::Picked`), `shell/mod.rs`, workspace `Cargo.toml` (ashpd `file_chooser`).
+
+No `BrowseKind` was ever consumed: every BROWSE / Choose / Import button did nothing. The FileChooser portal now answers each one, and `browse::apply` does what the reference's picker did (digest `notes-pickers-reference.md`).
+
+- [x] Tests: `file_uris_become_paths`, `clips_folder_prepares_and_switches`, `clips_folder_keeps_an_explicit_recording_folder`, `unusable_clips_folder_shows_storage_message`, `recording_folder_outside_the_root_is_linked`, `import_folder_dedupes`, `gary_image_is_checked`, `image_layers_append_readable_files`, `preview_background_ignores_unreadable`, `theme_archive_asks_then_imports`, `font_file_registers_its_family_for_the_role`, `icon_and_sound_files_are_stored`, `cancel_changes_nothing`.
+
 ### Task 6: Bench, docs, roadmap
 
 **Files:** Create `tools/uidrive/scenarios/overlays.sh`, `docs/overlays.md`; Modify `CHANGES.md`, roadmap (6d shipped), `.github/workflows/ci.yml`.
