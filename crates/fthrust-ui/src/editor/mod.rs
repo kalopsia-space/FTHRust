@@ -22,6 +22,7 @@ use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
 pub mod filmstrip;
 pub mod layer;
+pub mod sessions;
 pub mod sidebar;
 pub mod timeline_ui;
 
@@ -270,6 +271,9 @@ impl Editor {
         {
             e.apply_snapshot(&s);
             e.last_persisted = Some(s);
+            if e.timeline.segments.len() > 1 {
+                e.segments_changed();
+            }
         }
         Ok(e)
     }
@@ -1137,6 +1141,9 @@ impl Editor {
     /// Restores a parked session: paused, seeking once loaded.
     pub fn restore(&mut self, state: SessionState) {
         self.apply_snapshot(&state.snapshot);
+        if self.timeline.segments.len() > 1 {
+            self.segments_changed();
+        }
         self.undo = state.undo;
         self.master_volume = state.master_volume;
         for (id, gain, muted) in &state.source_gains {

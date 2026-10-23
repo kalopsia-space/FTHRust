@@ -285,6 +285,11 @@ fn draft_saved_after_debounce_and_reloaded() {
     let again = r.open(&clip);
     assert_eq!(again.timeline.segments.len(), 2);
     assert!(again.undo.undo.is_empty(), "undo history is not persisted");
+    assert!(
+        again.timeline_label().ends_with("1 cut"),
+        "{}",
+        again.timeline_label()
+    );
 }
 
 #[test]
@@ -332,6 +337,11 @@ fn capture_restore_round_trip() {
         e.lifecycle,
         Lifecycle::Paused,
         "a restored session never autoplays"
+    );
+    assert!(
+        e.timeline_label().contains("kept"),
+        "{}",
+        e.timeline_label()
     );
 }
 

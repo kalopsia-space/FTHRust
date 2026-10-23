@@ -31,7 +31,8 @@ fn header_buttons_emit_requests() {
     let (_tmp, mut s) = editor_state(Lifecycle::Paused);
     let tokens = s.tokens.clone();
     let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
-        shell::frame(ui, &mut s);
+        // The layer alone: `shell::frame` would also service the requests.
+        fthrust_ui::editor::layer::ui(ui, &mut s);
     });
     click(&mut h, Pos2::new(1340.0, 20.0));
     click(&mut h, Pos2::new(1420.0, 20.0));

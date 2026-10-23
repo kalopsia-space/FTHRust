@@ -440,6 +440,45 @@ fn clip_editor_sidebar() {
 }
 
 #[test]
+fn clip_editor_rail() {
+    let (tmp, mut s) = state();
+    s.status = StatusText {
+        text: "Connecting".into(),
+        style: StatusStyle::Idle,
+    };
+    // The Qt render had the engine's failure notice showing.
+    s.error_bar.push(
+        "CAPTURE FAILED",
+        "The compositor stopped answering",
+        Level::Error,
+        vec![Action {
+            label: "RESTART ENGINE".into(),
+            id: "restart".into(),
+        }],
+        None,
+        true,
+    );
+    for (n, name) in ["Overwatch_clip.mp4", "Valorant_clip.mp4"]
+        .iter()
+        .enumerate()
+    {
+        let path = tmp.path().join(name);
+        s.editor_slots.push(fthrust_ui::editor::sessions::Session {
+            path: path.clone(),
+            state: None,
+        });
+        s.editor_sessions.push(fthrust_ui::state::SessionSummary {
+            number: n + 1,
+            stem: name.trim_end_matches(".mp4").into(),
+            file_name: (*name).into(),
+        });
+    }
+    check("clip-editor-rail", s, |ui, s| {
+        shell::frame(ui, s);
+    });
+}
+
+#[test]
 fn clip_editor_timeline() {
     let (_tmp, mut s) = editor_state();
     {

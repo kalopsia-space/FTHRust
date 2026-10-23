@@ -1423,9 +1423,6 @@ fn collect_requests(state: &mut AppState) -> Vec<Request> {
     if let Some(p) = state.upload_requested.take() {
         out.push(Request::Upload(p));
     }
-    if let Some(p) = state.open_clip_requested.take() {
-        out.push(Request::OpenClip(p));
-    }
     if let Some(p) = state.open_screenshot_requested.take() {
         out.push(Request::OpenScreenshot(p));
     }

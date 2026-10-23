@@ -97,6 +97,7 @@ impl Default for FrameResponse {
 /// Lays out the whole window content (no viewport commands): strip,
 /// toolbar, rail + page stack, error bar.
 pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
+    crate::editor::sessions::service(state);
     if state.editor.is_some() {
         let out = crate::editor::layer::ui(ui, state);
         crate::dialogs::service(state);

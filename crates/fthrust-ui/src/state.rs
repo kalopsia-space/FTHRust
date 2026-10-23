@@ -228,6 +228,8 @@ pub struct SessionSummary {
     pub number: usize,
     /// Clip file stem.
     pub stem: String,
+    /// Clip file name (tooltip).
+    pub file_name: String,
 }
 
 /// A connected monitor (plan 5 fills these from the engine).
@@ -452,6 +454,12 @@ pub struct AppState {
     pub editor: Option<crate::editor::Editor>,
     /// The active editor's video frame texture.
     pub editor_video: Option<crate::video_texture::VideoTexture>,
+    /// Builds editor players (`None`: PipeWire output and the wall clock).
+    pub editor_factory: Option<crate::editor::PlayerFactory>,
+    /// Editor sessions, active and parked (the rail shows `editor_sessions`).
+    pub editor_slots: Vec<crate::editor::sessions::Session>,
+    /// The session `editor` belongs to.
+    pub active_session: Option<usize>,
     /// Editor sidebar panels open (speed, edit tools, audio mix, colour,
     /// clip details, file details).
     pub editor_panels: [bool; 6],
@@ -663,6 +671,9 @@ impl AppState {
             open_clip_requested: None,
             editor: None,
             editor_video: None,
+            editor_factory: None,
+            editor_slots: Vec::new(),
+            active_session: None,
             editor_panels: [true, true, true, false, false, false],
             editor_sidebar_scroll: 0.0,
             editor_filmstrip: Vec::new(),
