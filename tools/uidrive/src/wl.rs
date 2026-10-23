@@ -274,9 +274,20 @@ impl Session {
         self.settle(30)
     }
 
+    /// Moves to `(x, y)` on a fresh virtual pointer and lets the seat focus
+    /// the surface before a press: older wlroots (Ubuntu's cage) drops a
+    /// press that follows a new pointer's first motion (seen on CI as an
+    /// app receiving the release without the press).
+    pub fn settle_pointer(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.move_to(x, y)?;
+        self.move_to(x, y)?;
+        std::thread::sleep(Duration::from_millis(60));
+        Ok(())
+    }
+
     /// Presses at `from`, moves in `steps`, releases at `to`.
     pub fn drag(&mut self, from: (f64, f64), to: (f64, f64), steps: usize) -> Result<(), String> {
-        self.move_to(from.0, from.1)?;
+        self.settle_pointer(from.0, from.1)?;
         self.button(Button::Left, true)?;
         std::thread::sleep(Duration::from_millis(30));
         let steps = steps.max(1);

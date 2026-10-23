@@ -278,7 +278,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
         } => {
             let (x, y) = resolve(&bench, &target, nth)?;
             let mut s = Session::connect(&bench)?;
-            s.move_to(x, y)?;
+            s.settle_pointer(x, y)?;
             s.click(Button::parse(&button)?, double)
         }
         Cmd::Drag { from, to, steps } => {
