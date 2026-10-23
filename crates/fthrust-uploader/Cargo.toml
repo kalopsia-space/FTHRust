@@ -9,6 +9,11 @@ description = "The optional FTHRust clip uploader (Catbox, SFTP, your own server
 fthrust-core = { path = "../fthrust-core" }
 serde_json.workspace = true
 tokio.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

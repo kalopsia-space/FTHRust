@@ -43,6 +43,10 @@ notify = "8"
 crossbeam-channel = "0.5"
 libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-util = { version = "0.7", features = ["io"] }
+bytes = "1"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }

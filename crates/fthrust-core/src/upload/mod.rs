@@ -47,7 +47,7 @@ pub(crate) fn py_str(v: Option<&serde_json::Value>, default: &str) -> String {
 }
 
 /// Python truthiness of a JSON value.
-pub(crate) fn truthy(v: Option<&serde_json::Value>) -> bool {
+pub fn truthy(v: Option<&serde_json::Value>) -> bool {
     use serde_json::Value;
     match v {
         None | Some(Value::Null) => false,
