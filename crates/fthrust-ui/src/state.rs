@@ -472,6 +472,10 @@ pub struct AppState {
     pub pending_engine_events: Vec<fthrust_ipc::Event>,
     /// A screenshot hotkey fired.
     pub screenshot_requested: bool,
+    /// The Record button text (`Record`, `Preparing…`, `Stop  hh:mm:ss`, …).
+    pub record_label: String,
+    /// The Record button uses the active (red) style.
+    pub record_active: bool,
     /// Confirm the detected game.
     pub game_confirm_requested: bool,
     /// Dismiss the detected game.
@@ -648,6 +652,8 @@ impl AppState {
             pending_sounds: Vec::new(),
             pending_engine_events: Vec::new(),
             screenshot_requested: false,
+            record_label: "Record".into(),
+            record_active: false,
             game_confirm_requested: false,
             game_dismiss_requested: false,
             input_draft: None,

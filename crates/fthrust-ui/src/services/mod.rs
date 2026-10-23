@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod engine;
 pub mod hotkey_client;
 pub mod instance;
+pub mod recording;
 pub mod save;
 pub mod status;
 
@@ -114,6 +115,8 @@ pub enum Event {
     Card(CardKind),
     /// Play a sound cue.
     Sound(String),
+    /// The engine's active (applied) capture configuration.
+    ActiveConfig(Option<fthrust_core::capture_config::CaptureConfig>),
 }
 
 impl PartialEq for ScanEvent {
@@ -173,6 +176,8 @@ pub enum Request {
     ShowInFileManager(PathBuf),
     /// Hotkey bindings changed.
     HotkeysChanged,
+    /// Restart with the recording quality profile.
+    RestartForRecording(fthrust_ipc::EngineConfig),
     /// Stop everything.
     Shutdown,
 }
@@ -204,6 +209,8 @@ pub struct Services {
     instance: Option<instance::Instance>,
     engine: Option<engine::EngineDriver>,
     save: save::SaveService,
+    recording: recording::RecordingService,
+    active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
@@ -244,6 +251,8 @@ impl Services {
             instance: None,
             engine: None,
             save: save::SaveService::new(),
+            recording: recording::RecordingService::new(),
+            active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
             wall_override: None,
@@ -295,6 +304,8 @@ impl Services {
             instance: None,
             engine: None,
             save: save::SaveService::new(),
+            recording: recording::RecordingService::new(),
+            active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
             wall_override: None,
@@ -305,6 +316,99 @@ impl Services {
             engine_status: None,
             recording_transition: false,
             save_transient_ended: false,
+        }
+    }
+
+    /// The recording state.
+    pub fn recording_state(&self) -> recording::RecordState {
+        self.recording.state()
+    }
+
+    /// Pretends the engine applied `config` (tests).
+    pub fn set_active_config_for_tests(
+        &mut self,
+        config: Option<fthrust_core::capture_config::CaptureConfig>,
+    ) {
+        self.active_config = config;
+    }
+
+    fn run_rec_actions(&mut self, state: &mut AppState, actions: Vec<recording::RecAction>) {
+        for a in actions {
+            match a {
+                recording::RecAction::Send(cmd) => self.send_command(cmd),
+                recording::RecAction::Card(card) => self.show_card(state, card),
+                recording::RecAction::Error {
+                    title,
+                    detail,
+                    level,
+                    actions,
+                } => state
+                    .error_bar
+                    .push(&title, &detail, level, actions, None, true),
+                recording::RecAction::RestartForRecording(config) => {
+                    if self.test_requests.is_some() {
+                        self.dispatch(Request::RestartForRecording(config), state);
+                    } else if let Some(d) = &self.engine {
+                        if let Ok(mut sv) = d.supervisor().lock() {
+                            sv.set_recording_preparing(true);
+                        }
+                        d.request(engine::Input::Restart {
+                            config,
+                            allow_recording_prepare: true,
+                            explicit: false,
+                        });
+                    }
+                }
+                recording::RecAction::RestoreClipProfile => {
+                    if self.test_requests.is_some() {
+                        self.dispatch(Request::RestartEngine, state);
+                    } else if let Some(d) = &self.engine
+                        && let Ok(config) = engine::engine_config(state)
+                    {
+                        d.request(engine::Input::Restart {
+                            config,
+                            allow_recording_prepare: false,
+                            explicit: false,
+                        });
+                    }
+                }
+                recording::RecAction::RefreshLibrary => state.scan_clips_requested = true,
+            }
+        }
+    }
+
+    /// The Record button or a start/stop hotkey.
+    pub fn toggle_recording(&mut self, state: &mut AppState) {
+        let now = self.now();
+        let wall = self.wall();
+        let active = self.active_config.clone();
+        let actions = self.recording.toggle(
+            state,
+            self.engine_connected,
+            self.save.is_busy(),
+            active.as_ref(),
+            now,
+            wall,
+        );
+        self.run_rec_actions(state, actions);
+        self.sync_recording_ui(state);
+    }
+
+    fn sync_recording_ui(&mut self, state: &mut AppState) {
+        state.record_label = self.recording.label.clone();
+        state.record_active = self.recording.active_style;
+        state.record_enabled = self.recording.button_enabled(self.engine_connected);
+        self.recording_transition = matches!(
+            self.recording.state(),
+            recording::RecordState::Preparing
+                | recording::RecordState::Starting
+                | recording::RecordState::Stopping
+        );
+        if let Some(d) = &self.engine
+            && let Ok(mut sv) = d.supervisor().lock()
+        {
+            sv.set_recording(self.recording.busy());
+            sv.set_recording_preparing(self.recording.state() == recording::RecordState::Preparing);
         }
     }
 
@@ -526,8 +630,11 @@ impl Services {
                 Event::Engine(ipc) => {
                     let actions = self.save.on_engine_event(state, &ipc, now);
                     self.run_save_actions(state, actions);
+                    let actions = self.recording.on_engine_event(&ipc, now);
+                    self.run_rec_actions(state, actions);
                     state.pending_engine_events.push(ipc);
                 }
+                Event::ActiveConfig(c) => self.active_config = c,
                 Event::Health(h) => self.health = Some(h),
                 Event::EngineConnected(on) => {
                     self.engine_connected = on;
@@ -547,11 +654,28 @@ impl Services {
                 other => apply_event(state, other),
             }
         }
+        // Requests set by the pages this frame (UI-thread services act now,
+        // before the transient statuses are applied).
+        for req in collect_requests(state) {
+            self.dispatch(req, state);
+        }
         let actions = self.save.on_tick(state, now);
         self.run_save_actions(state, actions);
+        let actions = self.recording.on_tick(now);
+        self.run_rec_actions(state, actions);
+        let active = self.active_config.clone();
+        let actions = self
+            .recording
+            .continue_prepared(self.engine_connected, active.as_ref(), now);
+        self.run_rec_actions(state, actions);
+        self.sync_recording_ui(state);
         // A transient save status overrides the engine's; when it ends the
         // engine's last status returns.
-        match self.save.transient_status(now) {
+        let transient = self
+            .recording
+            .transient_status(now)
+            .or_else(|| self.save.transient_status(now));
+        match transient {
             Some(t) => {
                 state.status = t;
                 self.save_transient_ended = true;
@@ -569,12 +693,14 @@ impl Services {
         {
             sv.set_save_busy(self.save.is_busy());
         }
-        for req in collect_requests(state) {
-            self.dispatch(req, state);
-        }
     }
 
     fn dispatch(&mut self, req: Request, state: &mut AppState) {
+        // UI-thread services act directly, in tests too.
+        if req == Request::ToggleRecording {
+            self.toggle_recording(state);
+            return;
+        }
         if let Some(recorded) = self.test_requests.as_mut() {
             recorded.push(req);
             return;
@@ -599,6 +725,7 @@ impl Services {
                 // Served by the dialogs module (`dialogs::service`).
                 state.diagnostic_export_requested = true;
             }
+            Request::ToggleRecording => self.toggle_recording(state),
             Request::RestartEngine => {
                 if let Some(d) = &self.engine {
                     match engine::engine_config(state) {
@@ -733,12 +860,11 @@ fn apply_event(state: &mut AppState, ev: Event) {
             state.error_bar.remove_by_key(&key);
         }
         Event::EncoderActive(codec) => state.active_encoder = Some(codec),
-        Event::Health(_) | Event::Hotkey(_) | Event::Engine(_) => {}
+        Event::Health(_) | Event::Hotkey(_) | Event::Engine(_) | Event::ActiveConfig(_) => {}
         Event::Card(card) => state.pending_cards.push(card),
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
             state.engine_connected = on;
-            state.record_enabled = on;
         }
     }
 }
