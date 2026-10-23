@@ -44,9 +44,15 @@ fn capture_summary_text_rules() {
     );
     let (_tmp, s) = state(serde_json::json!({"clip_length": 100}));
     assert!(toolbar::capture_summary(&s.settings).starts_with("1.67m // "));
-    assert_eq!(toolbar::game_summary(&s.settings), "Game detection: Off");
+    assert_eq!(
+        toolbar::game_summary(&s.settings, true),
+        "Game detection: Off"
+    );
     let (_tmp, s) = state(serde_json::json!({"game_detection_enabled": true}));
-    assert_eq!(toolbar::game_summary(&s.settings), "Game detection: On");
+    assert_eq!(
+        toolbar::game_summary(&s.settings, true),
+        "Game detection: On"
+    );
 }
 
 #[test]

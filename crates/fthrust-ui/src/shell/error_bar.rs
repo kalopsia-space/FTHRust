@@ -102,6 +102,11 @@ impl ErrorBarState {
         self.current.as_ref()
     }
 
+    /// The current entry followed by the queued ones.
+    pub fn entries(&self) -> Vec<&Entry> {
+        self.current.iter().chain(self.queue.iter()).collect()
+    }
+
     /// Queued entries behind the current one.
     pub fn queued_count(&self) -> usize {
         self.queue.len()

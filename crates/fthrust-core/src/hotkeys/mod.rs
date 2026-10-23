@@ -4,6 +4,8 @@
 //! nested `{keyboard, controller}` per action, and a legacy top-level
 //! `keyboard` map). [`HotkeyBindings::load`] reads all of them.
 
+pub mod hyprland;
+
 use crate::error::{CoreError, Result};
 use crate::{FthrPaths, read_json, write_json_atomic};
 use serde_json::{Map, Value};
@@ -258,7 +260,9 @@ fn normalize_controller_combo(input: &str) -> String {
     out.join("+")
 }
 
-fn portal_key(part: &str) -> Option<&'static str> {
+/// The xkb keysym name of a named key (`Page Up` → `Prior`), shared by the
+/// portal trigger and the Hyprland bind writers.
+pub(crate) fn portal_key(part: &str) -> Option<&'static str> {
     Some(match part {
         "Esc" => "Escape",
         "Enter" => "Return",

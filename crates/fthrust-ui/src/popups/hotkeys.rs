@@ -38,11 +38,14 @@ pub fn detect_compositor() -> String {
         return "none".into();
     }
     if wayland {
-        if !env("HYPRLAND_INSTANCE_SIGNATURE").is_empty() {
-            return "hyprland".into();
-        }
         let desktop = env("XDG_CURRENT_DESKTOP").to_lowercase();
         let session = env("XDG_SESSION_DESKTOP").to_lowercase();
+        if !env("HYPRLAND_INSTANCE_SIGNATURE").is_empty()
+            || desktop.contains("hyprland")
+            || session.contains("hyprland")
+        {
+            return "hyprland".into();
+        }
         if desktop.contains("kde") || session.contains("plasma") || session.contains("kde") {
             return "kwin".into();
         }
@@ -57,28 +60,14 @@ pub fn detect_compositor() -> String {
     "x11".into()
 }
 
-fn socket_command(action: &str, nc: &str, sock: &str) -> String {
-    format!("echo -n \"{action}\" | {nc} -U {sock}")
-}
-
-/// `HotkeyManager.setup_instructions`.
-pub fn setup_instructions(compositor: &str, nc: &str, sock: &str) -> String {
-    let commands: Vec<String> = ["save_clip", "save_screenshot"]
-        .iter()
-        .map(|a| socket_command(a, nc, sock))
-        .collect();
-    let (heading, rendered): (&str, Vec<String>) = match compositor {
-        "kwin" => (
-            "KDE: System Settings -> Keyboard -> Shortcuts -> Add New -> Command or Script",
-            commands,
-        ),
-        "gnome" => (
-            "GNOME: Settings → Keyboard → Custom Shortcuts",
-            commands.iter().map(|c| format!("bash -c '{c}'")).collect(),
-        ),
-        _ => ("Bind your preferred keys to these commands:", commands),
-    };
-    format!("{heading}\n\n{}", rendered.join("\n"))
+/// `HotkeyManager.setup_instructions` with the `fthrust --hotkey` client
+/// command (`fthrust_core::hotkeys::hyprland::setup_instructions`).
+pub fn setup_instructions(compositor: &str, client_exe: &str, sock: &str) -> String {
+    fthrust_core::hotkeys::hyprland::setup_instructions(
+        compositor,
+        std::path::Path::new(client_exe),
+        std::path::Path::new(sock),
+    )
 }
 
 /// The rows, in order: CAPTURE CLIP, CLIP <len> per custom length, SCREENSHOT, CONFIRM GAME, DISMISS GAME.
@@ -244,8 +233,13 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
     let w = inner.width();
     // Footer text first: Qt's layout gives the wrapped label's hint slack to the title.
     let portal = state.hotkeys_portal_active;
-    let instructions = (!portal)
-        .then(|| setup_instructions(&state.compositor, &state.nc_path, &state.hotkey_socket_path));
+    let instructions = (!portal).then(|| {
+        setup_instructions(
+            &state.compositor,
+            &state.client_exe,
+            &state.hotkey_socket_path,
+        )
+    });
     // Qt sizes the popup at its hint width (the widest row hint: borders,
     // margins, label, 100 px keyboard button, Clear, 108 px controller
     // button, Clear and four 8 px gaps) and shows it at the 550 px minimum.
@@ -478,6 +472,40 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
         body.allocate_exact_size(Vec2::new(w, 30.0), egui::Sense::hover());
     } else if let Some(text) = &instructions {
         instructions_label(&mut body, &t, text, w);
+        if state.compositor == "hyprland" {
+            // FTHRust addition: one click copies the `save_clip` bind line.
+            let top = body.cursor().min;
+            let g = galley(
+                &body,
+                "COPY LINE",
+                size::MICRO,
+                Weight::W600,
+                Color32::WHITE,
+            );
+            let bw = g.size().x.round() + 14.0 + 2.0;
+            let rect = Rect::from_min_size(top, Vec2::new(bw, 30.0));
+            if clear_button(
+                &mut body,
+                &t,
+                rect,
+                "COPY LINE",
+                true,
+                "QPushButton[COPY LINE]",
+            )
+            .clicked()
+            {
+                let combo = state.hotkeys.get("save_clip").unwrap_or("").to_owned();
+                let line = fthrust_core::hotkeys::hyprland::bind_line(
+                    "save_clip",
+                    &combo,
+                    std::path::Path::new(&state.client_exe),
+                    std::path::Path::new(&state.hotkey_socket_path),
+                );
+                ui.ctx().copy_text(line.clone());
+                state.last_copied_bind_line = Some(line);
+            }
+            body.allocate_exact_size(Vec2::new(w, 30.0), egui::Sense::hover());
+        }
     }
     // Input handling for a recording in progress.
     if let Some(action) = toggle_recording {

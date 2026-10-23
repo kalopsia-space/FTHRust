@@ -326,8 +326,8 @@ pub struct AppState {
     pub hotkey_recording: Option<String>,
     /// Hotkey socket path shown in the setup instructions.
     pub hotkey_socket_path: String,
-    /// `nc` executable shown in the setup instructions.
-    pub nc_path: String,
+    /// This executable, the compositor's hotkey client (`fthrust --hotkey`).
+    pub client_exe: String,
     /// Detected compositor (`hyprland`, `kwin`, `gnome`, `unknown`, `none`).
     pub compositor: String,
     /// Running windows for game detection (plan 5 fills, `display_name`s).
@@ -418,6 +418,74 @@ pub struct AppState {
     pub shortcut_pending: Vec<String>,
     /// Keys currently held.
     pub shortcut_down: std::collections::BTreeSet<String>,
+    /// The clips library (plan 5).
+    pub library: crate::library::model::Library,
+    /// Per-clip readiness.
+    pub readiness: fthrust_core::clip_readiness::ClipReadinessRegistry,
+    /// Library scroll offset.
+    pub library_scroll: f32,
+    /// The keyboard-selected clip.
+    pub selected_clip: Option<std::path::PathBuf>,
+    /// Inline rename in progress: the clip and its draft name.
+    pub rename_draft: Option<(std::path::PathBuf, String)>,
+    /// Records changed: rebuild the sections on the next frame.
+    pub library_dirty: bool,
+    /// Cards built last frame (visible rows plus overscan), in order.
+    pub visible_cards: Vec<std::path::PathBuf>,
+    /// Thumbnail jobs requested so far (tests).
+    pub thumb_requests_total: usize,
+    /// The thumbnail worker pool (started by the app; `None` in tests).
+    pub thumb_pool: Option<crate::library::thumbs::ThumbPool>,
+    /// Live thumbnail textures.
+    pub thumb_textures: crate::library::thumbs::ThumbTextures,
+    /// Metadata text and duration per clip once probed.
+    pub thumb_meta: std::collections::HashMap<std::path::PathBuf, (String, Option<f64>)>,
+    /// Clips whose thumbnail could not be made.
+    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
+    /// Clips whose thumbnail was requested this generation.
+    pub thumb_requested: std::collections::HashSet<std::path::PathBuf>,
+    /// Transient card feedback: text and the time it expires.
+    pub card_feedback: std::collections::HashMap<std::path::PathBuf, (String, f64)>,
+    /// Open a clip in the editor (plan 6 consumes).
+    pub open_clip_requested: Option<std::path::PathBuf>,
+    /// Open a screenshot (plan 6 consumes).
+    pub open_screenshot_requested: Option<std::path::PathBuf>,
+    /// Upload a clip (plan 7 consumes).
+    pub upload_requested: Option<std::path::PathBuf>,
+    /// Show a file in the file manager (plan 5 services consume).
+    pub show_in_file_manager_requested: Option<std::path::PathBuf>,
+    /// Scrolling settled: the last wheel/drag time.
+    pub library_last_scroll: f64,
+    /// The live diagnostics session (events, report export).
+    pub diagnostics: Option<std::sync::Arc<fthrust_core::diagnostics::session::DiagnosticsSession>>,
+    /// The clips-folder-unavailable warning was shown.
+    pub storage_error_reported: bool,
+    /// A second launch asked for the window (the shell focuses it).
+    pub activation_requested: bool,
+    /// The engine is connected (Record and Save are allowed).
+    pub engine_connected: bool,
+    /// Cards to show (the overlay drains them).
+    pub pending_cards: Vec<crate::services::CardKind>,
+    /// Sound cues to play (the sound service drains them).
+    pub pending_sounds: Vec<String>,
+    /// Engine events for the recording service (drained each tick).
+    pub pending_engine_events: Vec<fthrust_ipc::Event>,
+    /// A screenshot hotkey fired.
+    pub screenshot_requested: bool,
+    /// The Record button text (`Record`, `Preparing…`, `Stop  hh:mm:ss`, …).
+    pub record_label: String,
+    /// The Record button uses the active (red) style.
+    pub record_active: bool,
+    /// The last Hyprland bind line copied from the hotkey popup.
+    pub last_copied_bind_line: Option<String>,
+    /// The compositor exposes its toplevel list (game detection works).
+    pub game_detection_available: bool,
+    /// The startup cue played (once per run).
+    pub startup_cue_played: bool,
+    /// Confirm the detected game.
+    pub game_confirm_requested: bool,
+    /// Dismiss the detected game.
+    pub game_dismiss_requested: bool,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -482,13 +550,14 @@ impl AppState {
         let hotkey_socket_path = fthrust_core::runtime_dir()
             .map(|d| d.join("hotkey.sock").display().to_string())
             .unwrap_or_else(|_| "<socket unavailable>".into());
+        let clips_root = settings
+            .clips_directory()
+            .unwrap_or_else(|_| paths.default_clips_directory());
         let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
         let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
-        let nc_path = ["/usr/bin/nc", "/bin/nc", "/usr/local/bin/nc"]
-            .iter()
-            .find(|p| Path::new(p).exists())
-            .map(|p| (*p).to_owned())
-            .unwrap_or_else(|| "nc".into());
+        let client_exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "fthrust".into());
         Ok(AppState {
             paths,
             settings,
@@ -516,7 +585,7 @@ impl AppState {
             hotkeys_portal_active: false,
             hotkey_recording: None,
             hotkey_socket_path,
-            nc_path,
+            client_exe,
             compositor: crate::popups::hotkeys::detect_compositor(),
             running_windows: Vec::new(),
             running_window_index: 0,
@@ -562,6 +631,40 @@ impl AppState {
             shortcut_recording: None,
             shortcut_pending: Vec::new(),
             shortcut_down: std::collections::BTreeSet::new(),
+            library: crate::library::model::Library::new(clips_root),
+            readiness: fthrust_core::clip_readiness::ClipReadinessRegistry::new(),
+            library_scroll: 0.0,
+            selected_clip: None,
+            rename_draft: None,
+            library_dirty: true,
+            visible_cards: Vec::new(),
+            thumb_requests_total: 0,
+            thumb_pool: None,
+            thumb_textures: crate::library::thumbs::ThumbTextures::default(),
+            thumb_meta: std::collections::HashMap::new(),
+            thumb_failed: std::collections::HashSet::new(),
+            thumb_requested: std::collections::HashSet::new(),
+            card_feedback: std::collections::HashMap::new(),
+            open_clip_requested: None,
+            open_screenshot_requested: None,
+            upload_requested: None,
+            show_in_file_manager_requested: None,
+            library_last_scroll: -10.0,
+            diagnostics: None,
+            storage_error_reported: false,
+            activation_requested: false,
+            engine_connected: false,
+            pending_cards: Vec::new(),
+            pending_sounds: Vec::new(),
+            pending_engine_events: Vec::new(),
+            screenshot_requested: false,
+            record_label: "Record".into(),
+            record_active: false,
+            last_copied_bind_line: None,
+            game_detection_available: true,
+            startup_cue_played: false,
+            game_confirm_requested: false,
+            game_dismiss_requested: false,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,
@@ -584,6 +687,9 @@ impl AppState {
         }
         let mut state = AppState::load(paths).expect("state");
         state.tokens.wayland = true;
+        // A client path whose bind command is as wide as the reference's
+        // `echo | nc -U` line, so the Qt popup references still apply.
+        state.client_exe = "/opt/fthrust/bin/xxxxxxxxxxxxxxxxxxxxx/fthrust".into();
         state
     }
 

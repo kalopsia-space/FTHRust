@@ -9,7 +9,9 @@ description = "The FTHRust application shell (egui)"
 fthrust-core = { path = "../fthrust-core" }
 fthrust-media = { path = "../fthrust-media" }
 fthrust-ipc = { path = "../fthrust-ipc" }
-eframe.workspace = true
+fthrust-wayland = { path = "../fthrust-wayland" }
+winit.workspace = true
+egui-winit.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
 resvg.workspace = true
@@ -20,8 +22,18 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 time.workspace = true
+notify.workspace = true
+tokio.workspace = true
+nix.workspace = true
+ashpd.workspace = true
+futures-util.workspace = true
+egui-wgpu.workspace = true
+pollster.workspace = true
+pipewire.workspace = true
+libspa.workspace = true
 
 [dev-dependencies]
+fthrust-media = { path = "../fthrust-media" }
 egui_kittest.workspace = true
 tempfile.workspace = true
 sha2.workspace = true

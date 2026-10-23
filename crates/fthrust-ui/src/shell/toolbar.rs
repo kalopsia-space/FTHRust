@@ -147,7 +147,10 @@ pub fn capture_summary(settings: &SettingsStore) -> String {
 }
 
 /// `GameDetectionPopup.get_summary`.
-pub fn game_summary(settings: &SettingsStore) -> String {
+pub fn game_summary(settings: &SettingsStore, available: bool) -> String {
+    if !available {
+        return "Game detection unavailable".into();
+    }
     if settings.get_bool("game_detection_enabled").unwrap_or(false) {
         "Game detection: On".into()
     } else {
@@ -259,7 +262,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> ToolbarResponse {
     let status_galley = galley(ui, &status_text, size::LABEL, Weight::W400, Color32::WHITE);
     let status_w = status_galley.size().x.ceil().max(110.0);
     let summary = capture_summary(&state.settings);
-    let game = game_summary(&state.settings);
+    let game = game_summary(&state.settings, state.game_detection_available);
     let labels = [
         state.source_label.clone(),
         game.clone(),
@@ -287,7 +290,14 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> ToolbarResponse {
         Pos2::new(x, inner.min.y + 4.0),
         Vec2::new(widths[0], geom::CAPTURE_CONTROL_H),
     );
-    out.record = record_button(ui, &t, record_rect, state.record_enabled);
+    out.record = record_button(
+        ui,
+        &t,
+        record_rect,
+        &state.record_label,
+        state.record_active,
+        state.record_enabled,
+    );
     x += widths[0] + 8.0;
     let names = ["cap_btn", "source_btn", "game_detection_btn", "hotkey_btn"];
     let texts = [
@@ -342,7 +352,14 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> ToolbarResponse {
     out
 }
 
-fn record_button(ui: &mut Ui, t: &Tokens, rect: Rect, enabled: bool) -> bool {
+fn record_button(
+    ui: &mut Ui,
+    t: &Tokens,
+    rect: Rect,
+    label: &str,
+    active: bool,
+    enabled: bool,
+) -> bool {
     let sense = if enabled {
         Sense::click()
     } else {
@@ -352,14 +369,34 @@ fn record_button(ui: &mut Ui, t: &Tokens, rect: Rect, enabled: bool) -> bool {
     let hovered = enabled && resp.hovered();
     let pressed = enabled && resp.is_pointer_button_down_on();
     let blend = motion::hover(ui.ctx(), resp.id.with("hover"), hovered, t.reduce_motion);
-    let (bg, fg) = if pressed {
-        (t.color(Color::AccentDim), t.color(Color::Accent))
+    // `_manual_record_button_qss(active)`: ACCENT/BG/ACCENT idle, DELETE/TEXT/ERROR active.
+    let (base_bg, base_fg, border, hover_bg, hover_fg, pressed_bg) = if active {
+        (
+            Color::Delete,
+            Color::Text,
+            Color::Error,
+            Color::ErrorSoft,
+            Color::Error,
+            Color::Delete,
+        )
     } else {
         (
-            lerp(t.color(Color::Accent), t.color(Color::AccentSoft), blend),
+            Color::Accent,
+            Color::Bg,
+            Color::Accent,
+            Color::AccentSoft,
+            Color::Accent,
+            Color::AccentDim,
+        )
+    };
+    let (bg, fg) = if pressed {
+        (t.color(pressed_bg), t.color(hover_fg))
+    } else {
+        (
+            lerp(t.color(base_bg), t.color(hover_bg), blend),
             lerp(
-                t.color(if enabled { Color::Bg } else { Color::TextMuted }),
-                t.color(Color::Accent),
+                t.color(if enabled { base_fg } else { Color::TextMuted }),
+                t.color(hover_fg),
                 blend,
             ),
         )
@@ -369,15 +406,15 @@ fn record_button(ui: &mut Ui, t: &Tokens, rect: Rect, enabled: bool) -> bool {
     ui.painter().rect_stroke(
         rect,
         radius,
-        Stroke::new(1.0, t.color(Color::Accent)),
+        Stroke::new(1.0, t.color(border)),
         StrokeKind::Inside,
     );
-    let g = galley(ui, "Record", size::H3, Weight::W600, fg);
+    let g = galley(ui, label, size::H3, Weight::W600, fg);
     paint_text(ui, g, rect, Align::Center, 0.0, fg);
     fidelity::mark(ui, "QPushButton[Record]", rect)
-        .edge(Color::Accent)
-        .top(Color::Accent)
-        .text("Record", size::H3, Weight::W600)
+        .edge(border)
+        .top(border)
+        .text(label, size::H3, Weight::W600)
         .done();
     resp.clicked()
 }

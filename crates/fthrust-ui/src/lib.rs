@@ -8,38 +8,58 @@ pub mod dialogs;
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
+pub mod library;
 pub mod motion;
+pub mod overlay;
 pub mod pages;
 pub mod popups;
+pub mod runner;
+pub mod services;
 pub mod settings;
 pub mod shell;
 pub mod state;
 pub mod theme;
 pub mod tokens;
+pub mod ui_dump;
 pub mod widgets;
 
-/// The eframe application.
+/// The application: state, services and the per-frame UI.
 pub struct App {
     /// Shared state.
     pub state: state::AppState,
+    /// Background services (`None` in tests that build the app by hand).
+    pub services: Option<services::Services>,
     /// The first-frame monitor clamp has run.
     clamped: bool,
+    /// The bench's state dump (`FTHRUST_UI_DUMP`), if enabled.
+    dump: Option<ui_dump::Writer>,
 }
 
 impl App {
     /// Builds the app: fonts and style are installed on `ctx`.
-    pub fn new(cc: &eframe::CreationContext<'_>, state: state::AppState) -> App {
-        fonts::install(&cc.egui_ctx, &state.tokens);
-        tokens::install_style(&cc.egui_ctx, &state.tokens);
+    pub fn new(ctx: &egui::Context, state: state::AppState) -> App {
+        fonts::install(ctx, &state.tokens);
+        tokens::install_style(ctx, &state.tokens);
+        if let Some(pool) = &state.thumb_pool {
+            pool.set_repaint(ctx.clone());
+        }
         App {
             state,
+            services: None,
             clamped: false,
+            dump: ui_dump::from_env(),
         }
     }
-}
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Runs the services without painting (loop wakes between frames).
+    pub fn tick(&mut self) {
+        if let Some(services) = self.services.as_mut() {
+            services.tick(&mut self.state);
+        }
+    }
+
+    /// One frame.
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
         if !self.clamped {
             // Review Focus 3: a geometry saved on a removed monitor is clamped
             // to the monitor the window actually opened on.
@@ -67,10 +87,29 @@ impl eframe::App for App {
                 self.clamped = true;
             }
         }
+        self.tick();
         shell::ui(ui, &mut self.state);
+        if let Some(w) = self.dump.as_mut() {
+            let ctx = ui.ctx();
+            let markers = fidelity::take(ctx);
+            let (ppp, time) = ctx.input(|i| (i.pixels_per_point(), i.time));
+            let v = ui_dump::snapshot(&self.state, &markers, ppp, ctx.cumulative_pass_nr(), time);
+            match w.write(&v) {
+                // Throttled: paint once more after the gap so the file catches up.
+                Ok(ui_dump::WriteOutcome::Deferred(after)) => ctx.request_repaint_after(after),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "ui dump failed"),
+            }
+        }
     }
 
-    fn on_exit(&mut self) {
+    /// The reference's shutdown order, then the window geometry is saved.
+    pub fn on_exit(&mut self) {
+        if let Some(mut services) = self.services.take() {
+            services.prepare_exit(&mut self.state);
+            services.shutdown();
+        }
+        services::diagnostics::emit(&self.state, "app", "exit", serde_json::json!({}));
         // winit on Wayland has no window position; keep size and state.
         let rect = self.state.window.last_inner;
         if rect.width > 0 && rect.height > 0 {
@@ -82,7 +121,8 @@ impl eframe::App for App {
         }
     }
 
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+    /// The window clear colour (the theme background).
+    pub fn clear_color(&self) -> [f32; 4] {
         let c = self.state.tokens.color(tokens::Color::Bg);
         [
             c.r() as f32 / 255.0,

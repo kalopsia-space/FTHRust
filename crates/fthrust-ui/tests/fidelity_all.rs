@@ -282,16 +282,116 @@ fn export_preset() {
 }
 
 #[test]
-#[ignore = "plan 5 (library): clip cards and the small library layout"]
-fn library_small() {}
+fn library_small() {
+    let (_tmp, mut s) = state();
+    s.page = Page::Clips;
+    s.status = StatusText {
+        text: "CONNECTING".into(),
+        style: StatusStyle::Idle,
+    };
+    check("library-small", s, |ui, s| {
+        shell::frame(ui, s);
+    });
+}
+
+fn card_data(feedback: Option<&str>) -> fthrust_ui::library::card::CardData {
+    fthrust_ui::library::card::CardData {
+        path: std::path::PathBuf::from(
+            "/clips/Overwatch/Overwatch_clip_from_04Oct2025_12-00-00.mp4",
+        ),
+        title: "Overwatch_clip_from_04Oct2025_12-00-00".into(),
+        metadata: "Screenshot".into(),
+        duration_s: Some(0.0),
+        is_video: true,
+        imported: false,
+        uploaded: false,
+        upload_link: None,
+        upload_enabled: true,
+        ready: true,
+        feedback: feedback.map(str::to_owned),
+        thumbnail: None,
+    }
+}
+
+fn check_card(screen: &str, data: fthrust_ui::library::card::CardData, hover: Option<Pos2>) {
+    let (_tmp, s) = state();
+    let tokens = s.tokens.clone();
+    let mut icons = fthrust_ui::icons::IconCache::default();
+    let mut editing = None;
+    let size = screen_size(screen);
+    let tc = tokens.clone();
+    let mut h = common::harness(size, 1.0, &tokens, move |ui| {
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, size)),
+            |ui| {
+                fthrust_ui::library::card::card(
+                    ui,
+                    &tc,
+                    &mut icons,
+                    size.x,
+                    &data,
+                    &mut editing,
+                    "card",
+                );
+            },
+        );
+    });
+    if let Some(p) = hover {
+        h.hover_at(p);
+    }
+    h.run_steps(2);
+    let r = common::render_harness(&mut h);
+    let ctx = egui::Context::default();
+    fthrust_ui::fonts::install(&ctx, &tokens);
+    let mut out = ctx.run_pass(egui::RawInput::default(), |_| {});
+    out.textures_delta.clear();
+    assert_fidelity!(r, screen, &tokens, &ctx);
+}
 
 #[test]
-#[ignore = "plan 5 (library): clip-card, clip-card-hover, clip-card-feedback"]
-fn clip_cards() {}
+fn clip_card() {
+    check_card("clip-card", card_data(None), None);
+}
 
 #[test]
-#[ignore = "plan 5 (library): record-hover toolbar state"]
-fn record_hover() {}
+fn clip_card_hover() {
+    check_card(
+        "clip-card-hover",
+        card_data(None),
+        Some(Pos2::new(120.0, 60.0)),
+    );
+}
+
+#[test]
+fn clip_card_feedback() {
+    check_card(
+        "clip-card-feedback",
+        card_data(Some("Upload requested")),
+        None,
+    );
+}
+
+#[test]
+fn record_hover() {
+    let (_tmp, mut s) = state();
+    s.page = Page::Clips;
+    s.status = StatusText {
+        text: "CONNECTING".into(),
+        style: StatusStyle::Idle,
+    };
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(screen_size("record-hover"), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.hover_at(Pos2::new(84.0, 68.0));
+    h.run_steps(2);
+    let r = common::render_harness(&mut h);
+    let ctx = egui::Context::default();
+    fthrust_ui::fonts::install(&ctx, &tokens);
+    let mut out = ctx.run_pass(egui::RawInput::default(), |_| {});
+    out.textures_delta.clear();
+    assert_fidelity!(r, "record-hover", &tokens, &ctx);
+}
 
 #[test]
 #[ignore = "plan 6 (editor): clip-editor"]

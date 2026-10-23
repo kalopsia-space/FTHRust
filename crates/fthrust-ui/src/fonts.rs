@@ -299,8 +299,23 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
             .cloned()
             .unwrap_or_default(),
     );
+    // egui's own labels (debug warnings, the id-clash marker) use the
+    // Monospace family; without egui's bundled fonts it would be empty and
+    // panic in debug builds, so it gets the mono face or the body chain.
+    let mono_for_egui = if mono_chain.is_empty() {
+        defs.families
+            .get(&FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        mono_chain.clone()
+    };
+    defs.families.insert(FontFamily::Monospace, mono_for_egui);
     defs.families
         .insert(FontFamily::Name(MONO_FAMILY.into()), mono_chain);
+    // A clip title or device name with a glyph no face has (emoji) draws a
+    // box; it must never abort the app.
+    ctx.set_missing_glyph_policy(egui::epaint::text::MissingGlyphPolicy::Tofu);
     ctx.set_fonts(defs);
 }
 

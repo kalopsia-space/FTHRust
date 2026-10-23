@@ -11,7 +11,7 @@ fn state(settings: serde_json::Value) -> (tempfile::TempDir, AppState) {
     let mut s = AppState::for_tests(tmp.path(), settings);
     s.tokens.reduce_motion = true;
     s.hotkey_socket_path = "/run/user/1000/fthr/hotkey.sock".into();
-    s.nc_path = "/usr/bin/nc".into();
+    s.client_exe = "/opt/fthrust/bin/xxxxxxxxxxxxxxxxxxxxx/fthrust".into();
     s.compositor = "unknown".into();
     (tmp, s)
 }
@@ -332,10 +332,12 @@ fn hotkey_recording_commits_a_chord_and_clear_unsets() {
     assert!(s.hotkeys_changed);
     assert_eq!(hotkeys::display_combo(""), "Unset");
     assert_eq!(hotkeys::display_combo("ctrl+f9"), "Ctrl+F9");
-    assert!(hotkeys::setup_instructions("unknown", "/usr/bin/nc", "/run/user/1000/fthr/hotkey.sock").starts_with("Bind your preferred keys to these commands:\n\necho -n \"save_clip\" | /usr/bin/nc -U /run/user/1000/fthr/hotkey.sock\n"));
-    assert!(hotkeys::setup_instructions("kwin", "nc", "/s").starts_with("KDE: System Settings"));
+    assert!(hotkeys::setup_instructions("unknown", "/usr/bin/fthrust", "/run/user/1000/fthrust/hotkey.sock").starts_with("Bind your preferred keys to these commands:\n\n\"/usr/bin/fthrust\" --hotkey save_clip\n"));
     assert!(
-        hotkeys::setup_instructions("gnome", "nc", "/s")
-            .contains("bash -c 'echo -n \"save_clip\" | nc -U /s'")
+        hotkeys::setup_instructions("kwin", "fthrust", "/s").starts_with("KDE: System Settings")
+    );
+    assert!(
+        hotkeys::setup_instructions("gnome", "fthrust", "/s")
+            .contains("bash -c '\"fthrust\" --hotkey save_clip'")
     );
 }

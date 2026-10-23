@@ -13,8 +13,16 @@ use crate::widgets::section;
 
 /// Writes the report ZIP into the profile's diagnostics directory.
 pub fn export(state: &mut AppState) -> Result<PathBuf, String> {
-    let session =
-        DiagnosticsSession::start(&state.paths, crate::VERSION).map_err(|e| e.to_string())?;
+    // The live session when the app runs; a fresh one in tests.
+    let fresh;
+    let session: &DiagnosticsSession = match &state.diagnostics {
+        Some(s) => s,
+        None => {
+            fresh = DiagnosticsSession::start(&state.paths, crate::VERSION)
+                .map_err(|e| e.to_string())?;
+            &fresh
+        }
+    };
     let dir = state.paths.diagnostics_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = time::OffsetDateTime::now_utc()
