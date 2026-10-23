@@ -54,13 +54,20 @@ pub struct ExportPlan {
 }
 
 impl ExportPlan {
+    /// The output frame rate when the preset lowers it (the `fps=` filter
+    /// of [`ExportPlan::preset_filters`]).
+    pub fn output_fps(&self, src: &MediaFacts) -> Option<f64> {
+        (self.target_fps > 0.0 && src.fps > 0.0 && self.target_fps < src.fps - 0.01)
+            .then_some(self.target_fps)
+    }
+
     /// The share preset's filters (`_preset_video_filters`): `fps=` when
     /// the target rate is lower, a fitting `scale` when the size changes,
     /// then always the even-size guard.
     pub fn preset_filters(&self, src: &MediaFacts) -> Vec<String> {
         let mut out = Vec::new();
-        if self.target_fps > 0.0 && src.fps > 0.0 && self.target_fps < src.fps - 0.01 {
-            out.push(format!("fps={}", fmt_g(self.target_fps)));
+        if let Some(fps) = self.output_fps(src) {
+            out.push(format!("fps={}", fmt_g(fps)));
         }
         if (self.target_width, self.target_height) != (src.width, src.height)
             && self.target_width > 0

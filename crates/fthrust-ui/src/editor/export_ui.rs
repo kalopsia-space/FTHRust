@@ -144,6 +144,7 @@ pub fn export_now(state: &mut AppState) {
     let expected = speed_adjusted_duration(kept, spec.speed);
     let quality = quality(state);
     let src = source.clone();
+    let decode_from_s = first_range_start(&spec);
     state.export_queue.submit(
         source,
         &dir,
@@ -157,11 +158,24 @@ pub fn export_now(state: &mut AppState) {
             max_rate_kbps: None,
             expected_duration_s: expected,
             target_size_mb: None,
+            output_fps: None,
+            decode_from_s,
+            inactivity_s: None,
             fail_first_encoder: false,
         }),
         expected,
     );
     state.export_jobs_label = None;
+}
+
+/// Where a multi-range export may start decoding (its trims keep source
+/// timestamps); a single range seeks itself.
+pub fn first_range_start(spec: &ExportSpec) -> f64 {
+    if spec.ranges_s.len() > 1 {
+        spec.ranges_s[0].0
+    } else {
+        0.0
+    }
 }
 
 /// `Export jobs` plus the pending / failed / completed suffix.

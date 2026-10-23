@@ -322,13 +322,14 @@ impl Worker {
     fn export(&mut self) -> Result<PathBuf, String> {
         let kept: f64 = self.spec.ranges_s.iter().map(|(a, b)| b - a).sum();
         let expected = speed_adjusted_duration(kept, self.spec.speed);
-        let (mut bitrate, mut max_rate, mut target) = (None, None, None);
+        let (mut bitrate, mut max_rate, mut target, mut output_fps) = (None, None, None, None);
         if let Some(p) = &self.preset {
             let facts = fthrust_media::export::media_facts(&self.source)?;
             let plan = plan_export(&facts, p, Some(expected));
             let _ = self.tx.send(Event::Line(plan.summary()));
             if plan.reencode_video {
                 self.spec.extra_video_filters = plan.preset_filters(&facts);
+                output_fps = plan.output_fps(&facts);
             }
             self.spec.force_video_encode = plan.reencode_video;
             self.spec.force_audio_encode = plan.reencode_audio;
@@ -347,6 +348,9 @@ impl Worker {
             max_rate_kbps: max_rate,
             expected_duration_s: expected,
             target_size_mb: target,
+            output_fps,
+            decode_from_s: export_ui::first_range_start(&self.spec),
+            inactivity_s: None,
             fail_first_encoder: false,
         };
         let tx = self.tx.clone();
@@ -464,11 +468,27 @@ pub fn close(state: &mut AppState, id: u64) {
     }
 }
 
-/// Closes every share window (app exit, before the queue shuts down).
+/// Closes every share window at exit: every share is cancelled first,
+/// then the workers get one shared 2.5 s deadline (each removes its staged
+/// file as it stops).
 pub fn close_all(state: &mut AppState) {
-    let ids: Vec<u64> = state.share_windows.iter().map(|w| w.id).collect();
-    for id in ids {
-        close(state, id);
+    let windows = std::mem::take(&mut state.share_windows);
+    for w in &windows {
+        w.cancel.store(true, Ordering::Relaxed);
+    }
+    let deadline = Instant::now() + CLOSE_WAIT;
+    for mut w in windows {
+        if let Some(t) = w.thread.take() {
+            while !t.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            }
+        }
+        if w.status == ShareStatus::Exporting {
+            running_done(state, &w.source);
+        }
     }
 }
 

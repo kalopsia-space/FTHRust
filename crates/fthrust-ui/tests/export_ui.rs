@@ -477,3 +477,60 @@ fn closing_share_cancels() {
         "a cancelled share shows nothing"
     );
 }
+
+#[test]
+fn quitting_cancels_running_shares() {
+    let (_tmp, mut s, _cap) = editor_state();
+    s.settings.set("parallel_exports", serde_json::json!(true));
+    let cancelled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let c = cancelled.clone();
+    s.export_queue = ExportQueue::with_runner(Arc::new(move |_, cancel, _, _| {
+        while !cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        c.fetch_add(1, Ordering::SeqCst);
+        ExportResult {
+            state: ExportState::Cancelled,
+            detail: "Export cancelled".into(),
+        }
+    }));
+    share::choose(&mut s, Choice::Plain, "quality");
+    share::choose(&mut s, Choice::Plain, "quality");
+    std::thread::sleep(Duration::from_millis(50));
+    let ctx = egui::Context::default();
+    let mut services = fthrust_ui::services::Services::start_for_tests(&ctx);
+    let started = std::time::Instant::now();
+    services.prepare_exit(&mut s);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(s.share_windows.is_empty(), "share windows closed");
+    assert!(s.active_shares.is_empty());
+    assert_eq!(
+        cancelled.load(Ordering::SeqCst),
+        2,
+        "both shares saw the cancel"
+    );
+    services.shutdown();
+}
+
+#[test]
+fn several_ranges_decode_from_the_first() {
+    let (_tmp, mut s, cap) = editor_state();
+    {
+        let e = s.editor.as_mut().unwrap();
+        e.timeline.split_at(0.2);
+        e.timeline.split_at(0.5);
+        e.timeline.split_at(0.7);
+        e.timeline.selected = 0;
+        assert!(e.timeline.toggle_selected());
+        e.timeline.selected = 2;
+        assert!(e.timeline.toggle_selected());
+        e.segments_changed();
+    }
+    export_ui::export_now(&mut s);
+    let job = cap.wait_job().expect("the job ran");
+    assert!(
+        (job.decode_from_s - 2.0).abs() < 1e-6,
+        "{}",
+        job.decode_from_s
+    );
+}

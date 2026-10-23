@@ -1230,7 +1230,9 @@ impl Services {
     /// bound) and a running manual recording is stopped and finalised
     /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
-        // `_perform_full_shutdown`: cancel exports, bounded wait.
+        // `_perform_full_shutdown`: close the share windows (cancelling
+        // their exports), then cancel queued exports with a bounded wait.
+        crate::editor::share::close_all(state);
         state
             .export_queue
             .shutdown(std::time::Duration::from_secs(12));

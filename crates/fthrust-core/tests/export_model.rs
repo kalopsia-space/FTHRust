@@ -451,3 +451,25 @@ fn preset_filters_follow_the_plan() {
         ["scale=trunc(iw/2)*2:trunc(ih/2)*2"]
     );
 }
+
+#[test]
+fn preset_output_fps_only_when_lowered() {
+    let discord = ExportPreset::builtin_discord();
+    let mut src = MediaFacts {
+        size_bytes: 93_750_000,
+        duration_s: 30.0,
+        width: 1920,
+        height: 1080,
+        fps: 120.0,
+        video_codec: "h264".into(),
+        has_audio: true,
+        audio_codec: "aac".into(),
+        audio_kbps: 160,
+    };
+    assert_eq!(
+        plan_export(&src, &discord, None).output_fps(&src),
+        Some(60.0)
+    );
+    src.fps = 30.0;
+    assert_eq!(plan_export(&src, &discord, None).output_fps(&src), None);
+}

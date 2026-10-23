@@ -37,6 +37,9 @@ fn builder() -> Box<dyn FnOnce(&Path) -> Job + Send> {
         max_rate_kbps: None,
         expected_duration_s: 1.0,
         target_size_mb: None,
+        output_fps: None,
+        decode_from_s: 0.0,
+        inactivity_s: None,
         fail_first_encoder: false,
     })
 }

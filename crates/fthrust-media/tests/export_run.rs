@@ -120,6 +120,9 @@ fn job(source: &Path, output: PathBuf, s: &ExportSpec, quality: Quality) -> Job 
         max_rate_kbps: None,
         expected_duration_s: 1.0,
         target_size_mb: None,
+        output_fps: None,
+        decode_from_s: 0.0,
+        inactivity_s: None,
         fail_first_encoder: false,
     }
 }
@@ -408,4 +411,136 @@ fn media_facts_describe_the_clip() {
         missing.starts_with("Media inspection failed: "),
         "{missing}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes.
+
+/// Video frames and the average rate of the first video stream.
+fn video_frames(path: &Path) -> (usize, f64) {
+    ffmpeg_next::init().unwrap();
+    let mut ictx = ffmpeg_next::format::input(&path).unwrap();
+    let v = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .unwrap();
+    let (index, rate) = (v.index(), v.avg_frame_rate());
+    let n = ictx.packets().filter(|(s, _)| s.index() == index).count();
+    (
+        n,
+        f64::from(rate.numerator()) / f64::from(rate.denominator().max(1)),
+    )
+}
+
+#[test]
+fn preset_frame_rate_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "f.mp4", 2, 1) else {
+        return;
+    };
+    let mut s = spec(&[(0.0, 2.0)]);
+    s.extra_video_filters = vec!["fps=15".into(), "scale=trunc(iw/2)*2:trunc(ih/2)*2".into()];
+    s.force_video_encode = true;
+    let out = tmp.path().join("f15.mp4");
+    let mut j = job(&src, out.clone(), &s, Quality::Fast);
+    j.output_fps = Some(15.0);
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let (frames, fps) = video_frames(&out);
+    assert!((fps - 15.0).abs() < 0.5, "{fps} fps");
+    assert!((28..=32).contains(&frames), "{frames} frames");
+}
+
+/// Copies every stream of `src` into a Matroska file (1/1000 time bases).
+fn remux_mkv(src: &Path, dst: &Path) {
+    use ffmpeg_next as ff;
+    ff::init().unwrap();
+    let mut ictx = ff::format::input(&src).unwrap();
+    let mut octx = ff::format::output(&dst).unwrap();
+    for ist in ictx.streams() {
+        let mut ost = octx
+            .add_stream(ff::encoder::find(ff::codec::Id::None))
+            .unwrap();
+        ost.set_parameters(ist.parameters());
+        unsafe { (*ost.parameters().as_mut_ptr()).codec_tag = 0 };
+    }
+    octx.write_header().unwrap();
+    for (ist, mut pkt) in ictx.packets() {
+        let otb = octx.stream(ist.index()).unwrap().time_base();
+        pkt.rescale_ts(ist.time_base(), otb);
+        pkt.set_position(-1);
+        pkt.write_interleaved(&mut octx).unwrap();
+    }
+    octx.write_trailer().unwrap();
+}
+
+#[test]
+fn audio_from_a_matroska_source_keeps_its_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "a.mp4", 2, 1) else {
+        return;
+    };
+    let mkv = tmp.path().join("a.mkv");
+    remux_mkv(&src, &mkv);
+    let mut s = spec(&[(0.0, 2.0)]);
+    s.force_audio_encode = true;
+    let out = tmp.path().join("a_out.mp4");
+    let (r, _, _) = run_job(&job(&mkv, out.clone(), &s, Quality::Fast));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let p = probe(&out);
+    let audio = p.streams.iter().find(|(k, _)| k == "Audio").unwrap().1;
+    assert!((audio - 2.0).abs() < 0.2, "audio {audio} s {:?}", p.streams);
+}
+
+#[test]
+fn late_ranges_of_a_long_clip_do_not_time_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "long.mp4", 40, 1) else {
+        return;
+    };
+    let s = spec(&[(37.0, 38.0), (38.5, 39.5)]);
+    let out = tmp.path().join("late.mp4");
+    let mut j = job(&src, out.clone(), &s, Quality::Fast);
+    j.decode_from_s = 37.0;
+    // Decoding 37 s before the first output takes longer than this.
+    j.inactivity_s = Some(0.05);
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let p = probe(&out);
+    assert!(
+        (p.duration_s - 2.0).abs() < 0.2,
+        "{} {:?}",
+        p.duration_s,
+        p.streams
+    );
+}
+
+#[test]
+fn a_corrupt_packet_does_not_abort_the_export() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "c.mp4", 3, 1) else {
+        return;
+    };
+    // Garble a run of bytes in the middle of the media data.
+    let mut bytes = std::fs::read(&src).unwrap();
+    let len = bytes.len();
+    let mut x: u32 = 0x1234_5678;
+    for k in 3..9 {
+        let at = len * k / 10;
+        for b in &mut bytes[at..at + 1500] {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            *b = x as u8;
+        }
+    }
+    let bad = tmp.path().join("bad.mp4");
+    std::fs::write(&bad, bytes).unwrap();
+    let mut s = spec(&[(0.0, 3.0)]);
+    s.force_video_encode = true;
+    s.force_audio_encode = true;
+    let out = tmp.path().join("bad_out.mp4");
+    let (r, _, _) = run_job(&job(&bad, out.clone(), &s, Quality::Fast));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    assert!(out.exists());
 }

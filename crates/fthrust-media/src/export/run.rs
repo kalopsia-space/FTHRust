@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use ff::Rescale;
 use ffmpeg_next as ff;
 use fthrust_core::export::graph::{AudioOut, MapRef, VideoOut};
 
@@ -122,6 +123,24 @@ fn split_shared_inputs(graph: &str, uses: &BTreeMap<String, usize>) -> String {
         g
     } else {
         format!("{};{g}", prefix.join(";"))
+    }
+}
+
+/// Slice threads with FFmpeg's automatic count (frame threads delay
+/// frames past the graph's end-of-range handling).
+fn decoder_threads() -> ff::codec::threading::Config {
+    ff::codec::threading::Config {
+        kind: ff::codec::threading::Type::Slice,
+        count: 0,
+    }
+}
+
+/// A source refuses frames once everything downstream has finished (the
+/// last range's trim ended): that input is done, not broken.
+fn feed(r: Result<(), ff::Error>) -> Result<(), Stop> {
+    match r {
+        Err(ff::Error::Eof) => Ok(()),
+        other => Ok(other?),
     }
 }
 
@@ -252,9 +271,9 @@ fn build_graph(
             let stream = ictx
                 .stream(index)
                 .ok_or(Stop::Failed("video stream missing".into()))?;
-            let dec = ff::codec::context::Context::from_parameters(stream.parameters())?
-                .decoder()
-                .video()?;
+            let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
+            ctx.set_threading(decoder_threads());
+            let dec = ctx.decoder().video()?;
             let tb = stream.time_base();
             let sar = dec.aspect_ratio();
             let (sn, sd) = if sar.numerator() > 0 {
@@ -284,9 +303,9 @@ fn build_graph(
             let stream = ictx
                 .stream(index)
                 .ok_or(Stop::Failed("audio stream missing".into()))?;
-            let dec = ff::codec::context::Context::from_parameters(stream.parameters())?
-                .decoder()
-                .audio()?;
+            let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
+            ctx.set_threading(decoder_threads());
+            let dec = ctx.decoder().audio()?;
             let tb = stream.time_base();
             let layout = format!("0x{:x}", dec.channel_layout().bits());
             let layout = if layout == "0x0" {
@@ -405,7 +424,12 @@ pub(super) fn attempt(
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<(), Stop> {
     let mut ictx = ff::format::input(&job.source)?;
-    let inp = inputs(&ictx);
+    let mut inp = inputs(&ictx);
+    // A preset that lowers the rate: the sink adapter and the encoder use
+    // the output rate, or `fps=` would duplicate frames back up.
+    if let Some(f) = job.output_fps.filter(|f| *f > 0.0) {
+        inp.fps = (f.round() as u32).clamp(1, 240);
+    }
     let asm = assemble(job, &inp);
     let mut sinks: Vec<String> = asm.video_sink.iter().cloned().collect();
     sinks.extend(asm.audio_sinks.iter().cloned());
@@ -576,7 +600,13 @@ pub(super) fn attempt(
     if seek > 0.0 {
         let ts = (seek * f64::from(ff::ffi::AV_TIME_BASE)) as i64;
         ictx.seek(ts, ..ts)?;
+    } else if job.decode_from_s > 0.0 {
+        // Several ranges: start at the keyframe before the first one; the
+        // trims use source timestamps, so nothing is shifted.
+        let ts = (job.decode_from_s * f64::from(ff::ffi::AV_TIME_BASE)) as i64;
+        ictx.seek(ts, ..ts)?;
     }
+    let inactivity = job.inactivity_s.unwrap_or(INACTIVITY_S);
     let starts: BTreeMap<usize, (i64, ff::Rational)> = ictx
         .streams()
         .map(|s| {
@@ -663,13 +693,18 @@ pub(super) fn attempt(
                     enc,
                     eof,
                 } => loop {
+                    let (_, _, sink_tb) = sink_props(g, sink);
                     let mut ctx = g.get(sink).expect("sink");
                     let mut frame = ff::frame::Audio::empty();
                     match ctx.sink().frame(&mut frame) {
                         Ok(()) => {
                             *last_output = Instant::now();
-                            enc.send_frame(&frame)?;
                             let etb = enc.time_base();
+                            // The sink keeps the input's time base unless a
+                            // filter resampled; the encoder counts samples.
+                            let pts = frame.pts().map(|p| p.rescale(sink_tb, etb));
+                            frame.set_pts(pts);
+                            enc.send_frame(&frame)?;
                             drain_packets(|p| enc.receive_packet(p).is_ok(), octx, *ost, etb)?;
                         }
                         Err(ff::Error::Eof) => {
@@ -690,7 +725,7 @@ pub(super) fn attempt(
         if cancel.load(Ordering::Relaxed) {
             return Err(Stop::Cancelled);
         }
-        if last_output.elapsed().as_secs_f64() > INACTIVITY_S {
+        if last_output.elapsed().as_secs_f64() > inactivity {
             return Err(Stop::TimedOut);
         }
         let index = stream.index();
@@ -741,8 +776,11 @@ pub(super) fn attempt(
         if Some(index) == inp.video
             && let Some(dec) = decoders.video.as_mut()
         {
-            dec.send_packet(&packet)?;
+            if let Err(e) = dec.send_packet(&packet) {
+                tracing::warn!(error = %e, "export: skipped an undecodable video packet");
+            }
             while dec.receive_frame(&mut vframe).is_ok() {
+                last_output = Instant::now();
                 let pts = vframe.timestamp().or(vframe.pts()).unwrap_or(0);
                 let t = secs(pts - start, tb);
                 if t + 1e-6 < seek {
@@ -750,11 +788,14 @@ pub(super) fn attempt(
                 }
                 let shifted = pts - start - (seek / secs(1, tb)).round() as i64;
                 vframe.set_pts(Some(shifted));
-                g.get("0:v").expect("source").source().add(&vframe)?;
+                feed(g.get("0:v").expect("source").source().add(&vframe))?;
             }
         } else if let Some((label, dec)) = decoders.audio.get_mut(&index) {
-            dec.send_packet(&packet)?;
+            if let Err(e) = dec.send_packet(&packet) {
+                tracing::warn!(error = %e, "export: skipped an undecodable audio packet");
+            }
             while dec.receive_frame(&mut aframe).is_ok() {
+                last_output = Instant::now();
                 let pts = aframe.timestamp().or(aframe.pts()).unwrap_or(0);
                 let dur = aframe.samples() as f64 / f64::from(dec.rate().max(1));
                 let t = secs(pts - start, tb);
@@ -763,7 +804,7 @@ pub(super) fn attempt(
                 }
                 let shifted = pts - start - (seek / secs(1, tb)).round() as i64;
                 aframe.set_pts(Some(shifted));
-                g.get(label).expect("source").source().add(&aframe)?;
+                feed(g.get(label).expect("source").source().add(&aframe))?;
             }
         } else {
             continue;

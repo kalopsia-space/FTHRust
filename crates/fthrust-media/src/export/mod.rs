@@ -59,6 +59,14 @@ pub struct Job {
     pub expected_duration_s: f64,
     /// A size preset's target: the output must not exceed it.
     pub target_size_mb: Option<f64>,
+    /// The output frame rate when a preset lowers it (else the source's).
+    pub output_fps: Option<f64>,
+    /// Where decoding may start for a multi-range export (the first kept
+    /// range; its trims use source timestamps).
+    pub decode_from_s: f64,
+    /// Test hook: the inactivity bound instead of [`INACTIVITY_S`].
+    #[doc(hidden)]
+    pub inactivity_s: Option<f64>,
     /// Test hook: the first encoder attempt fails as a hardware one would.
     #[doc(hidden)]
     pub fail_first_encoder: bool,
