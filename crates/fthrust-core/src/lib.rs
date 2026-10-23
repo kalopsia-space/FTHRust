@@ -31,6 +31,7 @@ pub mod clip_files;
 pub mod clip_metadata;
 pub mod clip_readiness;
 pub mod diagnostics;
+pub mod editor;
 mod error;
 pub mod error_codes;
 pub mod export_presets;
