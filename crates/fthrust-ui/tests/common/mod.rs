@@ -78,6 +78,21 @@ pub fn render(size: Vec2, ppp: f32, tokens: &Tokens, app: impl FnMut(&mut egui::
     }
 }
 
+/// Renders an already stepped harness once more and collects its markers.
+pub fn render_harness(h: &mut Harness<'_>) -> Rendered {
+    fidelity::take(&h.ctx);
+    h.step();
+    let markers = fidelity::take(&h.ctx);
+    let image = h
+        .render()
+        .expect("GPU render (needs a Vulkan adapter; CI uses lavapipe)");
+    Rendered {
+        image,
+        markers,
+        ppp: h.ctx.pixels_per_point(),
+    }
+}
+
 pub fn row_height_fn(ctx: &egui::Context) -> impl Fn(f32, Weight) -> f32 + '_ {
     move |px, w| fonts::measure(ctx, "Hg", px, w).height
 }

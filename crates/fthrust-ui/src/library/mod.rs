@@ -2,6 +2,8 @@
 //! sections), the grid layout, the scan service and, in later tasks, the
 //! cards and the page itself.
 
+pub mod card;
 pub mod layout;
 pub mod model;
 pub mod scan;
+pub mod thumbs;
