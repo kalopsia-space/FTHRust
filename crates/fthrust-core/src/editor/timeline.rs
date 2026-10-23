@@ -182,9 +182,9 @@ impl Timeline {
         self.kept_ranges().iter().map(|(s, e)| e - s).sum()
     }
 
-    /// Deleted segments.
+    /// Splits made (`len(segments) - 1`, `_on_segments_changed`).
     pub fn cut_count(&self) -> usize {
-        self.segments.iter().filter(|s| s.deleted).count()
+        self.segments.len().saturating_sub(1)
     }
 
     /// Non-deleted segment ranges, never empty.

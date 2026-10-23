@@ -36,7 +36,7 @@ fn split_and_delete_follow_reference() {
     assert!(t.toggle_selected());
     assert!(t.segments[1].deleted);
     assert_eq!(t.kept_ranges(), vec![(0.0, 0.3), (0.6, 1.0)]);
-    assert_eq!(t.cut_count(), 1);
+    assert_eq!(t.cut_count(), 2, "cuts are splits, not deleted segments");
     t.selected = 0;
     assert!(t.toggle_selected());
     t.selected = 2;
