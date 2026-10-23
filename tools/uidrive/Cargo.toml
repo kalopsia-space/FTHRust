@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "uidrive"
+version = "0.1.0"
+edition = "2024"
+description = "Drives the FTHRust UI inside a headless cage bench"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client"] }
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+wayland-protocols-misc = { version = "=0.3.12", features = ["client"] }
+xkbcommon = "0.8"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
