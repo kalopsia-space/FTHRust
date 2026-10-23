@@ -133,11 +133,11 @@ fn graph_images_then_camera() {
     assert_eq!(
         p.filter_graph.as_deref(),
         Some(
-            "movie=filename='/img/logo\\'s\\:1.png',format=rgba,scale=384:258:force_original_aspect_ratio=decrease,pad=384:258:(ow-iw)/2:(oh-ih)/2:color=0x00000000,colorchannelmixer=aa=0.720[image0];\
+            "movie=filename=/img/logo\\\\\\'s\\\\:1.png,format=rgba,scale=384:258:force_original_aspect_ratio=decrease,pad=384:258:(ow-iw)/2:(oh-ih)/2:color=0x00000000,colorchannelmixer=aa=0.720[image0];\
 [0:v][image0]overlay=1459:43:eof_action=repeat[layer0];\
-movie=filename='/img/b.jpg',format=rgba,scale=460:324:force_original_aspect_ratio=increase,crop=460:324,colorchannelmixer=aa=1.000[image1];\
+movie=filename=/img/b.jpg,format=rgba,scale=460:324:force_original_aspect_ratio=increase,crop=460:324,colorchannelmixer=aa=1.000[image1];\
 [layer0][image1]overlay=76:43:eof_action=repeat[layer1];\
-movie=filename='/tmp/.fthr-finalize-x/camera.mkv',scale=480:366:force_original_aspect_ratio=decrease,pad=480:366:(ow-iw)/2:(oh-ih)/2[cam];\
+movie=filename=/tmp/.fthr-finalize-x/camera.mkv,scale=480:366:force_original_aspect_ratio=decrease,pad=480:366:(ow-iw)/2:(oh-ih)/2[cam];\
 [layer1][cam]overlay=1382:691:eof_action=repeat[vout]"
         )
     );
@@ -174,4 +174,13 @@ fn gary_maths() {
     assert!((gary::step_intensity(1.0, 0.0) - 0.935).abs() < 1e-9);
     assert_eq!(gary::step_intensity(0.9, 1.0), 1.0);
     assert_eq!(gary::step_intensity(0.05, 0.0), 0.0);
+}
+
+#[test]
+fn movie_paths_escape_both_levels() {
+    // Option level (\ ' :), then graph level (\ ' [ ] , ;), unquoted.
+    assert_eq!(
+        finalize::movie_path(Path::new("/a/Bob's: [x],y;z\\w.png")),
+        "/a/Bob\\\\\\'s\\\\: \\[x\\]\\,y\\;z\\\\\\\\w.png"
+    );
 }

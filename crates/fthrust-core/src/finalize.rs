@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::export::graph::{AudioOut, GraphPlan, MapRef, VideoOut};
-use crate::export::watermark::filter_path;
 use crate::settings::SettingsStore;
 
 /// A normalized rectangle of the clip frame (top-left origin).
@@ -180,8 +179,25 @@ pub fn pixels(r: Rect, (cw, ch): (u32, u32)) -> (u32, u32, u32, u32) {
     ((cw * r.x).max(0.0) as u32, (ch * r.y).max(0.0) as u32, w, h)
 }
 
+/// A path as a `movie=` option value: escaped for the option parser
+/// (`\ ' :`), then for the graph parser (`\ ' [ ] , ;`), unquoted (an
+/// apostrophe inside quotes cannot be escaped).
+pub fn movie_path(path: &Path) -> String {
+    let escape = |s: &str, special: &str| {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            if special.contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    };
+    escape(&escape(&path.to_string_lossy(), "\\':"), "\\'[],;")
+}
+
 fn movie(path: &Path) -> String {
-    format!("movie=filename='{}'", filter_path(&path.to_string_lossy()))
+    format!("movie=filename={}", movie_path(path))
 }
 
 /// The burn graph: image layers in order, then the camera (a recorded

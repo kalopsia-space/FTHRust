@@ -18,7 +18,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 zip = "9"
 tempfile = "3"
 ffmpeg-next = "9"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "ico"] }
 fast_image_resize = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

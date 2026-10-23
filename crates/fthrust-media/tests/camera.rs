@@ -122,3 +122,81 @@ fn list_devices_does_not_panic() {
         assert!(d.path.to_string_lossy().starts_with("/dev/"));
     }
 }
+
+#[test]
+fn metadata_nodes_are_not_cameras() {
+    use std::path::PathBuf;
+    let sys = tempfile::tempdir().unwrap();
+    for (node, index) in [("video0", "0\n"), ("video1", "0\n"), ("video2", "1\n")] {
+        let d = sys.path().join("class/video4linux").join(node);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("index"), index).unwrap();
+    }
+    let found = vec![
+        (
+            PathBuf::from("/dev/video2"),
+            "Groov-e USB Camera".to_owned(),
+        ),
+        (
+            PathBuf::from("/dev/video1"),
+            "Groov-e USB Camera".to_owned(),
+        ),
+        (PathBuf::from("/dev/video0"), "Iriun Webcam".to_owned()),
+        // No sysfs entry: kept.
+        (PathBuf::from("/dev/video7"), "".to_owned()),
+    ];
+    let devices = fthrust_media::camera::devices_from(found, sys.path());
+    let names: Vec<_> = devices
+        .iter()
+        .map(|d| (d.path.clone(), d.name.clone()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (PathBuf::from("/dev/video0"), "Iriun Webcam".to_owned()),
+            (
+                PathBuf::from("/dev/video1"),
+                "Groov-e USB Camera".to_owned()
+            ),
+            (PathBuf::from("/dev/video7"), "Camera 3".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn stop_does_not_wait_for_a_stalled_camera() {
+    // One frame every five seconds: the capture thread sits in a read.
+    let mut slow = Source::synthetic(64, 48, 1);
+    slow.url = "testsrc=size=64x48:rate=0.2,realtime".into();
+    let rec = CameraRecorder::start(slow).unwrap();
+    assert!(wait_until(|| rec.frames() >= 1, 8.0));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(rec.is_running(), "the slow camera is still delivering");
+    let started = Instant::now();
+    rec.stop();
+    assert!(
+        started.elapsed() < Duration::from_millis(2600),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!rec.is_running());
+}
+
+#[test]
+fn snapshot_outlives_the_ring_and_uses_the_real_length() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = CameraRecorder::start(Source::synthetic(160, 120, 15)).unwrap();
+    assert!(wait_until(|| rec.frames() >= 25, 5.0));
+    let end = Instant::now();
+    // Taken at save time with the requested length (60 s) …
+    let snap = rec.snapshot(end, 60.0).expect("frames");
+    rec.stop();
+    // … written later against the clip's real length (1 s).
+    let out = tmp.path().join("cam.mkv");
+    let n = snap.write(end, 1.0, &out).unwrap();
+    let (frames, first, last) = segment(&out);
+    assert_eq!(frames, n);
+    assert!((12..=17).contains(&n), "{n}");
+    assert!((0.0..0.2).contains(&first), "first {first}");
+    assert!(last > 0.75 && last <= 1.0, "last {last}");
+}

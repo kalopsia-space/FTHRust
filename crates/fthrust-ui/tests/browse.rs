@@ -323,3 +323,34 @@ fn cancel_changes_nothing() {
     assert!(!s.clips_directory_changed);
     assert!(messages(&s).is_empty());
 }
+
+#[test]
+fn accepted_images_also_render() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = state(tmp.path());
+    let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+    for name in ["g.bmp", "g.gif", "g.webp"] {
+        let p = tmp.path().join(name);
+        img.save(&p).unwrap();
+        apply(&mut s, BrowseKind::GaryImage, vec![p.clone()]);
+        assert_eq!(
+            s.settings.get_str("gary_image_path"),
+            Some(p.to_str().unwrap()),
+            "{name}"
+        );
+        // What the preview and the overlay decode.
+        assert!(image::open(&p).is_ok(), "{name} renders");
+    }
+}
+
+#[test]
+fn unusable_icon_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = state(tmp.path());
+    apply(
+        &mut s,
+        BrowseKind::IconFile("close".into()),
+        vec![junk(&tmp.path().join("x.svg"))],
+    );
+    assert_eq!(messages(&s)[0].0, "Icon import failed");
+}

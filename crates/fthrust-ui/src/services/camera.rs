@@ -96,15 +96,28 @@ impl CameraService {
         }
     }
 
-    /// The camera for a save.
-    pub fn for_save(&self, state: &AppState) -> CameraUse {
+    /// The Visuals preview is live (the UI repaints for it).
+    pub fn preview_active(&self, state: &AppState) -> bool {
+        state.page == Page::Settings
+            && state.settings_tab == Tab::Visuals
+            && self.recorder.as_ref().is_some_and(|(_, r)| r.is_running())
+    }
+
+    /// The camera for a save ending at `end`, `seconds` long: its frames
+    /// are taken now, so the burn does not depend on the live ring.
+    pub fn for_save(&self, state: &AppState, end: std::time::Instant, seconds: f64) -> CameraUse {
         if !state.flag("camera_enabled", false) {
             return CameraUse::Off;
         }
         match &self.recorder {
-            Some((_, r)) if r.is_running() => CameraUse::Recorder(r.clone()),
+            Some((_, r)) if r.is_running() => CameraUse::Frames(r.snapshot(end, seconds)),
             _ => CameraUse::Unavailable,
         }
+    }
+
+    /// The running recorder (tests).
+    pub fn recorder(&self) -> Option<Arc<CameraRecorder>> {
+        self.recorder.as_ref().map(|(_, r)| r.clone())
     }
 
     fn selected(&self, state: &AppState) -> Option<(usize, PathBuf)> {

@@ -273,6 +273,7 @@ pub struct Services {
     camera: camera::CameraService,
     mic_level: Option<mic_level::MicLevel>,
     mic_level_retry: f64,
+    mic_generation: u64,
     gary: Option<crate::overlay::gary::GaryOverlay>,
     gary_key: Option<String>,
     clock_offset: f64,
@@ -345,6 +346,7 @@ impl Services {
             camera: camera::CameraService::new(),
             mic_level: None,
             mic_level_retry: 0.0,
+            mic_generation: 0,
             gary: None,
             gary_key: None,
             clock_offset: 0.0,
@@ -567,6 +569,7 @@ impl Services {
             camera: camera::CameraService::new(),
             mic_level: None,
             mic_level_retry: 0.0,
+            mic_generation: 0,
             gary: None,
             gary_key: None,
             clock_offset: 0.0,
@@ -788,8 +791,9 @@ impl Services {
                         end,
                         duration_s,
                         layers: fthrust_core::finalize::image_layers(&state.settings),
-                        camera: self.camera.for_save(state),
+                        camera: self.camera.for_save(state, end, duration_s),
                         camera_rect: fthrust_core::finalize::camera_rect(&state.settings),
+                        panic_for_tests: false,
                     });
                 }
                 save::SaveAction::Diag { event, fields } => {
@@ -954,6 +958,18 @@ impl Services {
             self.camera.tick(state, now);
             for outcome in self.finalizer.poll() {
                 finalize::apply(state, &outcome);
+            }
+            // Nothing else wakes the UI for these: the heartbeat ticks
+            // services without painting.
+            if self.finalizer.busy() {
+                self.outbox
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            if self.camera.preview_active(state) {
+                self.outbox
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(100));
             }
             if self.test_commands.is_none() {
                 self.tick_mic_and_gary(state, now);
@@ -1328,14 +1344,19 @@ impl Services {
             .clamp(0, 200) as f32
             / 100.0;
         if audio_page || gary_on {
-            let stale = self
-                .mic_level
-                .as_ref()
-                .is_none_or(|m| m.config != (target.clone(), gain));
-            if stale && now >= self.mic_level_retry {
+            let restart =
+                mic_level::needs_restart(self.mic_level.as_ref().map(|m| &m.target), &target);
+            if let Some(m) = &self.mic_level {
+                m.set_gain(gain);
+            }
+            if restart && now >= self.mic_level_retry {
                 self.mic_level = None;
                 match mic_level::MicLevel::start(target, gain) {
-                    Ok(m) => self.mic_level = Some(m),
+                    Ok(m) => {
+                        self.mic_level = Some(m);
+                        // Gary must pick up the new stream's meter.
+                        self.mic_generation += 1;
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "mic level unavailable");
                         self.mic_level_retry = now + 5.0;
@@ -1378,8 +1399,9 @@ impl Services {
                 .filter(|m| !m.is_empty() && *m != "auto")
                 .map(str::to_owned);
             let key = format!(
-                "{gary_on}|{low}|{high}|{image:?}|{output:?}|{}",
-                self.mic_level.is_some()
+                "{gary_on}|{low}|{high}|{image:?}|{output:?}|{}|{}",
+                self.mic_level.is_some(),
+                self.mic_generation
             );
             if self.gary_key.as_deref() != Some(&key) {
                 self.gary_key = Some(key);

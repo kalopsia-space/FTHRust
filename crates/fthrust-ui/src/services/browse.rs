@@ -383,6 +383,9 @@ pub fn apply(state: &mut AppState, kind: BrowseKind, paths: Vec<PathBuf>) {
             // Resized to the default icon's size class and stored as PNG
             // (the reference cropped it in a dialog first).
             let Ok(img) = image::open(&first) else {
+                state
+                    .dialogs
+                    .push_message("Icon import failed", "Choose a PNG, JPG, BMP or ICO image.");
                 return;
             };
             let img = if img.width().max(img.height()) > 64 {

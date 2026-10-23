@@ -71,6 +71,7 @@ fn job(clip: &Path, layers: Vec<ImageLayer>, camera: CameraUse) -> FinalizeJob {
         layers,
         camera,
         camera_rect: CAMERA_DEFAULT,
+        panic_for_tests: false,
     }
 }
 
@@ -190,12 +191,15 @@ fn camera_burns_from_the_ring() {
         return;
     };
     let before = sha256_file(&c).unwrap();
-    let rec = Arc::new(CameraRecorder::start(Source::synthetic(160, 120, 15)).unwrap());
+    let rec = CameraRecorder::start(Source::synthetic(160, 120, 15)).unwrap();
     std::thread::sleep(Duration::from_millis(2300));
-    let f = Finalizer::new();
-    f.submit(job(&c, vec![], CameraUse::Recorder(rec.clone())));
-    let out = wait(&f, 1);
+    // Taken at save time with a longer requested length; the camera then
+    // stops before the burn runs.
+    let snap = rec.snapshot(Instant::now(), 60.0);
     rec.stop();
+    let f = Finalizer::new();
+    f.submit(job(&c, vec![], CameraUse::Frames(snap)));
+    let out = wait(&f, 1);
     assert!(out[0].warnings.is_empty(), "{:?}", out[0].warnings);
     assert_ne!(sha256_file(&c).unwrap(), before);
     assert!(leftovers(tmp.path()).is_empty());
@@ -340,7 +344,10 @@ fn camera_open_failure_turns_it_off() {
     );
     assert!(bar.detail.chars().count() <= 240);
     assert_eq!(bar.actions[0].label, "OPEN CAMERA SETTINGS");
-    assert!(matches!(svc.for_save(&s), CameraUse::Off));
+    assert!(matches!(
+        svc.for_save(&s, Instant::now(), 2.0),
+        CameraUse::Off
+    ));
 }
 
 #[test]
@@ -355,14 +362,17 @@ fn camera_records_and_feeds_the_preview() {
     );
     svc.refresh();
     assert!(tick_until(&mut svc, &mut s, |svc, s| {
-        matches!(svc.for_save(s), CameraUse::Recorder(_)) && s.camera_preview.is_some()
+        svc.recorder().is_some_and(|r| r.is_running()) && s.camera_preview.is_some()
     }));
     let [w, h] = s.camera_preview.as_ref().unwrap().1.size;
     assert_eq!((w, h), (160, 120));
     // Off: the recorder stops.
     s.settings.set("camera_enabled", serde_json::json!(false));
     svc.tick(&mut s, 100.0);
-    assert!(matches!(svc.for_save(&s), CameraUse::Off));
+    assert!(matches!(
+        svc.for_save(&s, Instant::now(), 2.0),
+        CameraUse::Off
+    ));
     svc.shutdown();
 }
 
@@ -390,22 +400,14 @@ fn refresh_keeps_selection_and_running_device() {
         Arc::new(|_| Source::synthetic(160, 120, 30)),
     );
     svc.refresh();
-    let mut first = None;
-    assert!(tick_until(&mut svc, &mut s, |svc, s| {
-        match svc.for_save(s) {
-            CameraUse::Recorder(r) => r.is_running(),
-            _ => false,
-        }
+    assert!(tick_until(&mut svc, &mut s, |svc, _| {
+        svc.recorder().is_some_and(|r| r.is_running())
     }));
-    if let CameraUse::Recorder(r) = svc.for_save(&s) {
-        first = Some(r);
-    }
+    let first = svc.recorder();
     svc.refresh();
     assert!(tick_until(&mut svc, &mut s, |_, s| s.camera_devices.len() == 3));
     assert_eq!(s.settings.get_i64("camera_device_index"), Some(1));
-    let CameraUse::Recorder(now) = svc.for_save(&s) else {
-        panic!("still recording");
-    };
+    let now = svc.recorder().expect("still recording");
     assert!(Arc::ptr_eq(&now, first.as_ref().unwrap()), "not reopened");
     svc.shutdown();
 }
@@ -447,4 +449,60 @@ fn a_finalized_clip_gets_a_new_thumbnail() {
         !s.thumb_meta.contains_key(&c),
         "the pre-burn thumbnail is dropped"
     );
+}
+
+#[test]
+fn awkward_paths_burn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(c) = clip(tmp.path(), "p.mp4") else {
+        return;
+    };
+    let before = sha256_file(&c).unwrap();
+    let dir = tmp.path().join("Bob's: [logo], v2; final");
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = Finalizer::new();
+    f.submit(job(&c, vec![layer(png(&dir, "it's.png"))], CameraUse::Off));
+    let out = wait(&f, 1);
+    assert!(out[0].warnings.is_empty(), "{:?}", out[0].warnings);
+    assert_ne!(sha256_file(&c).unwrap(), before);
+}
+
+#[test]
+fn a_panicking_burn_still_ends_and_the_queue_moves_on() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (Some(a), Some(b)) = (clip(tmp.path(), "x.mp4"), clip(tmp.path(), "y.mp4")) else {
+        return;
+    };
+    let f = Finalizer::new();
+    let mut bad = job(&a, vec![], CameraUse::Off);
+    bad.panic_for_tests = true;
+    f.submit(bad);
+    f.submit(job(&b, vec![], CameraUse::Off));
+    let out = wait(&f, 2);
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert_eq!(out[0].clip, a);
+    assert_eq!(
+        out[0].warnings,
+        ["Optional processing failed; the base clip was retained."]
+    );
+    assert_eq!(out[1].clip, b);
+}
+
+#[test]
+fn busy_while_clips_are_pending() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(c) = clip(tmp.path(), "b.mp4") else {
+        return;
+    };
+    let f = Finalizer::new();
+    assert!(!f.busy());
+    f.submit(job(
+        &c,
+        vec![layer(png(tmp.path(), "r.png"))],
+        CameraUse::Off,
+    ));
+    assert!(f.busy(), "the UI keeps waking while a clip finalizes");
+    let out = wait(&f, 1);
+    assert_eq!(out.len(), 1);
+    assert!(!f.busy());
 }

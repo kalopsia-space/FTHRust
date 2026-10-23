@@ -18,10 +18,13 @@ use std::time::{Duration, Instant};
 
 use ffmpeg_next as ff;
 
-pub use devices::{Device, list_devices};
+pub use devices::{Device, devices_from, list_devices};
 
 /// `KEEP_SECONDS`.
 pub const KEEP: Duration = Duration::from_secs(90);
+
+/// How long [`CameraRecorder::stop`] waits for the capture thread.
+const STOP_WAIT: Duration = Duration::from_secs(2);
 
 /// MJPEG quality as an FFmpeg `qscale` (about JPEG quality 85).
 const QSCALE: i32 = 3;
@@ -296,11 +299,40 @@ impl CameraRecorder {
         self.shared.stop.store(true, Ordering::Relaxed);
         let thread = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(t) = thread {
-            let _ = t.join();
+            // A camera that stopped delivering blocks its read; wait at most
+            // two seconds (the reference's join timeout), then let the
+            // thread end on its own when the read returns.
+            let end = Instant::now() + STOP_WAIT;
+            while !t.is_finished() && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            } else {
+                tracing::warn!("camera read did not return; capture thread detached");
+            }
         }
         self.shared.running.store(false, Ordering::Relaxed);
         self.shared.ring().entries.clear();
         *self.shared.latest.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The frames of `[end − max_s, end]`, kept independently of the ring
+    /// (taken at save time; the burn may run much later). `None` when
+    /// there are none.
+    pub fn snapshot(&self, end: Instant, max_s: f64) -> Option<CameraSnapshot> {
+        let start = end
+            .checked_sub(Duration::from_secs_f64(max_s.max(0.0)))
+            .unwrap_or(end);
+        let ring = self.shared.ring();
+        let frames: Vec<(Instant, Arc<Vec<u8>>)> = ring
+            .entries
+            .iter()
+            .filter(|e| e.at >= start && e.at <= end)
+            .map(|e| (e.at, e.jpeg.clone()))
+            .collect();
+        let size = ring.size?;
+        (!frames.is_empty()).then_some(CameraSnapshot { frames, size })
     }
 
     /// Writes the frames of `[end − duration_s, end]` to `path` (MJPEG in
@@ -311,24 +343,36 @@ impl CameraRecorder {
         duration_s: f64,
         path: &Path,
     ) -> Result<usize, String> {
+        self.snapshot(end, duration_s)
+            .ok_or("no camera frames in the clip window")?
+            .write(end, duration_s, path)
+    }
+}
+
+/// Camera frames taken from the ring at save time.
+#[derive(Clone)]
+pub struct CameraSnapshot {
+    frames: Vec<(Instant, Arc<Vec<u8>>)>,
+    size: (u32, u32),
+}
+
+impl CameraSnapshot {
+    /// Writes the frames of `[end − duration_s, end]` (the clip's real
+    /// length) as MJPEG Matroska timed from that start; the frame count.
+    pub fn write(&self, end: Instant, duration_s: f64, path: &Path) -> Result<usize, String> {
         let start = end
             .checked_sub(Duration::from_secs_f64(duration_s.max(0.0)))
             .unwrap_or(end);
-        let (frames, size) = {
-            let ring = self.shared.ring();
-            let frames: Vec<(Duration, Arc<Vec<u8>>)> = ring
-                .entries
-                .iter()
-                .filter(|e| e.at >= start && e.at <= end)
-                .map(|e| (e.at - start, e.jpeg.clone()))
-                .collect();
-            (frames, ring.size)
-        };
+        let frames: Vec<(Duration, Arc<Vec<u8>>)> = self
+            .frames
+            .iter()
+            .filter(|(at, _)| *at >= start && *at <= end)
+            .map(|(at, j)| (*at - start, j.clone()))
+            .collect();
         if frames.is_empty() {
             return Err("no camera frames in the clip window".into());
         }
-        let (w, h) = size.ok_or("the camera size is unknown")?;
-        write_mjpeg(path, w, h, &frames).map_err(|e| e.to_string())?;
+        write_mjpeg(path, self.size.0, self.size.1, &frames).map_err(|e| e.to_string())?;
         Ok(frames.len())
     }
 }

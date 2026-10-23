@@ -102,3 +102,15 @@ fn picture_geometry() {
     let r = picture_rect(screen, Vec2::new(3072.0, 3072.0), 0.0);
     assert!((r.width() - 418.0).abs() < 0.5, "{r:?}");
 }
+
+#[test]
+fn only_a_device_change_restarts_the_level_stream() {
+    use fthrust_ui::services::mic_level::needs_restart;
+    let mic = Some("alsa_input.usb".to_owned());
+    assert!(needs_restart(None, &mic));
+    assert!(
+        !needs_restart(Some(&mic), &mic),
+        "gain changes keep the stream"
+    );
+    assert!(needs_restart(Some(&None), &mic));
+}

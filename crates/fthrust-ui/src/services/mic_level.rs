@@ -53,6 +53,12 @@ impl Meter {
     }
 }
 
+/// Whether the stream must restart: only for another device (the gain is
+/// applied live).
+pub fn needs_restart(current: Option<&Option<String>>, target: &Option<String>) -> bool {
+    current != Some(target)
+}
+
 /// The capture stream's meter, shared with readers.
 pub type SharedMeter = Arc<Mutex<Meter>>;
 
@@ -61,8 +67,9 @@ pub struct MicLevel {
     meter: SharedMeter,
     quit: Option<pw::channel::Sender<()>>,
     thread: Option<JoinHandle<()>>,
-    /// `(target, gain)` it was started with.
-    pub config: (Option<String>, f32),
+    gain: Arc<std::sync::atomic::AtomicU32>,
+    /// The device it measures.
+    pub target: Option<String>,
 }
 
 impl MicLevel {
@@ -74,16 +81,19 @@ impl MicLevel {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let m = meter.clone();
         let t = target.clone();
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(gain.to_bits()));
+        let g = gain.clone();
         let thread = std::thread::Builder::new()
             .name("fthr-mic-level".into())
-            .spawn(move || run(t, gain, m, quit_rx, ready_tx))
+            .spawn(move || run(t, g, m, quit_rx, ready_tx))
             .map_err(|e| e.to_string())?;
         match ready_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(())) => Ok(MicLevel {
                 meter,
                 quit: Some(quit_tx),
                 thread: Some(thread),
-                config: (target, gain),
+                gain,
+                target,
             }),
             Ok(Err(e)) => {
                 let _ = thread.join();
@@ -91,6 +101,12 @@ impl MicLevel {
             }
             Err(_) => Err("PipeWire did not answer".into()),
         }
+    }
+
+    /// Changes the gain without restarting the stream.
+    pub fn set_gain(&self, gain: f32) {
+        self.gain
+            .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The shared meter.
@@ -158,7 +174,7 @@ fn format_pod() -> Result<Vec<u8>, String> {
 
 fn run(
     target: Option<String>,
-    gain: f32,
+    gain: Arc<std::sync::atomic::AtomicU32>,
     meter: SharedMeter,
     quit: pw::channel::Receiver<()>,
     ready: std::sync::mpsc::Sender<Result<(), String>>,
@@ -215,7 +231,7 @@ fn run(
                 meter.lock().unwrap_or_else(|e| e.into_inner()).feed(
                     &samples,
                     2,
-                    gain,
+                    f32::from_bits(gain.load(std::sync::atomic::Ordering::Relaxed)),
                     Instant::now(),
                 );
             }

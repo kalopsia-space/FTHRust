@@ -12,7 +12,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use fthrust_core::finalize::{self as plan, ImageLayer, Rect};
-use fthrust_media::camera::CameraRecorder;
+use fthrust_media::camera::CameraSnapshot;
 use fthrust_media::export::{ExportState, Job, Quality};
 
 use crate::shell::error_bar::Level;
@@ -22,6 +22,7 @@ const CAMERA_UNAVAILABLE: &str = "Camera overlay was requested but the camera wa
 const CAMERA_NOT_RENDERED: &str =
     "Camera overlay could not be rendered; the base clip was retained.";
 const CAMERA_FAILED: &str = "Camera overlay failed; the base clip was retained.";
+const PANICKED: &str = "Optional processing failed; the base clip was retained.";
 const IMAGE_FAILED: &str = "Image overlay failed; the base clip was retained.";
 
 /// The camera at save time.
@@ -31,8 +32,9 @@ pub enum CameraUse {
     Off,
     /// On, but the camera is not recording.
     Unavailable,
-    /// The running recorder.
-    Recorder(Arc<CameraRecorder>),
+    /// The camera's frames, taken from the ring when the save completed
+    /// (`None`: it was recording but had no frames in the window).
+    Frames(Option<CameraSnapshot>),
 }
 
 /// One clip to finalize.
@@ -49,6 +51,9 @@ pub struct FinalizeJob {
     pub camera: CameraUse,
     /// Where the webcam goes.
     pub camera_rect: Rect,
+    /// Test hook: the burn panics.
+    #[doc(hidden)]
+    pub panic_for_tests: bool,
 }
 
 /// How one clip ended.
@@ -75,6 +80,7 @@ pub struct Finalizer {
     rx: Receiver<Outcome>,
     cancel: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    pending: std::cell::Cell<usize>,
 }
 
 impl Default for Finalizer {
@@ -97,7 +103,16 @@ impl Finalizer {
                     if c.load(Ordering::Relaxed) {
                         break;
                     }
-                    let outcome = finalize(&job, &c);
+                    // A panic must not leave this clip, or the ones queued
+                    // after it, Finalizing for the rest of the session.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        finalize(&job, &c)
+                    }))
+                    .unwrap_or_else(|_| Outcome {
+                        clip: job.clip.clone(),
+                        warnings: vec![PANICKED.into()],
+                        camera_failed: false,
+                    });
                     if out.send(outcome).is_err() {
                         break;
                     }
@@ -109,19 +124,30 @@ impl Finalizer {
             rx,
             cancel,
             thread,
+            pending: std::cell::Cell::new(0),
         }
     }
 
     /// Queues a clip.
     pub fn submit(&self, job: FinalizeJob) {
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(job);
+        if let Some(tx) = &self.tx
+            && tx.send(job).is_ok()
+        {
+            self.pending.set(self.pending.get() + 1);
         }
     }
 
     /// Finished clips, in submission order.
     pub fn poll(&self) -> Vec<Outcome> {
-        self.rx.try_iter().collect()
+        let out: Vec<Outcome> = self.rx.try_iter().collect();
+        self.pending
+            .set(self.pending.get().saturating_sub(out.len()));
+        out
+    }
+
+    /// Clips are queued or burning (the UI keeps waking to show the result).
+    pub fn busy(&self) -> bool {
+        self.pending.get() > 0
     }
 
     /// Cancels the running burn (its base clip stays) and waits up to
@@ -176,6 +202,7 @@ impl Drop for TempDir {
 }
 
 fn finalize(job: &FinalizeJob, cancel: &Arc<AtomicBool>) -> Outcome {
+    assert!(!job.panic_for_tests, "finalize test panic");
     let mut warnings = Vec::new();
     let mut layers = Vec::new();
     for l in &job.layers {
@@ -204,11 +231,11 @@ fn finalize(job: &FinalizeJob, cancel: &Arc<AtomicBool>) -> Outcome {
             warnings.push(CAMERA_UNAVAILABLE.into());
             None
         }
-        CameraUse::Recorder(r) if !r.is_running() => {
-            warnings.push(CAMERA_UNAVAILABLE.into());
+        CameraUse::Frames(None) => {
+            warnings.push(CAMERA_NOT_RENDERED.into());
             None
         }
-        CameraUse::Recorder(r) => Some(r.clone()),
+        CameraUse::Frames(Some(s)) => Some(s.clone()),
     };
     if layers.is_empty() && recorder.is_none() {
         return outcome(warnings, false);
@@ -226,10 +253,19 @@ fn finalize(job: &FinalizeJob, cancel: &Arc<AtomicBool>) -> Outcome {
             return outcome(warnings, false);
         }
     };
+    // The clip's real length: a replay buffer holding less than the
+    // requested length makes a shorter clip, which ends at the save.
+    let facts = fthrust_media::export::media_facts(&job.clip);
+    let duration_s = facts
+        .as_ref()
+        .ok()
+        .map(|f| f.duration_s)
+        .filter(|d| *d > 0.0)
+        .unwrap_or(job.duration_s);
     let mut camera = None;
     if let Some(r) = recorder {
         let path = tmp.0.join("camera.mkv");
-        match r.write_segment(job.end, job.duration_s, &path) {
+        match r.write(job.end, duration_s, &path) {
             Ok(_) => camera = Some(path),
             Err(e) => {
                 tracing::warn!(error = %e, "[Camera] segment not written");
@@ -237,7 +273,7 @@ fn finalize(job: &FinalizeJob, cancel: &Arc<AtomicBool>) -> Outcome {
             }
         }
     }
-    let size = match fthrust_media::export::media_facts(&job.clip) {
+    let size = match &facts {
         Ok(f) => (f.width, f.height),
         Err(e) => {
             tracing::warn!(error = %e, "[Post] Could not probe clip dimensions");

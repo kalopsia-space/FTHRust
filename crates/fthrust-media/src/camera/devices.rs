@@ -1,7 +1,7 @@
 //! Camera discovery (`CameraRecorder.list_devices`): V4L2 capture nodes
 //! with their driver names, instead of probing OpenCV indices 0–7.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One camera.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,7 +17,20 @@ pub fn list_devices() -> Vec<Device> {
     if crate::init().is_err() {
         return Vec::new();
     }
-    let mut found = crate::ffi::device::v4l2_sources();
+    devices_from(crate::ffi::device::v4l2_sources(), Path::new("/sys"))
+}
+
+/// Keeps primary nodes only (sysfs `index` 0: a UVC camera's second node
+/// is its metadata stream, which libavdevice still lists), sorts by node
+/// and names unnamed ones `Camera N`.
+pub fn devices_from(mut found: Vec<(PathBuf, String)>, sysfs: &Path) -> Vec<Device> {
+    found.retain(|(p, _)| {
+        let Some(node) = p.file_name() else {
+            return true;
+        };
+        let index = sysfs.join("class/video4linux").join(node).join("index");
+        std::fs::read_to_string(index).map_or(true, |i| i.trim() == "0")
+    });
     found.sort_by_key(|(p, _)| node_number(p));
     found
         .into_iter()
