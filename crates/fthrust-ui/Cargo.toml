@@ -37,6 +37,7 @@ fthrust-media = { path = "../fthrust-media" }
 egui_kittest.workspace = true
 tempfile.workspace = true
 sha2.workspace = true
+uuid.workspace = true
 
 [[bin]]
 name = "fthrust"

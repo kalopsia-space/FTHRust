@@ -8,7 +8,7 @@ pub fn skip_unless_encoder(names: &[&'static str]) -> Option<&'static str> {
     let found = names
         .iter()
         .copied()
-        .find(|name| ffmpeg_next::encoder::find_by_name(name).is_some());
+        .find(|name| fthrust_media::encoder::encoder_exists(name));
     if found.is_none() {
         eprintln!("skipping: none of {names:?} is available in this FFmpeg build");
     }

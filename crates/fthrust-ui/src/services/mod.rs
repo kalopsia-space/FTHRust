@@ -10,6 +10,7 @@ pub mod game;
 pub mod hotkey_client;
 pub mod hotkeys;
 pub mod instance;
+pub mod playback;
 pub mod portal_shortcuts;
 pub mod recording;
 pub mod save;

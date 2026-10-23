@@ -22,3 +22,12 @@ pub struct SourceSpec {
     /// The stream index inside the container.
     pub container_index: usize,
 }
+
+/// The container index of the best audio stream, for clips without a
+/// manifest (`None` when there is no audio).
+pub fn best_audio_stream(path: &std::path::Path) -> Option<usize> {
+    crate::init().ok()?;
+    let ictx = ffmpeg_next::format::input(path).ok()?;
+    let stream = ictx.streams().best(ffmpeg_next::media::Type::Audio)?;
+    Some(stream.index())
+}

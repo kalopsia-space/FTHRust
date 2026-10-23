@@ -9,6 +9,7 @@ use ffmpeg_next::media::Type;
 use ffmpeg_next::software::scaling::{Context as Scaler, Flags};
 use ffmpeg_next::{codec, format, frame};
 
+use crate::ffi::scaler::SendScaler;
 use crate::{MediaError, Result};
 
 /// What the stream says about itself.
@@ -43,7 +44,7 @@ pub struct VideoDecoder {
     index: usize,
     time_base: f64,
     decoder: codec::decoder::Video,
-    scaler: Option<Scaler>,
+    scaler: Option<SendScaler>,
     rgba: Option<frame::Video>,
     info: VideoInfo,
     /// After a seek: frames before this time are skipped.
@@ -127,10 +128,12 @@ impl VideoDecoder {
     fn convert(&mut self, decoded: &frame::Video) -> Result<Frame> {
         let (w, h) = (decoded.width(), decoded.height());
         let needs_new = self.scaler.as_ref().is_none_or(|s| {
-            s.input().width != w || s.input().height != h || s.input().format != decoded.format()
+            s.0.input().width != w
+                || s.0.input().height != h
+                || s.0.input().format != decoded.format()
         });
         if needs_new {
-            self.scaler = Some(Scaler::get(
+            self.scaler = Some(SendScaler(Scaler::get(
                 decoded.format(),
                 w,
                 h,
@@ -138,7 +141,7 @@ impl VideoDecoder {
                 w,
                 h,
                 Flags::BILINEAR,
-            )?);
+            )?));
         }
         let out = self
             .rgba
@@ -146,7 +149,7 @@ impl VideoDecoder {
         if out.width() != w || out.height() != h {
             *out = frame::Video::new(Pixel::RGBA, w, h);
         }
-        self.scaler.as_mut().expect("scaler").run(decoded, out)?;
+        self.scaler.as_mut().expect("scaler").0.run(decoded, out)?;
         let stride = out.stride(0);
         let data = out.data(0);
         let row = (w * 4) as usize;

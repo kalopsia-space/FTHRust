@@ -62,6 +62,11 @@ pub struct Encoder {
     forced_keyframe_interval: i64,
 }
 
+/// Whether this FFmpeg build has the named encoder (tests skip on `false`).
+pub fn encoder_exists(name: &str) -> bool {
+    crate::init().is_ok() && RawEncoder::exists(name)
+}
+
 impl Encoder {
     /// Opens the first candidate encoder that initialises. VA-API
     /// candidates are tried on every render node from
