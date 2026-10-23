@@ -169,6 +169,65 @@ def dump_widgets(root: QWidget, image: QImage, palette: dict) -> list:
     return out
 
 
+def _dump_editor_variants(editor, profile: Path, output: Path, palette: dict) -> None:
+    """Editor states the default `clip-editor` dump does not show (plan 6b)."""
+    from core.playback_mix_model import PlaybackSource
+    from ui.clip_viewer import AudioMixPanel, CropDialog, StretchDialog
+    viewer = editor.clip_page
+    # Sidebar: two sources in the mix, every panel expanded, tall enough to
+    # show the whole content without scrolling.
+    old = viewer._audio_mix_panel
+    sources = (
+        PlaybackSource('desktop', 'Desktop', 'desktop', 1, 0),
+        PlaybackSource('mic', 'Mic', 'microphone', 2, 1),
+    )
+    mix = AudioMixPanel(master_vol=80, source_tracks=sources)
+    old.parentWidget().layout().replaceWidget(old, mix)
+    old.hide()
+    sidebar = editor.findChild(QWidget, 'editorSidebarContent')
+    for header in sidebar.findChildren(QAbstractButton, 'panelHeader'):
+        if not header.isChecked():
+            header.click()
+    editor.resize(1440, 2200)
+    QTest.qWait(280)
+    dump_screen(sidebar, 'clip-editor-sidebar', output, palette)
+    editor.resize(1440, 900)
+    QTest.qWait(120)
+    # Timeline: two splits, the middle segment deleted and selected.
+    trim = viewer.trim_slider
+    trim.set_playhead(0.3)
+    trim.split_at_playhead()
+    trim.set_playhead(0.6)
+    trim.split_at_playhead()
+    trim.selected_segment = 1
+    trim.toggle_selected_deleted()
+    trim.selection_changed.emit(1, True)
+    trim.set_playhead(0.45)
+    viewer._zoom_timeline(1.25)
+    QTest.qWait(200)
+    dump_screen(editor.findChild(QWidget, 'trimBar'), 'clip-editor-timeline', output, palette)
+    clip = str(profile / 'Overwatch_clip.mp4')
+    crop = CropDialog(clip)
+    crop.show()
+    QTest.qWait(280)
+    dump_screen(crop, 'clip-editor-crop', output, palette)
+    crop.close()
+    stretch = StretchDialog(clip, 0, 1920, 1080)
+    stretch.show()
+    QTest.qWait(280)
+    dump_screen(stretch, 'clip-editor-stretch', output, palette)
+    stretch.close()
+
+
+def _dump_editor_rail(window, profile: Path, output: Path, palette: dict) -> None:
+    """The main window with two parked editors in the navigation rail."""
+    window._set_main_page(0)
+    for name in ('Overwatch_clip.mp4', 'Valorant_clip.mp4'):
+        window._add_editor_session(str(profile / name))
+    QTest.qWait(280)
+    dump_screen(window, 'clip-editor-rail', output, palette)
+
+
 def dump_screen(root: QWidget, name: str, output: Path, palette: dict,
                 crop: QRect | None = None) -> dict:
     image = QWidget.grab(root).toImage()
@@ -347,7 +406,9 @@ def main(argv=None) -> Path:
             editor.show()
             QTest.qWait(280)
             dump_screen(editor, 'clip-editor', output, palette)
+            _dump_editor_variants(editor, profile, output, palette)
             editor.close()
+        _dump_editor_rail(window, profile, output, palette)
         window._shutdown_requested = True
         window._perform_full_shutdown()
         window.close()
