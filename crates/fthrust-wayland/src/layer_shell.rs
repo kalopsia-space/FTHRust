@@ -309,3 +309,30 @@ impl Drop for LayerSurface {
         let _ = self.ops.connection().flush();
     }
 }
+
+/// The advertised outputs (name, size, refresh), for picking where the
+/// capture card goes before its surface exists.
+pub fn list_outputs() -> Result<Vec<crate::outputs::OutputInfo>, LayerError> {
+    let conn = connect_display()?;
+    let queue = conn.new_event_queue::<LayerState>();
+    let qh = queue.handle();
+    let _registry = conn.display().get_registry(&qh, ());
+    let mut ops = WaylandOps::new(conn, queue, LayerState::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let keep = || true;
+    for _ in 0..2 {
+        match bounded_roundtrip(&mut ops, deadline, &keep) {
+            WaitResult::EventReceived => {}
+            _ => return Err(ConnectError::Roundtrip("timeout").into()),
+        }
+    }
+    Ok(ops
+        .state()
+        .core
+        .outputs
+        .outputs()
+        .into_iter()
+        .filter(|o| o.done)
+        .cloned()
+        .collect())
+}

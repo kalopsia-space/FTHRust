@@ -26,8 +26,13 @@ tokio.workspace = true
 nix.workspace = true
 ashpd.workspace = true
 futures-util.workspace = true
+egui-wgpu.workspace = true
+pollster.workspace = true
+pipewire.workspace = true
+libspa.workspace = true
 
 [dev-dependencies]
+fthrust-media = { path = "../fthrust-media" }
 egui_kittest.workspace = true
 tempfile.workspace = true
 sha2.workspace = true

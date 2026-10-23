@@ -255,9 +255,16 @@ fn focus_lost_pauses_and_regained_resumes() {
         Some(FocusChange::Lost)
     );
     assert_eq!(m.observe(&[game_inactive.clone(), other.clone()]), None);
-    assert_eq!(m.observe(std::slice::from_ref(&game)), Some(FocusChange::Regained));
+    assert_eq!(
+        m.observe(std::slice::from_ref(&game)),
+        Some(FocusChange::Regained)
+    );
     m.set_target(None);
-    assert_eq!(m.observe(std::slice::from_ref(&other)), None, "no target: never pauses");
+    assert_eq!(
+        m.observe(std::slice::from_ref(&other)),
+        None,
+        "no target: never pauses"
+    );
 
     let (_tmp, mut s) = state(
         json!({"anticheat_detection_enabled": true, "capture_mode": "window", "target_window_name": "Hades II"}),

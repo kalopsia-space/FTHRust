@@ -480,6 +480,8 @@ pub struct AppState {
     pub last_copied_bind_line: Option<String>,
     /// The compositor exposes its toplevel list (game detection works).
     pub game_detection_available: bool,
+    /// The startup cue played (once per run).
+    pub startup_cue_played: bool,
     /// Confirm the detected game.
     pub game_confirm_requested: bool,
     /// Dismiss the detected game.
@@ -660,6 +662,7 @@ impl AppState {
             record_active: false,
             last_copied_bind_line: None,
             game_detection_available: true,
+            startup_cue_played: false,
             game_confirm_requested: false,
             game_dismiss_requested: false,
             input_draft: None,

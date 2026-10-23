@@ -10,6 +10,7 @@ pub mod fonts;
 pub mod icons;
 pub mod library;
 pub mod motion;
+pub mod overlay;
 pub mod pages;
 pub mod popups;
 pub mod services;

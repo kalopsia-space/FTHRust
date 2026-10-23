@@ -14,6 +14,7 @@ pub mod portal_shortcuts;
 pub mod recording;
 pub mod save;
 pub mod screenshot;
+pub mod sounds;
 pub mod status;
 
 use std::path::PathBuf;
@@ -237,6 +238,9 @@ pub struct Services {
     game: game::GameFlow,
     focus: focus::FocusMonitor,
     detector: Option<game::GameDetector>,
+    overlay: Option<crate::overlay::Overlay>,
+    sounds: Option<sounds::SoundPlayer>,
+    last_tokens: Option<crate::tokens::Tokens>,
     portal: Option<portal_shortcuts::PortalShortcuts>,
     portal_active: bool,
     portal_requested: std::collections::BTreeMap<String, String>,
@@ -288,6 +292,9 @@ impl Services {
             game: game::GameFlow::default(),
             focus: focus::FocusMonitor::default(),
             detector: None,
+            overlay: None,
+            sounds: None,
+            last_tokens: None,
             portal: None,
             portal_active: false,
             portal_requested: std::collections::BTreeMap::new(),
@@ -314,7 +321,62 @@ impl Services {
         }
         services.start_hotkeys(state);
         services.start_game_detection();
+        let assets = crate::assets_dir();
+        let output = state
+            .settings
+            .get_str("notification_monitor")
+            .filter(|m| !m.is_empty() && *m != "auto")
+            .map(str::to_owned);
+        services.overlay = Some(crate::overlay::Overlay::start(
+            state.tokens.clone(),
+            output,
+            assets.clone(),
+        ));
+        let player = sounds::SoundPlayer::start(assets);
+        player.preload_async(&state.theme);
+        services.sounds = Some(player);
+        services.last_tokens = Some(state.tokens.clone());
         services
+    }
+
+    /// Cards and cues queued by the pages and the other services.
+    fn flush_cards_and_sounds(&mut self, state: &mut AppState) {
+        if self.last_tokens.as_ref() != Some(&state.tokens) {
+            self.last_tokens = Some(state.tokens.clone());
+            if let Some(o) = &self.overlay {
+                o.set_tokens(state.tokens.clone());
+            }
+        }
+        let cards = std::mem::take(&mut state.pending_cards);
+        let visuals = state
+            .settings
+            .get_bool("capture_card_enabled")
+            .unwrap_or(true);
+        let output = state
+            .settings
+            .get_str("notification_monitor")
+            .filter(|m| !m.is_empty() && *m != "auto")
+            .map(str::to_owned);
+        for card in cards {
+            if let Some(key) = sounds::sound_key_for(&card) {
+                state.pending_sounds.push(key.to_owned());
+            }
+            if visuals
+                && crate::overlay::capture_card::visual(&card)
+                && let Some(o) = &self.overlay
+            {
+                o.show_on(card, None, output.clone());
+            }
+        }
+        // Without a player (tests) the cues stay queued for inspection.
+        if let Some(p) = &self.sounds {
+            for key in std::mem::take(&mut state.pending_sounds) {
+                p.play(&state.settings, &state.theme, &key);
+            }
+            if let Some(key) = state.sound_preview_requested.take() {
+                p.preview(&state.settings, &state.theme, &key);
+            }
+        }
     }
 
     /// Starts the toplevel reader (availability is reported as an event).
@@ -448,6 +510,9 @@ impl Services {
             game: game::GameFlow::default(),
             focus: focus::FocusMonitor::default(),
             detector: None,
+            overlay: None,
+            sounds: None,
+            last_tokens: None,
             portal: None,
             portal_active: false,
             portal_requested: std::collections::BTreeMap::new(),
@@ -963,6 +1028,7 @@ impl Services {
         {
             sv.set_save_busy(self.save.is_busy());
         }
+        self.flush_cards_and_sounds(state);
     }
 
     fn dispatch(&mut self, req: Request, state: &mut AppState) {
@@ -1104,6 +1170,13 @@ impl Services {
         if let Some(d) = self.detector.take() {
             d.stop();
         }
+        if let Some(p) = self.sounds.take() {
+            p.stop();
+            drop(p);
+        }
+        if let Some(o) = self.overlay.take() {
+            o.shutdown();
+        }
         if let Some(scan) = self.scan.take() {
             scan.stop();
         }
@@ -1187,6 +1260,10 @@ fn apply_event(state: &mut AppState, ev: Event) {
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
             state.engine_connected = on;
+            if on && !state.startup_cue_played {
+                state.startup_cue_played = true;
+                state.pending_sounds.push("startup".into());
+            }
         }
     }
 }
