@@ -455,3 +455,31 @@ fn uploadable_and_roots() {
     let r = validate::allowed_roots(Path::new("/clips/../clips"), &core);
     assert_eq!(r, vec![PathBuf::from("/clips"), imp]);
 }
+
+#[test]
+fn concurrent_history_updates_keep_every_entry() {
+    let (_d, paths) = home();
+    let threads: Vec<_> = (0..8)
+        .map(|t| {
+            let paths = paths.clone();
+            std::thread::spawn(move || {
+                for i in 0..25 {
+                    let p = PathBuf::from(format!("/c/{t}-{i}.mp4"));
+                    History::update(&paths, |h| h.record(&p, ok_entry("https://x/y"))).unwrap();
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let h = History::load(&paths);
+    for t in 0..8 {
+        for i in 0..25 {
+            assert!(
+                h.is_uploaded(Path::new(&format!("/c/{t}-{i}.mp4"))),
+                "lost {t}-{i}"
+            );
+        }
+    }
+}

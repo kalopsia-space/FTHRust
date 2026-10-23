@@ -7,7 +7,7 @@ use std::path::Path;
 
 /// Writes `value` to `path` atomically.
 ///
-/// Data goes to `<path>.tmp` (extension appended), is fsynced, then renamed
+/// Data goes to `<path>.<pid>.<n>.tmp`, is fsynced, then renamed
 /// over `path`. Pretty output matches Python's `json.dump(indent=2)` plus a
 /// trailing newline; compact output matches `separators=(',', ':')`.
 pub fn write_json_atomic(path: &Path, value: &serde_json::Value, pretty: bool) -> Result<()> {
@@ -23,8 +23,12 @@ pub fn write_json_atomic(path: &Path, value: &serde_json::Value, pretty: bool) -
         bytes = serde_json::to_string(value).map_err(json_err)?.into_bytes();
     }
 
+    // A name of its own per write: two writers (threads or processes) must
+    // never truncate each other's temporary file.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp_name: OsString = path.as_os_str().to_owned();
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(".{}.{n}.tmp", std::process::id()));
     let tmp = Path::new(&tmp_name);
 
     let result = (|| -> std::io::Result<()> {

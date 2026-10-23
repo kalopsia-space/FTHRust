@@ -478,3 +478,38 @@ async fn live_catbox_head() {
     let (ok, msg) = h.test(&h.env(fthrust_uploader::CATBOX_URL)).await;
     assert!(ok, "{msg}");
 }
+
+#[tokio::test]
+async fn no_link_means_no_auto_delete() {
+    let srv = server(vec![(200, "<html>captive portal</html>")]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    let real = h.real_clip();
+    let (ok, msg, _) = h.upload(&h.env("x")).await;
+    assert_eq!((ok, msg.as_str()), (true, "Upload complete."));
+    assert!(real.exists(), "the only copy was deleted without a link");
+}
+
+#[tokio::test]
+async fn url_credentials_stay_out_of_messages() {
+    // Headers promise a body the server never sends.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in listener.incoming() {
+            let Ok(mut s) = s else { break };
+            let mut buf = [0u8; 65536];
+            let _ = s.read(&mut buf);
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = s.write_all(b"HTTP/1.1 500 X\r\nContent-Length: 100\r\n\r\nshort");
+        }
+    });
+    let h = home(json!({
+        "upload_provider": "custom",
+        "upload_server_url": format!("http://alice:hunter2@127.0.0.1:{port}/up"),
+    }));
+    let (ok, msg, _) = h.upload(&h.env("x")).await;
+    assert!(!ok);
+    assert!(!msg.contains("hunter2"), "{msg}");
+}

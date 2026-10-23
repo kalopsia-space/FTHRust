@@ -245,3 +245,35 @@ fn binary_round_trip() {
     assert_eq!(v["ok"], json!(false));
     assert_eq!(v["message"], json!("Uploader request is not valid JSON."));
 }
+
+/// The keyring is reached from inside the uploader's tokio runtime; with
+/// zbus's tokio feature unified in, a blocking call there used to panic.
+#[test]
+fn keyring_failure_is_a_message_not_a_panic() {
+    let h = consented(json!({}));
+    let req = r#"{"action":"sftp_forget","config":{"sftp_host":"h.example","sftp_username":"u"}}"#;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fthrust-uploader"))
+        .env("HOME", h.dir.path())
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            "unix:path=/nonexistent/fthrust-test-bus",
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(req.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let v: Value = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    assert_eq!(
+        v["message"],
+        json!("Could not remove the saved SFTP password."),
+        "{v}"
+    );
+}

@@ -252,15 +252,18 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
                 // Keep the returned link attached to the renamed clip.
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);
-                let mut history = fthrust_core::upload::history::History::load(&state.paths);
-                if history.rename(&old_key, &new_key) {
-                    if let Err(e) = history.save(&state.paths) {
-                        state.dialogs.push_message(
-                            "Clip renamed",
-                            format!("The file was renamed, but its saved metadata could not be updated: {e}"),
-                        );
-                    }
-                    state.upload_history = history;
+                let mut moved = false;
+                match fthrust_core::upload::history::History::update(&state.paths, |h| {
+                    moved = h.rename(&old_key, &new_key);
+                }) {
+                    Ok(h) if moved => state.upload_history = h,
+                    Ok(_) => {}
+                    Err(e) => state.dialogs.push_message(
+                        "Clip renamed",
+                        format!(
+                            "The file was renamed, but its saved metadata could not be updated: {e}"
+                        ),
+                    ),
                 }
                 state.library.rename(path, &new_path);
                 if let Some((m, d)) = state.thumb_meta.remove(path) {

@@ -61,6 +61,20 @@ fn client(timeout: Duration, follow_redirects: bool) -> Result<reqwest::Client, 
 
 /// A readable account of a request error.
 pub fn describe(e: &reqwest::Error) -> String {
+    let text = describe_raw(e);
+    // A server URL may carry `user:password@`; never show it.
+    match e.url() {
+        Some(u) if !u.username().is_empty() || u.password().is_some() => {
+            let mut clean = u.clone();
+            let _ = clean.set_username("");
+            let _ = clean.set_password(None);
+            text.replace(u.as_str(), clean.as_str())
+        }
+        _ => text,
+    }
+}
+
+fn describe_raw(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         return "The connection timed out.".into();
     }
@@ -350,9 +364,7 @@ pub async fn upload(
         json!(fthrust_core::upload::utc_now_iso()),
     );
     entry.extend(result);
-    let mut history = History::load(&env.paths);
-    history.record(path, Entry(entry.clone()));
-    if let Err(e) = history.save(&env.paths) {
+    if let Err(e) = History::update(&env.paths, |h| h.record(path, Entry(entry.clone()))) {
         eprintln!("[Uploader] Upload history could not be saved: {e}");
     }
     let url = entry.get("url").and_then(Value::as_str).unwrap_or("");
@@ -361,7 +373,9 @@ pub async fn upload(
     } else {
         url.to_owned()
     };
+    // Without a link the upload is not confirmed: keep the only copy.
     if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
+        && !url.is_empty()
         && let Err(e) = std::fs::remove_file(path)
     {
         return Response {

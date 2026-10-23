@@ -514,3 +514,65 @@ fn shutdown_kills_child() {
 
 #[allow(dead_code)]
 fn unused(_: Entry) {}
+
+#[test]
+fn turning_uploads_off_drops_the_queue_quietly() {
+    let body = format!("sleep 0.5\n{}", uploader_ok("https://x/q"));
+    let mut r = rig(&body, json!({}));
+    let clips: Vec<PathBuf> = (0..3).map(|i| r.clip(&format!("q{i}.mp4"))).collect();
+    for c in &clips {
+        r.svc.enqueue(&mut r.state, c.clone());
+    }
+    r.svc.tick(&mut r.state, 0.0);
+    r.state
+        .uploader_settings
+        .set("upload_enabled", json!(false));
+    r.settle();
+    assert!(r.requests().len() <= 1, "{:?}", r.requests());
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+    for c in &clips[1..] {
+        assert!(!r.state.upload_status.contains_key(c));
+    }
+}
+
+#[test]
+fn scanned_paths_map_to_library_paths_behind_symlinks() {
+    let mut r = rig(
+        &format!("sleep 0.3\n{}", uploader_ok("https://x/s")),
+        json!({"upload_mode": "interval", "upload_interval_value": 1}),
+    );
+    // The clips folder is reached through a symlink.
+    let real = r.dir.path().join("real");
+    std::fs::create_dir_all(real.join("Desktop")).unwrap();
+    let link = r.dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    r.state
+        .settings
+        .set("clips_directory", json!(link.to_string_lossy()));
+    r.state.library.clips_root = link.clone();
+    let clip = link.join("Desktop").join("s.mp4");
+    std::fs::write(&clip, b"x").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&clip)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(120))
+        .unwrap();
+    r.state.library.upsert(&clip, false);
+    r.svc.tick(&mut r.state, 0.0);
+    r.svc.tick(&mut r.state, 61.0);
+    let start = Instant::now();
+    while !r.svc.is_busy(&clip) {
+        r.svc.tick(&mut r.state, 61.5);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "never queued under its library path"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(r.state.upload_status.contains_key(&clip));
+    // A click on the card does not start a second upload.
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1);
+}

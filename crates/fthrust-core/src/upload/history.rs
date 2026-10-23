@@ -61,6 +61,26 @@ impl History {
         crate::write_json_atomic(&path, &Value::Object(self.entries.clone()), true)
     }
 
+    /// Load, change and save as one step under an exclusive lock on
+    /// `upload_history.json.lock`: the app and the uploader both write the
+    /// file.
+    pub fn update(paths: &FthrPaths, f: impl FnOnce(&mut History)) -> crate::Result<History> {
+        std::fs::create_dir_all(paths.uploader_dir())?;
+        let mut lock_name = paths.upload_history_file().into_os_string();
+        lock_name.push(".lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::path::PathBuf::from(lock_name))?;
+        let _lock = nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
+            .map_err(|(_, e)| std::io::Error::from(e))?;
+        let mut h = History::load(paths);
+        f(&mut h);
+        h.save(paths)?;
+        Ok(h)
+    }
+
     /// Copies the legacy `~/.fthr/upload_history.json` when the new file
     /// does not exist yet.
     pub fn migrate_legacy(paths: &FthrPaths) -> crate::Result<()> {

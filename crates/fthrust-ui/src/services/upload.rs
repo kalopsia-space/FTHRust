@@ -357,6 +357,7 @@ impl UploadService {
             tracing::info!(path = %path.display(), "[Uploader] Refused incomplete clip path");
             return;
         }
+        let path = library_path(state, path);
         if self.is_busy(&path) || state.upload_history.is_uploaded(&resolved(&path)) {
             return;
         }
@@ -476,6 +477,18 @@ impl UploadService {
     }
 
     fn start_ready(&mut self, state: &mut AppState) {
+        if !uploader_enabled(state) {
+            // Switched off: what has not started is dropped quietly.
+            for (path, _) in self.waiting.drain(..) {
+                state.upload_status.remove(&path);
+            }
+            return;
+        }
+        // One at a time, so the enabled flag, the provider and the size
+        // decision are taken when each upload really starts.
+        if !self.in_flight.is_empty() {
+            return;
+        }
         let mut later = VecDeque::new();
         while let Some((path, compress)) = self.waiting.pop_front() {
             match state.readiness.state(&path) {
@@ -534,7 +547,9 @@ impl UploadService {
             if let Some(tx) = &self.tx {
                 let _ = tx.send(job);
             }
+            break;
         }
+        later.extend(self.waiting.drain(..));
         self.waiting = later;
     }
 
@@ -576,9 +591,10 @@ impl UploadService {
         }
         let compressed = done.compressed.is_some();
         if let Some((copy, size, _)) = &done.compressed {
-            let mut h = History::load(&state.paths);
-            h.alias_compressed(&resolved(&done.path), &resolved(copy), *size);
-            if let Err(e) = h.save(&state.paths) {
+            let (original, copy) = (resolved(&done.path), resolved(copy));
+            if let Err(e) = History::update(&state.paths, |h| {
+                h.alias_compressed(&original, &copy, *size)
+            }) {
                 tracing::warn!(error = %e, "upload history alias not saved");
             }
         }
@@ -645,6 +661,22 @@ impl Drop for UploadService {
         self.cancel.store(true, Ordering::Relaxed);
         self.child.kill();
     }
+}
+
+/// The library's own spelling of `path` (scans see resolved paths; cards,
+/// renames and deletes use the library's), so one clip is one queue entry.
+fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
+    if state.library.records.iter().any(|r| r.path == path) {
+        return path;
+    }
+    let real = resolved(&path);
+    state
+        .library
+        .records
+        .iter()
+        .find(|r| resolved(&r.path) == real)
+        .map(|r| r.path.clone())
+        .unwrap_or(path)
 }
 
 fn file_name(path: &Path) -> String {
