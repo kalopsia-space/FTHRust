@@ -105,3 +105,10 @@ cargo test -p fthrust-ui --test services_screenshot screenshot_live_portal -- --
 
 The synthetic engine round trip (`services_engine`) runs whenever
 `target/<profile>/fthrust-engine` exists; CI builds it before the tests.
+
+## Driving the UI without a desktop
+
+`tools/uidrive/` runs the app inside a headless `cage` compositor on a
+private socket and drives it from the command line (screenshots, clicks,
+keys, waits on state). `tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh`
+is the quickest whole-app check; see `tools/uidrive/README.md`.

@@ -268,6 +268,8 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
 fn page(ui: &mut Ui, state: &mut AppState, tab: Tab) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
+    // Named for the drive bench (`settingsPage[<tab>]`); paints nothing.
+    fidelity::mark(ui, format!("settingsPage[{}]", tab.label()), rect).done();
     if tab == Tab::Customize {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         customize::ui(&mut child, state);

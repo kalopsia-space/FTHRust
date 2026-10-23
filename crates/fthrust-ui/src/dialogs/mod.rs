@@ -150,7 +150,8 @@ pub fn draw_at(ui: &mut Ui, state: &mut AppState, kind: &DialogKind, pos: Pos2) 
     outcome
 }
 
-fn title_of(kind: &DialogKind) -> String {
+/// The dialog's title (the bench's dump reports it).
+pub fn title_of(kind: &DialogKind) -> String {
     match kind {
         DialogKind::Message { title, .. }
         | DialogKind::Question { title, .. }
