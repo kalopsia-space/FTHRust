@@ -112,8 +112,15 @@ fn resolve(bench: &Bench, target: &str, nth: usize) -> Result<(f64, f64), String
     {
         return Ok((x, y));
     }
-    let d = dump::read(&bench.dump)?;
-    let m = dump::find(&d, target, nth).ok_or_else(|| format!("no marker matches '{target}'"))?;
+    // Dumps are written at most 20 times a second: 120 ms between reads
+    // sees any movement; 25 reads cover the longest slide several times.
+    let m = dump::settled(
+        || dump::read(&bench.dump),
+        target,
+        nth,
+        25,
+        || std::thread::sleep(std::time::Duration::from_millis(120)),
+    )?;
     Ok(m.center())
 }
 

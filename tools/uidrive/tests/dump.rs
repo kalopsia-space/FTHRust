@@ -131,3 +131,73 @@ fn wait_ignores_frames_before_the_action() {
     assert_eq!(d.frame, 6);
     assert!(t0.elapsed() < Duration::from_millis(700));
 }
+
+/// A dump whose `clipCard[0]` sits at `y` (`None`: not drawn yet).
+fn at(frame: u64, y: Option<f64>) -> Dump {
+    let mut d = dump();
+    d.frame = frame;
+    d.markers.retain(|m| m.name != "clipCard[0]");
+    if let Some(y) = y {
+        d.markers.push(Marker {
+            name: "clipCard[0]".into(),
+            x: 0.0,
+            y,
+            w: 200.0,
+            h: 150.0,
+            text: None,
+        });
+    }
+    d
+}
+
+#[test]
+fn settled_waits_for_a_sliding_target_to_stop() {
+    // A page slide: the target moves on every read, then rests.
+    let mut frames = vec![
+        at(1, None),
+        at(2, Some(600.0)),
+        at(3, Some(300.0)),
+        at(4, Some(101.0)),
+        at(5, Some(101.0)),
+    ]
+    .into_iter();
+    let mut last = at(5, Some(101.0));
+    let m = dump::settled(
+        || {
+            if let Some(d) = frames.next() {
+                last = d;
+            }
+            Ok(last.clone())
+        },
+        "clipCard[0]",
+        0,
+        20,
+        || {},
+    )
+    .unwrap();
+    assert_eq!(m.y, 101.0);
+}
+
+#[test]
+fn settled_returns_a_resting_target_at_once() {
+    let mut reads = 0;
+    let m = dump::settled(
+        || {
+            reads += 1;
+            Ok(at(7, Some(42.0)))
+        },
+        "clipCard[0]",
+        0,
+        20,
+        || {},
+    )
+    .unwrap();
+    assert_eq!(m.y, 42.0);
+    assert_eq!(reads, 2, "two agreeing reads are enough");
+}
+
+#[test]
+fn settled_reports_a_missing_target() {
+    let err = dump::settled(|| Ok(at(1, None)), "clipCard[0]", 0, 3, || {}).unwrap_err();
+    assert!(err.contains("no marker matches"), "{err}");
+}

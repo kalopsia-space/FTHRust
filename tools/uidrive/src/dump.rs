@@ -96,6 +96,31 @@ pub fn find<'a>(d: &'a Dump, query: &str, nth: usize) -> Option<&'a Marker> {
     None
 }
 
+/// The marker `query` once two consecutive reads agree on its rect, so a
+/// target in a page or tab slide is not clicked mid-flight. `pause` runs
+/// between reads; after `attempts` reads the last position is returned.
+pub fn settled(
+    mut read: impl FnMut() -> Result<Dump, String>,
+    query: &str,
+    nth: usize,
+    attempts: usize,
+    mut pause: impl FnMut(),
+) -> Result<Marker, String> {
+    let mut prev: Option<Marker> = None;
+    for _ in 0..attempts.max(1) {
+        let d = read()?;
+        let cur = find(&d, query, nth).cloned();
+        if let Some(m) = &cur
+            && prev.as_ref() == Some(m)
+        {
+            return Ok(m.clone());
+        }
+        prev = cur;
+        pause();
+    }
+    prev.ok_or_else(|| format!("no marker matches '{query}'"))
+}
+
 /// Polls the dump every 50 ms until `pred` holds on a frame newer than
 /// `after_frame`, or `timeout` passes. An action that changes nothing on
 /// screen produces no new frame: after a 250 ms grace with no newer frame
