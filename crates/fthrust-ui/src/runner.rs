@@ -162,6 +162,10 @@ impl Runner {
         raw.viewports.insert(ViewportId::ROOT, self.info.clone());
         self.info.events.clear();
         let mut full = self.ctx.run_ui(raw, |ui| app.ui(ui));
+        if std::mem::take(&mut app.state.clipboard_read_requested) {
+            app.state.clipboard_paste = Some(state.clipboard_text().unwrap_or_default());
+            window.request_redraw();
+        }
         let clear = app.clear_color();
         state.handle_platform_output(&window, full.platform_output);
         let clipped = self.ctx.tessellate(full.shapes, full.pixels_per_point);
