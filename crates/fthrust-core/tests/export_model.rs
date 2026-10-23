@@ -414,3 +414,40 @@ fn plan_maths() {
         "3840×2160→640×360 · 3814.7 MB→≤0.9 MB · AAC 128 kbps audio"
     );
 }
+
+#[test]
+fn preset_filters_follow_the_plan() {
+    let discord = ExportPreset::builtin_discord();
+    let mut src = MediaFacts {
+        size_bytes: 93_750_000,
+        duration_s: 30.0,
+        width: 1920,
+        height: 1080,
+        fps: 60.0,
+        video_codec: "h264".into(),
+        has_audio: true,
+        audio_codec: "aac".into(),
+        audio_kbps: 160,
+    };
+    let p = plan_export(&src, &discord, None);
+    assert_eq!(
+        p.preset_filters(&src),
+        [
+            "scale=1280:720:force_original_aspect_ratio=decrease",
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+        ]
+    );
+    src.fps = 120.0;
+    let p = plan_export(&src, &discord, None);
+    assert_eq!(p.preset_filters(&src)[0], "fps=60");
+    // Already fits: only the even-size guard.
+    src.size_bytes = 1_000_000;
+    src.width = 640;
+    src.height = 360;
+    src.fps = 30.0;
+    let p = plan_export(&src, &discord, None);
+    assert_eq!(
+        p.preset_filters(&src),
+        ["scale=trunc(iw/2)*2:trunc(ih/2)*2"]
+    );
+}

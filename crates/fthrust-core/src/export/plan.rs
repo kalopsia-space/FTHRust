@@ -54,6 +54,27 @@ pub struct ExportPlan {
 }
 
 impl ExportPlan {
+    /// The share preset's filters (`_preset_video_filters`): `fps=` when
+    /// the target rate is lower, a fitting `scale` when the size changes,
+    /// then always the even-size guard.
+    pub fn preset_filters(&self, src: &MediaFacts) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.target_fps > 0.0 && src.fps > 0.0 && self.target_fps < src.fps - 0.01 {
+            out.push(format!("fps={}", fmt_g(self.target_fps)));
+        }
+        if (self.target_width, self.target_height) != (src.width, src.height)
+            && self.target_width > 0
+            && self.target_height > 0
+        {
+            out.push(format!(
+                "scale={}:{}:force_original_aspect_ratio=decrease",
+                self.target_width, self.target_height
+            ));
+        }
+        out.push("scale=trunc(iw/2)*2:trunc(ih/2)*2".into());
+        out
+    }
+
     /// `ExportPlan.summary`.
     pub fn summary(&self) -> String {
         if self.changes.is_empty() {
@@ -169,4 +190,10 @@ pub fn plan_export(src: &MediaFacts, preset: &ExportPreset, duration_s: Option<f
         reencode_audio,
         changes,
     }
+}
+
+/// Python's `{:g}` for frame rates.
+fn fmt_g(v: f64) -> String {
+    let s = format!("{v}");
+    s.strip_suffix(".0").map_or(s.clone(), str::to_owned)
 }

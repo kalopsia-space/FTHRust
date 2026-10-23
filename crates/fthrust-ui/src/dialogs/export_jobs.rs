@@ -263,8 +263,12 @@ fn draw_row(ui: &Ui, t: &Tokens, task: &TaskView, row: Rect, selected: bool) {
         Align::Min,
         &format!("QLabel[{}]", fidelity::marker_label(&name)),
     );
-    ui.interact(name_r, ui.scope_id().with(("name", task.id)), Sense::hover())
-        .on_hover_text(&name);
+    ui.interact(
+        name_r,
+        ui.scope_id().with(("name", task.id)),
+        Sense::hover(),
+    )
+    .on_hover_text(&name);
     let status = format!("{} · {}", quality_text(task.quality), task.status);
     let status_r = Rect::from_min_size(
         Pos2::new(inner.min.x, inner.min.y + 25.0),
@@ -286,8 +290,12 @@ fn draw_row(ui: &Ui, t: &Tokens, task: &TaskView, row: Rect, selected: bool) {
     } else {
         task.detail.clone()
     };
-    ui.interact(status_r, ui.scope_id().with(("status", task.id)), Sense::hover())
-        .on_hover_text(tip);
+    ui.interact(
+        status_r,
+        ui.scope_id().with(("status", task.id)),
+        Sense::hover(),
+    )
+    .on_hover_text(tip);
     let percent = task.progress.clamp(0.0, 100.0) as i64;
     let pct_text = format!("{percent}%");
     let pct_r = Rect::from_min_size(

@@ -421,6 +421,10 @@ pub struct AppState {
     /// The editor's "Export jobs" label and when it was computed (refreshed
     /// once a second, `_update_export_jobs_status`).
     pub export_jobs_label: Option<(String, f64)>,
+    /// The open share picker.
+    pub share_picker: Option<crate::editor::share::PickerState>,
+    /// Open share windows.
+    pub share_windows: Vec<crate::editor::share::ShareWindow>,
     /// Keyboard navigation bindings.
     pub nav: fthrust_core::navigation::NavigationBindings,
     /// Last binding error shown on the Shortcuts page.
@@ -669,6 +673,8 @@ impl AppState {
             export_jobs_open: false,
             export_jobs_selected: None,
             export_jobs_label: None,
+            share_picker: None,
+            share_windows: Vec::new(),
             nav,
             shortcut_error: String::new(),
             shortcut_recording: None,

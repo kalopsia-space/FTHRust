@@ -2,6 +2,11 @@
 
 ## Fixed
 
+- Exports run in-process through FFmpeg's libraries instead of the `ffmpeg` command line; the same graphs, encoders and validation apply.
+- A sped-up export of several kept ranges keeps every range's video: speed now applies to each range's audio before the concat (the reference sped audio up after it, so `-shortest` cut the later ranges).
+- A ready share window offers "Copy path" and "Open folder" instead of dragging the file out: winit cannot start a file drag on Wayland.
+- Leaving an editor (minimize, clip navigation) is refused only while one of its shares runs; queued exports keep running while you browse, as the jobs window promises. The reference's guard watched a per-editor export thread that nothing starts any more.
+
 - The editor's "Ready" status clears after 900 ms as intended (the reference compared it to "READY" and never cleared it).
 - The editor's Color & Effects panel title shows "COLOR & EFFECTS" instead of Qt's mnemonic rendering "COLOR_EFFECTS".
 

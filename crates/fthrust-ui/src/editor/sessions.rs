@@ -442,6 +442,7 @@ pub fn service(state: &mut AppState) {
                 }
             }
             EditorRequest::Export => super::export_ui::export_now(state),
+            EditorRequest::Share => super::share::open_picker(state),
             EditorRequest::DeleteClip => request_delete(state),
             other => keep.push(other),
         }

@@ -387,3 +387,25 @@ fn hardware_failure_falls_back() {
         "{statuses:?}"
     );
 }
+
+#[test]
+fn media_facts_describe_the_clip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "f.mp4", 2, 1) else {
+        return;
+    };
+    let f = fthrust_media::export::media_facts(&src).unwrap();
+    assert_eq!((f.width, f.height), (160, 90));
+    assert_eq!(f.video_codec, "h264");
+    assert!((f.fps - 30.0).abs() < 0.5, "{}", f.fps);
+    assert!((f.duration_s - 2.0).abs() < 0.2, "{}", f.duration_s);
+    assert!(f.has_audio);
+    assert_eq!(f.audio_codec, "aac");
+    assert!(f.audio_kbps > 0);
+    assert_eq!(f.size_bytes, std::fs::metadata(&src).unwrap().len());
+    let missing = fthrust_media::export::media_facts(&tmp.path().join("nope.mp4")).unwrap_err();
+    assert!(
+        missing.starts_with("Media inspection failed: "),
+        "{missing}"
+    );
+}

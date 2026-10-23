@@ -26,6 +26,7 @@ pub mod filmstrip;
 pub mod keys;
 pub mod layer;
 pub mod sessions;
+pub mod share;
 pub mod sidebar;
 pub mod timeline_ui;
 

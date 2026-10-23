@@ -257,3 +257,55 @@ fn trim_float(v: f64) -> String {
     let s = format!("{v}");
     s.strip_suffix(".0").map_or(s.clone(), str::to_owned)
 }
+
+/// `probe_media` for preset planning; failures read
+/// `Media inspection failed: …`.
+pub fn media_facts(path: &Path) -> Result<fthrust_core::export::plan::MediaFacts, String> {
+    use ffmpeg_next as ff;
+    let fail = |e: &dyn std::fmt::Display| format!("Media inspection failed: {e}");
+    crate::init().map_err(|e| fail(&e))?;
+    let size_bytes = std::fs::metadata(path).map_err(|e| fail(&e))?.len();
+    let ictx = ff::format::input(&path).map_err(|e| fail(&e))?;
+    let duration_s = if ictx.duration() > 0 {
+        ictx.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE)
+    } else {
+        0.0
+    };
+    let video = ictx
+        .streams()
+        .best(ff::media::Type::Video)
+        .ok_or_else(|| fail(&"no video stream"))?;
+    let vpar = video.parameters();
+    let vdec = ff::codec::context::Context::from_parameters(vpar.clone())
+        .and_then(|c| c.decoder().video())
+        .map_err(|e| fail(&e))?;
+    let rate = video.avg_frame_rate();
+    let fps = if rate.numerator() > 0 && rate.denominator() > 0 {
+        f64::from(rate.numerator()) / f64::from(rate.denominator())
+    } else {
+        0.0
+    };
+    let audio = ictx.streams().best(ff::media::Type::Audio);
+    let has_audio = audio.is_some();
+    let (audio_codec, audio_kbps) = audio
+        .map(|a| {
+            let par = a.parameters();
+            let kbps = ff::codec::context::Context::from_parameters(par.clone())
+                .and_then(|c| c.decoder().audio())
+                .map(|d| d.bit_rate() / 1000)
+                .unwrap_or(0);
+            (par.id().name().to_owned(), kbps as u32)
+        })
+        .unwrap_or_default();
+    Ok(fthrust_core::export::plan::MediaFacts {
+        size_bytes,
+        duration_s,
+        width: vdec.width(),
+        height: vdec.height(),
+        fps,
+        video_codec: vpar.id().name().to_owned(),
+        has_audio,
+        audio_codec,
+        audio_kbps,
+    })
+}

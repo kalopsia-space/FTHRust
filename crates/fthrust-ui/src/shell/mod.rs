@@ -104,6 +104,7 @@ pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
         let out = crate::editor::layer::ui(ui, state);
         crate::editor::dialogs::ui(ui.ctx(), state);
         crate::dialogs::export_jobs::ui(ui.ctx(), state);
+        crate::editor::share::ui(ui.ctx(), state);
         crate::dialogs::service(state);
         crate::dialogs::draw_all(ui, state);
         crate::dialogs::dispatch_results(state);
@@ -195,6 +196,7 @@ pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
     crate::popups::draw_all(ui, state);
     crate::dialogs::service(state);
     crate::dialogs::export_jobs::ui(ui.ctx(), state);
+    crate::editor::share::ui(ui.ctx(), state);
     crate::dialogs::draw_all(ui, state);
     crate::dialogs::dispatch_results(state);
     if bar_h > 0.0 {
