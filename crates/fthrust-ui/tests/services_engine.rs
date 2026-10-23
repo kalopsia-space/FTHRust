@@ -463,7 +463,10 @@ fn synthetic_engine_round_trip() {
         return;
     };
     let d = tempfile::tempdir().unwrap();
-    let mut s = fthrust_ui::state::AppState::for_tests(d.path(), serde_json::json!({}));
+    let mut s = fthrust_ui::state::AppState::for_tests(
+        d.path(),
+        serde_json::json!({"encoder_pref": "software"}),
+    );
     let ctx = egui::Context::default();
     let mut services = fthrust_ui::services::Services::start(&s, &ctx);
     let runtime = d.path().join("rt");

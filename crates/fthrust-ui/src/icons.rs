@@ -302,11 +302,8 @@ impl IconCache {
             let bytes = std::fs::read(path).ok()?;
             let decoded = image::load_from_memory(&bytes).ok()?;
             let img = if size_px > 0.0 {
-                decoded.resize(
-                    size_px as u32,
-                    size_px as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
+                // Sources run to 3072 px: a Lanczos pass that size stalls the frame.
+                decoded.thumbnail(size_px as u32, size_px as u32)
             } else {
                 decoded
             };

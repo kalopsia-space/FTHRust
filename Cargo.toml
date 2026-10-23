@@ -56,5 +56,10 @@ egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 [profile.dev]
 debug = "line-tables-only"
 
+# Image decode/resize, shaping and video conversion run on the UI thread at
+# first use; unoptimised they block a frame for seconds.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.test]
 debug = "line-tables-only"
