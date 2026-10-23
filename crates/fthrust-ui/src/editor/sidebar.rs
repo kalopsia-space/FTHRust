@@ -40,11 +40,7 @@ pub const PANELS: [&str; 6] = [
     "FILE DETAILS",
 ];
 /// `QUALITY_OPTIONS`: label and `export_quality` value.
-pub const QUALITY_OPTIONS: [(&str, &str); 3] = [
-    ("Very fast", "fast"),
-    ("High quality", "quality"),
-    ("Lossless · MKV", "lossless"),
-];
+pub use fthrust_core::export::QUALITY_OPTIONS;
 const EFFECT_TITLES: [&str; 6] = [
     "Exposure",
     "Contrast",
