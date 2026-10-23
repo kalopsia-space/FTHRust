@@ -37,6 +37,13 @@ pub fn catbox_accept_enabled(checked: bool) -> bool {
     checked
 }
 
+/// Each document box shares what the window leaves after the rest of the
+/// dialog (about 500 px), between 80 and 150 px.
+fn box_height(ui: &Ui) -> f32 {
+    let screen = ui.ctx().content_rect().height();
+    ((screen - 500.0) / 2.0).clamp(80.0, 150.0)
+}
+
 fn document(ui: &mut Ui, state: &AppState, label: &str, text: &str, w: f32) {
     let t = &state.tokens;
     section::label_wide(ui, t, label, size::LABEL, Weight::W600, Color::Text, None);
@@ -50,7 +57,7 @@ fn document(ui: &mut Ui, state: &AppState, label: &str, text: &str, w: f32) {
         ui.set_width(w - 22.0);
         egui::ScrollArea::vertical()
             .id_salt(label)
-            .max_height(150.0)
+            .max_height(box_height(ui))
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.label(

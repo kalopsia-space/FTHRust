@@ -285,6 +285,26 @@ impl Session {
         Ok(())
     }
 
+    /// Wheel scroll at the current position, in steps of 15 logical px.
+    pub fn scroll(&mut self, dy: f64) -> Result<(), String> {
+        let steps = (dy.abs() / 15.0).ceil().max(1.0) as i32;
+        let step = dy.signum() * 15.0;
+        for _ in 0..steps {
+            let t = self.now_ms();
+            self.pointer.axis_source(wl_pointer::AxisSource::Wheel);
+            self.pointer.axis(t, wl_pointer::Axis::VerticalScroll, step);
+            self.pointer.axis_discrete(
+                t,
+                wl_pointer::Axis::VerticalScroll,
+                step,
+                dy.signum() as i32,
+            );
+            self.pointer.frame();
+            self.settle(15)?;
+        }
+        self.settle(60)
+    }
+
     /// Presses at `from`, moves in `steps`, releases at `to`.
     pub fn drag(&mut self, from: (f64, f64), to: (f64, f64), steps: usize) -> Result<(), String> {
         self.settle_pointer(from.0, from.1)?;

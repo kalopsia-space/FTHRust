@@ -2,6 +2,16 @@
 
 ## Fixed
 
+- The uploader ships inside the app as `fthrust-uploader` and is enabled by the consent dialog; the reference's install root, bundle hash and executable were Windows-only, so uploading could not be turned on under Linux.
+- Saved SFTP passwords work on Linux through the desktop keyring (the reference required Windows Credential Manager).
+- Test connection reports a refused or missing endpoint: your server's 401/403 ("rejected the authorization header") and other 4xx/5xx replies fail, as do Catbox 5xx replies (the reference reported any HTTP reply as reachable).
+- Uploads retry only network errors, 429 and 5xx replies, and never past 540 s (the reference retried every failure, including a bad URL, and could outlive its own 600 s timeout).
+- A card's "Uploading…" state clears when the upload finishes or fails, so the share button and RETRY NOW work again without a restart.
+- The clip card's right-click menu has the "Upload" entry the settings label promises.
+- Interval uploads also scan imported folders, which were already allowed upload roots.
+- Quitting stops a running upload instead of leaving the uploader process behind.
+- The editor's Upload button appears and disappears as uploads are switched on or off, instead of being fixed when the editor opened.
+
 - Image layers and the webcam are burned into a saved clip in one re-encode (the reference re-encoded the whole clip once per overlay), with every audio track, its title and the audio manifest kept.
 - Webcam frames are placed at their capture times; the reference wrote them at a fixed 30 fps, so a 15 fps camera played at double speed and drifted.
 - An unreadable image layer is skipped with its own warning ("Image overlay could not be read: …") instead of failing every layer.

@@ -50,6 +50,12 @@ enum Cmd {
         #[arg(long, default_value_t = 12)]
         steps: usize,
     },
+    /// Scroll the wheel over a target (positive DY scrolls down).
+    Scroll {
+        target: String,
+        #[arg(allow_hyphen_values = true)]
+        dy: f64,
+    },
     /// Press a chord such as `Ctrl+Shift+S` or `F9`.
     Key { chord: String },
     /// Type text.
@@ -285,6 +291,12 @@ fn run(cmd: Cmd) -> Result<(), String> {
             let a = resolve(&bench, &from, 0)?;
             let b = resolve(&bench, &to, 0)?;
             Session::connect(&bench)?.drag(a, b, steps)
+        }
+        Cmd::Scroll { target, dy } => {
+            let (x, y) = resolve(&bench, &target, 0)?;
+            let mut s = Session::connect(&bench)?;
+            s.settle_pointer(x, y)?;
+            s.scroll(dy)
         }
         Cmd::Key { chord } => {
             let c = parse_chord(&chord)?;
