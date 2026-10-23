@@ -802,6 +802,7 @@ impl AppState {
             render_state,
             editor.player_mut().and_then(|p| p.take_frame()),
         ) {
+            crate::editor::preview::install(rs);
             self.editor_video
                 .get_or_insert_with(crate::video_texture::VideoTexture::new)
                 .update(rs, &frame);

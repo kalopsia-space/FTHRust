@@ -25,6 +25,7 @@ pub mod export_ui;
 pub mod filmstrip;
 pub mod keys;
 pub mod layer;
+pub mod preview;
 pub mod sessions;
 pub mod share;
 pub mod sidebar;

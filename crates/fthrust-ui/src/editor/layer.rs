@@ -211,31 +211,82 @@ fn push(state: &mut AppState, r: EditorRequest) {
 fn video_surface(ui: &mut Ui, state: &mut AppState, rect: Rect) {
     let t = &state.tokens;
     ui.painter().rect_filled(rect, 0.0, t.color(Color::Bg));
-    let texture = state
+    let video = state
         .editor_video
         .as_ref()
-        .and_then(|v| Some((v.id()?, v.size()?)))
-        .map(|(id, (w, h))| (id, Vec2::new(w as f32, h as f32)))
+        .and_then(|v| Some((v.id()?, v.size()?, v.view_unorm().cloned())));
+    let texture = video
+        .as_ref()
+        .map(|(id, (w, h), view)| (*id, (*w, *h), view.clone()))
         .or_else(|| {
             let path = state.editor.as_ref()?.path.clone();
             state.thumb_textures.get(&path).map(|e| {
                 let [w, h] = e.texture.size();
-                (e.texture.id(), Vec2::new(w as f32, h as f32))
+                (e.texture.id(), (w as u32, h as u32), None)
             })
         });
-    if let Some((id, size)) = texture
-        && size.x > 0.0
-        && size.y > 0.0
-    {
+    let Some((id, (w, h), view)) = texture else {
+        return;
+    };
+    if w == 0 || h == 0 {
+        return;
+    }
+    let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    let Some(u) = super::preview::uniforms_for(state) else {
+        // Live preview off: the original video.
+        let size = Vec2::new(w as f32, h as f32);
         let scale = (rect.width() / size.x).min(rect.height() / size.y);
         let r = Rect::from_center_size(rect.center(), size * scale).round();
-        ui.painter().image(
-            id,
-            r,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
+        ui.painter().image(id, r, uv, Color32::WHITE);
+        return;
+    };
+    let src = state.editor.as_ref().map_or((w, h), |e| e.source_size());
+    let display = super::preview::display_rect(rect, src, f64::from(u.stretch)).round();
+    match view {
+        Some(view) if u.effects_active() => {
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+                display,
+                super::preview::PreviewCallback {
+                    view,
+                    size: (w, h),
+                    uniforms: u,
+                },
+            ));
+        }
+        _ => {
+            ui.painter().image(id, display, uv, Color32::WHITE);
+        }
     }
+    if let Some(crop) = state.editor.as_ref().and_then(|e| e.crop) {
+        crop_overlay(ui, state, super::preview::crop_overlay(display, src, crop));
+    }
+}
+
+/// The veil (BG at 0.32), the 3 px accent outline and the label pill.
+fn crop_overlay(ui: &Ui, state: &AppState, o: super::preview::CropOverlay) {
+    let t = &state.tokens;
+    let bg = t.color(Color::Bg);
+    let veil = Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), 82);
+    for v in o.veils {
+        if v.width() > 0.0 && v.height() > 0.0 {
+            ui.painter().rect_filled(v, 0.0, veil);
+        }
+    }
+    ui.painter().rect_stroke(
+        o.crop.expand(1.0),
+        0.0,
+        Stroke::new(3.0, t.color(Color::Accent)),
+        StrokeKind::Middle,
+    );
+    let g = galley(ui, &o.label, 12.0, Weight::W700, t.color(Color::Accent));
+    let pill = Rect::from_min_size(o.pill.min, Vec2::new(g.size().x.ceil() + 16.0, 22.0));
+    let soft = t.color(Color::AccentSoft);
+    ui.painter().rect_filled(
+        pill,
+        CornerRadius::same(geom::RADIUS as u8),
+        Color32::from_rgba_unmultiplied(soft.r(), soft.g(), soft.b(), 222),
+    );
+    paint_text(ui, g, pill, Align::Center, 0.0, t.color(Color::Accent));
 }
 
 fn control_bar(ui: &mut Ui, state: &mut AppState, rect: Rect, now: f64) {
