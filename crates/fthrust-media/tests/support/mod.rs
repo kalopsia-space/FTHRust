@@ -212,3 +212,71 @@ pub fn tone_power(pcm: &[f32], hz: f32, rate: f32) -> f32 {
     }
     (s1 * s1 + s2 * s2 - coeff * s1 * s2) / n as f32
 }
+
+/// A silent-audio clip whose encoder is asked for a keyframe every
+/// `gop_frames` frames (`None` = the encoder's default, a long GOP).
+#[allow(dead_code)]
+pub fn write_gop_clip(path: &std::path::Path, seconds: u32, gop_frames: Option<u32>) -> Option<()> {
+    use fthrust_core::capture_config::{Codec, EncoderPref};
+    use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
+    use fthrust_media::encoder::{Encoder, EncoderConfig};
+    use fthrust_media::ring::EncodedRing;
+
+    skip_unless_encoder(&["libopenh264", "libx264"])?;
+    const FPS: u32 = 30;
+    const SECOND: i64 = 1_000_000_000;
+    let (w, h) = (320u32, 180u32);
+    let cfg = EncoderConfig {
+        src_width: w,
+        src_height: h,
+        enc_width: w,
+        enc_height: h,
+        fps: FPS,
+        bitrate_kbps: 600,
+        codec: Codec::H264,
+        encoder: EncoderPref::Software,
+        preset: 1,
+    };
+    // `None` keeps one keyframe for the whole clip (a long GOP).
+    let mut encoder = Encoder::open_with_gop(&cfg, gop_frames.unwrap_or(10_000)).unwrap();
+    let ring = EncodedRing::new(u64::from(seconds) * 1000 + 5000, FPS, 0);
+    let mut out = Vec::new();
+    for i in 0..seconds * FPS {
+        let bgra = synthetic_bgra(w, h, i);
+        encoder
+            .encode(
+                &bgra,
+                (w * 4) as usize,
+                w,
+                h,
+                i64::from(i) * SECOND / i64::from(FPS),
+                &mut out,
+            )
+            .unwrap();
+    }
+    encoder.flush(&mut out).unwrap();
+    for p in out {
+        ring.push(p);
+    }
+    let snapshot = ring
+        .snapshot(seconds * 1000, i64::from(seconds) * SECOND, 0)
+        .unwrap();
+    let video = ClipVideo {
+        snapshot: &snapshot,
+        codec_id: encoder.codec_id(),
+        extradata: &encoder.extradata(),
+        width: w,
+        height: h,
+        bitrate_kbps: 600,
+        separate_audio: false,
+    };
+    let samples: Vec<f32> = vec![0.0; (u64::from(seconds) * 48_000 * 2) as usize];
+    let audio = ClipAudio {
+        samples: &samples,
+        sample_rate: 48_000,
+        channels: 2,
+        title: "Default Mix",
+    };
+    write_clip(path, &video, &[audio], None).unwrap();
+    Some(())
+}

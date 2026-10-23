@@ -2,6 +2,8 @@
 //! reference's `ffmpeg_playback_bridge.cpp` and `ffmpeg_playback.py`.
 
 pub mod mixer;
+pub mod proxy;
+pub mod video;
 
 /// Output sample rate.
 pub const CANONICAL_SAMPLE_RATE: u32 = 48_000;
