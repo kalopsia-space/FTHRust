@@ -14,6 +14,8 @@ thiserror = "2"
 regex = "1"
 md-5 = "0.11"
 sha2 = "0.11"
+idna = "1"
+base64 = "0.22"
 rusqlite = { version = "0.40", features = ["bundled"] }
 zip = "9"
 tempfile = "3"
@@ -24,7 +26,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 nix = { version = "0.31", features = ["fs", "user", "poll", "signal", "time"] }
-time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
 wayland-client = { version = "0.31", features = ["dlopen"] }

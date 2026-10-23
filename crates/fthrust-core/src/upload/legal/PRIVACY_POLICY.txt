@@ -1,0 +1,50 @@
+FTHR UPLOAD EXTENSION — PRIVACY POLICY
+Version: 2026-10-23-v4
+
+Execution
+
+FTHR Clips Core contains no provider upload client. This extension is a
+separate program shipped next to FTHR Clips and is used only after consent. It
+runs only for an upload or connection-test request; it has no idle
+background service.
+
+Data kept locally
+
+- uploader enable state, selected provider, schedule, Catbox userhash, and
+  your server's URL and authentication header;
+- upload history, returned links, file IDs, and expiry timestamps.
+
+Data sent
+
+- Catbox: the selected clip, filename, optional userhash, and connection data;
+
+Provider policies and retention
+
+Catbox: https://catbox.moe/legal.php
+
+Disabling uploads stops network actions. Local uploader settings and history are
+kept in ~/.fthr/uploader and can be removed by deleting that folder.
+
+SFTP and user-selected servers
+
+SFTP connection settings (host, port, username, remote folder and host-key
+fingerprint) are stored locally. SFTP passwords are stored separately in
+your desktop keyring (Secret Service) and may be removed with the Forget saved
+password control. They are not removed by deleting ~/.fthr/uploader. Connection
+tests may use a transient password without saving it. The extension also runs
+for local credential-management requests.
+
+The selected SFTP server receives the username and password over an encrypted,
+host-key-verified SSH connection, the selected clip under a unique generated
+filename, its size and connection data. Custom HTTP servers receive the clip
+and any configured authentication header. The selected operator's policies and
+retention apply. Remote paths and SFTP locations are recorded in local history.
+
+Optional public URL mapping
+
+When you explicitly enable public HTTPS sharing links, the extension uploads
+new files with permissions 0644 so a configured web server can read them.
+The public folder URL is stored locally; generated HTTPS links and private
+SFTP locations are recorded in history. Anyone with access to a publicly
+served file can view or share it. Your operator controls web access and
+retention. The extension does not configure hosting or call a publishing API.

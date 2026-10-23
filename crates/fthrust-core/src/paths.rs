@@ -24,6 +24,16 @@ impl FthrPaths {
         }
     }
 
+    /// The home directory itself.
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// `uploader/known_hosts` (host keys the uploader verified).
+    pub fn uploader_known_hosts_file(&self) -> PathBuf {
+        self.uploader_dir().join("known_hosts")
+    }
+
     /// `~/.fthr`.
     pub fn root(&self) -> PathBuf {
         self.home.join(".fthr")

@@ -1504,6 +1504,8 @@ dependencies = [
 name = "fthrust-core"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "base64",
+ "idna",
  "image",
  "md-5",
  "nix",
