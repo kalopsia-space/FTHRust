@@ -31,6 +31,7 @@ pub mod combined_audio;
 pub mod encoder;
 pub mod encoder_policy;
 pub(crate) mod ffi;
+pub mod playback;
 pub mod probe;
 pub mod recorder;
 pub mod replay_interval;

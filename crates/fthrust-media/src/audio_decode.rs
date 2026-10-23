@@ -32,7 +32,7 @@ pub struct Pcm {
 
 /// Reads one decoded frame as stereo f32 at the source rate (mono is
 /// duplicated, extra channels dropped).
-fn frame_to_stereo(decoded: &frame::Audio) -> Result<Vec<f32>> {
+pub(crate) fn frame_to_stereo(decoded: &frame::Audio) -> Result<Vec<f32>> {
     let channels = usize::from(decoded.channels().max(1));
     let n = decoded.samples();
     let planar = decoded.is_planar();
@@ -67,7 +67,7 @@ fn frame_to_stereo(decoded: &frame::Audio) -> Result<Vec<f32>> {
 }
 
 /// Linear resampling of interleaved stereo from `from` to `to` Hz.
-fn resample_stereo(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub(crate) fn resample_stereo(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || from == 0 || input.len() < 4 {
         return input.to_vec();
     }
