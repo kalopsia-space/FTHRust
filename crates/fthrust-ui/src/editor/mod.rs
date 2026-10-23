@@ -20,6 +20,7 @@ use serde_json::json;
 
 use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
+pub mod dialogs;
 pub mod filmstrip;
 pub mod keys;
 pub mod layer;

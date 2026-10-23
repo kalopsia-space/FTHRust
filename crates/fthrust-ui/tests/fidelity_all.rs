@@ -478,6 +478,35 @@ fn clip_editor_rail() {
     });
 }
 
+/// The editor with a dialog open on a clip whose frame cannot be decoded
+/// (the Qt renders show that state).
+fn editor_dialog(request: fthrust_ui::editor::EditorRequest) -> (tempfile::TempDir, AppState) {
+    let (tmp, mut s) = editor_state();
+    s.editor.as_mut().unwrap().requests.push(request);
+    fthrust_ui::editor::dialogs::service(&mut s);
+    let ctx = egui::Context::default();
+    fthrust_ui::editor::dialogs::wait_frame(&ctx, &mut s);
+    (tmp, s)
+}
+
+#[test]
+fn clip_editor_crop() {
+    let (_tmp, s) = editor_dialog(fthrust_ui::editor::EditorRequest::OpenCrop);
+    check("clip-editor-crop", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::dialogs::CROP_SIZE);
+        fthrust_ui::editor::dialogs::draw_crop(ui, s, rect);
+    });
+}
+
+#[test]
+fn clip_editor_stretch() {
+    let (_tmp, s) = editor_dialog(fthrust_ui::editor::EditorRequest::OpenStretch);
+    check("clip-editor-stretch", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::dialogs::STRETCH_SIZE);
+        fthrust_ui::editor::dialogs::draw_stretch(ui, s, rect);
+    });
+}
+
 #[test]
 fn clip_editor_timeline() {
     let (_tmp, mut s) = editor_state();

@@ -535,3 +535,150 @@ fn rebinding_is_respected() {
     drop(h);
     assert_eq!(r.s.editor.as_ref().unwrap().timeline.segments.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Crop and stretch dialogs.
+
+/// A shell harness that reports, after every frame, whether the open
+/// dialog's frame has decoded.
+fn dialog_harness<'a>(
+    s: &'a mut AppState,
+    loaded: Arc<std::sync::atomic::AtomicBool>,
+) -> egui_kittest::Harness<'a> {
+    let tokens = s.tokens.clone();
+    common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, move |ui| {
+        s.tick_editor(None);
+        fthrust_ui::shell::frame(ui, s);
+        loaded.store(
+            fthrust_ui::editor::dialogs::frame_loaded(s),
+            Ordering::SeqCst,
+        );
+    })
+}
+
+fn wait_loaded(h: &mut egui_kittest::Harness<'_>, loaded: &std::sync::atomic::AtomicBool) {
+    for _ in 0..300 {
+        h.step();
+        if loaded.load(Ordering::SeqCst) {
+            h.run_steps(2);
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("dialog frame never decoded");
+}
+
+fn drag(h: &mut egui_kittest::Harness<'_>, from: egui::Pos2, to: egui::Pos2) {
+    h.drag_at(from);
+    h.step();
+    for i in 1..=5 {
+        h.hover_at(from + (to - from) * (i as f32 / 5.0));
+        h.step();
+    }
+    h.drop_at(to);
+    h.run_steps(2);
+}
+
+fn click_at(h: &mut egui_kittest::Harness<'_>, at: egui::Pos2) {
+    h.drag_at(at);
+    h.step();
+    h.drop_at(at);
+    h.run_steps(2);
+}
+
+#[test]
+fn crop_accept_is_one_undo_step_and_pauses() {
+    use fthrust_ui::editor::Lifecycle;
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    let now = r.s.editor_now();
+    {
+        let e = r.s.editor.as_mut().unwrap();
+        e.toggle_play(now);
+        assert_eq!(e.lifecycle, Lifecycle::Playing);
+        e.requests.push(EditorRequest::OpenCrop);
+    }
+    let loaded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut h = dialog_harness(&mut r.s, loaded.clone());
+    wait_loaded(&mut h, &loaded);
+    // The 900×580 dialog is centred: its frame area spans y 228..692.
+    drag(
+        &mut h,
+        egui::Pos2::new(400.0, 300.0),
+        egui::Pos2::new(700.0, 500.0),
+    );
+    let apply = common::render_harness(&mut h)
+        .marker("QPushButton[Apply crop]")
+        .expect("apply button")
+        .rect
+        .center();
+    click_at(&mut h, apply);
+    drop(h);
+    let e = r.s.editor.as_ref().unwrap();
+    assert!(e.crop.is_some(), "crop applied");
+    assert_eq!(e.undo.undo.len(), 1);
+    assert_eq!(e.lifecycle, Lifecycle::Playing, "playback resumes");
+    assert!(r.s.editor_dialog.is_none());
+    // Escape cancels without an undo step.
+    r.s.editor
+        .as_mut()
+        .unwrap()
+        .requests
+        .push(EditorRequest::OpenCrop);
+    let mut h = dialog_harness(&mut r.s, loaded.clone());
+    wait_loaded(&mut h, &loaded);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    drop(h);
+    assert!(r.s.editor_dialog.is_none());
+    assert!(
+        r.s.editor.is_some(),
+        "Escape closed the dialog, not the editor"
+    );
+    assert_eq!(r.s.editor.as_ref().unwrap().undo.undo.len(), 1);
+}
+
+#[test]
+fn stretch_ratio_clamps() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    r.s.editor
+        .as_mut()
+        .unwrap()
+        .requests
+        .push(EditorRequest::OpenStretch);
+    let loaded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1440.0, 900.0));
+    let mut h = dialog_harness(&mut r.s, loaded.clone());
+    wait_loaded(&mut h, &loaded);
+    drop(h);
+    for _ in 0..3 {
+        let frame = fthrust_ui::editor::dialogs::stretch_frame_rect(&r.s, screen).unwrap();
+        let mut h = dialog_harness(&mut r.s, loaded.clone());
+        let y = frame.center().y;
+        drag(
+            &mut h,
+            egui::Pos2::new(frame.max.x, y),
+            egui::Pos2::new(1439.0, y),
+        );
+        drop(h);
+    }
+    let apply_x = {
+        let mut h = dialog_harness(&mut r.s, loaded.clone());
+        let c = common::render_harness(&mut h)
+            .marker("stretchDialogApply")
+            .unwrap()
+            .rect
+            .center();
+        click_at(&mut h, c);
+        c
+    };
+    let _ = apply_x;
+    let e = r.s.editor.as_ref().unwrap();
+    assert_eq!(e.stretch, 4.0);
+    assert_eq!(e.undo.undo.len(), 1);
+}

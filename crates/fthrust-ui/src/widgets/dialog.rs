@@ -59,66 +59,9 @@ impl<'a> Frame<'a> {
     ) -> FrameResponse {
         let w = self.width;
         let bg_idx = ui.painter().add(egui::Shape::Noop);
-        let header_idx = ui.painter().add(egui::Shape::Noop);
         let header_rect = Rect::from_min_size(pos, Vec2::new(w, HEADER_H));
         let radius = CornerRadius::same(geom::RADIUS as u8);
-        ui.painter().set(
-            header_idx,
-            egui::Shape::rect_filled(header_rect, radius, t.color(Color::Surface2)),
-        );
-        super::rule_h(
-            ui,
-            header_rect.min.x,
-            header_rect.max.x,
-            header_rect.max.y - 1.0,
-            t.color(Color::Border),
-        );
-        fidelity::mark(ui, "fthrDialogHeader", header_rect)
-            .sample(
-                "fill",
-                Pos2::new(header_rect.center().x, header_rect.min.y + 10.0),
-                Color::Surface2,
-            )
-            .done();
-        let g = galley(
-            ui,
-            self.title,
-            size::LABEL,
-            Weight::W600,
-            t.color(Color::Text),
-        );
-        let title_rect = Rect::from_min_size(
-            Pos2::new(pos.x + 12.0, pos.y),
-            Vec2::new(g.size().x.ceil(), HEADER_H - 1.0),
-        );
-        paint_text(ui, g, title_rect, Align::Min, 0.0, t.color(Color::Text));
-        fidelity::mark(ui, "fthrDialogTitle", title_rect)
-            .text(self.title, size::LABEL, Weight::W600)
-            .done();
-        let close_rect = Rect::from_min_size(
-            Pos2::new(pos.x + w - 6.0 - 30.0, pos.y + 3.0),
-            Vec2::splat(30.0),
-        );
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(close_rect));
-        let close = icon_button(
-            &mut child,
-            t,
-            icons,
-            Icon::Close,
-            14.0,
-            IconButtonStyle {
-                size: Vec2::splat(30.0),
-                bg: None,
-                hover_bg: Some(Color::Error),
-                pressed_bg: Some(Color::Error),
-                border: None,
-                hover_border: None,
-                radius: geom::RADIUS,
-                hover_tint: Some(Color::Text),
-                enabled: true,
-            },
-            "fthrDialogClose",
-        );
+        let close = header(ui, t, icons, header_rect, self.title);
         // Body.
         let body_top = header_rect.max.y + 16.0;
         let body_inner = ui.scope_builder(
@@ -295,4 +238,66 @@ pub fn input_field(
         .text(text.as_str(), size::BODY, Weight::W400)
         .done();
     resp
+}
+
+/// The FTHR dialog title bar (`install_fthr_titlebar`) in `rect` (38 px
+/// tall): SURFACE_2, a 1 px BORDER bottom rule, the title 12 px in and a
+/// 30×30 close button 6 px from the right. Returns the close button.
+pub fn header(
+    ui: &mut Ui,
+    t: &Tokens,
+    icons: &mut IconCache,
+    rect: Rect,
+    title: &str,
+) -> egui::Response {
+    let radius = CornerRadius::same(geom::RADIUS as u8);
+    ui.painter()
+        .rect_filled(rect, radius, t.color(Color::Surface2));
+    super::rule_h(
+        ui,
+        rect.min.x,
+        rect.max.x,
+        rect.max.y - 1.0,
+        t.color(Color::Border),
+    );
+    fidelity::mark(ui, "fthrDialogHeader", rect)
+        .sample(
+            "fill",
+            Pos2::new(rect.center().x, rect.min.y + 10.0),
+            Color::Surface2,
+        )
+        .done();
+    let g = galley(ui, title, size::LABEL, Weight::W600, t.color(Color::Text));
+    let title_rect = Rect::from_min_size(
+        Pos2::new(rect.min.x + 12.0, rect.min.y),
+        Vec2::new(g.size().x.ceil(), HEADER_H - 1.0),
+    );
+    paint_text(ui, g, title_rect, Align::Min, 0.0, t.color(Color::Text));
+    fidelity::mark(ui, "fthrDialogTitle", title_rect)
+        .text(title, size::LABEL, Weight::W600)
+        .done();
+    let close_rect = Rect::from_min_size(
+        Pos2::new(rect.max.x - 6.0 - 30.0, rect.min.y + 3.0),
+        Vec2::splat(30.0),
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(close_rect));
+    icon_button(
+        &mut child,
+        t,
+        icons,
+        Icon::Close,
+        14.0,
+        IconButtonStyle {
+            size: Vec2::splat(30.0),
+            bg: None,
+            hover_bg: Some(Color::Error),
+            pressed_bg: Some(Color::Error),
+            border: None,
+            hover_border: None,
+            radius: geom::RADIUS,
+            hover_tint: Some(Color::Text),
+            enabled: true,
+        },
+        "fthrDialogClose",
+    )
 }

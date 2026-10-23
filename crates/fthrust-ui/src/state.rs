@@ -460,6 +460,10 @@ pub struct AppState {
     pub editor_slots: Vec<crate::editor::sessions::Session>,
     /// The session `editor` belongs to.
     pub active_session: Option<usize>,
+    /// The editor's open crop or stretch dialog.
+    pub editor_dialog: Option<crate::editor::dialogs::EditorDialog>,
+    /// Resume playback when the dialog closes.
+    pub editor_resume_after_dialog: bool,
     /// Editor sidebar panels open (speed, edit tools, audio mix, colour,
     /// clip details, file details).
     pub editor_panels: [bool; 6],
@@ -674,6 +678,8 @@ impl AppState {
             editor_factory: None,
             editor_slots: Vec::new(),
             active_session: None,
+            editor_dialog: None,
+            editor_resume_after_dialog: false,
             editor_panels: [true, true, true, false, false, false],
             editor_sidebar_scroll: 0.0,
             editor_filmstrip: Vec::new(),

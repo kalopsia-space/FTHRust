@@ -8,7 +8,7 @@ use crate::state::AppState;
 
 /// Runs once per frame before the sessions service.
 pub fn handle(ctx: &egui::Context, state: &mut AppState) {
-    if !state.dialogs.modal.is_empty() {
+    if !state.dialogs.modal.is_empty() || state.editor_dialog.is_some() {
         return;
     }
     for action in triggered_actions(ctx, state, "Application") {
