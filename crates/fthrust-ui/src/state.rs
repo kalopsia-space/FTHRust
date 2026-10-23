@@ -448,6 +448,14 @@ pub struct AppState {
     pub card_feedback: std::collections::HashMap<std::path::PathBuf, (String, f64)>,
     /// Open a clip in the editor (plan 6 consumes).
     pub open_clip_requested: Option<std::path::PathBuf>,
+    /// The active clip editor; while set it covers the window.
+    pub editor: Option<crate::editor::Editor>,
+    /// The active editor's video frame texture.
+    pub editor_video: Option<crate::video_texture::VideoTexture>,
+    /// Clip tags, descriptions and editor drafts (opened on first use).
+    pub clip_metadata: Option<fthrust_core::clip_metadata::ClipMetadataStore>,
+    /// Origin of the editor's clock (`editor_now`).
+    pub editor_clock: std::time::Instant,
     /// Open a screenshot (plan 6 consumes).
     pub open_screenshot_requested: Option<std::path::PathBuf>,
     /// Upload a clip (plan 7 consumes).
@@ -646,6 +654,10 @@ impl AppState {
             thumb_requested: std::collections::HashSet::new(),
             card_feedback: std::collections::HashMap::new(),
             open_clip_requested: None,
+            editor: None,
+            editor_video: None,
+            clip_metadata: None,
+            editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,
             upload_requested: None,
             show_in_file_manager_requested: None,
@@ -706,6 +718,44 @@ impl AppState {
         }
         if let Err(e) = self.settings.save() {
             tracing::warn!("settings not saved: {e}");
+        }
+    }
+}
+
+impl AppState {
+    /// Seconds on the editor's clock: every editor timer and UI event uses it.
+    pub fn editor_now(&self) -> f64 {
+        self.editor_clock.elapsed().as_secs_f64()
+    }
+
+    /// Ticks the active editor (timers, player, draft) and uploads its
+    /// newest video frame when a render state exists.
+    pub fn tick_editor(&mut self, render_state: Option<&egui_wgpu::RenderState>) {
+        if self.editor.is_none() {
+            return;
+        }
+        if self.clip_metadata.is_none() {
+            match fthrust_core::clip_metadata::ClipMetadataStore::open(&self.paths) {
+                Ok(store) => self.clip_metadata = Some(store),
+                Err(e) => {
+                    tracing::warn!(error = %e, "clip metadata store unavailable");
+                    return;
+                }
+            }
+        }
+        let now = self.editor_now();
+        let (Some(editor), Some(store)) = (self.editor.as_mut(), self.clip_metadata.as_mut())
+        else {
+            return;
+        };
+        editor.tick(now, &mut self.settings, store);
+        if let (Some(rs), Some(frame)) = (
+            render_state,
+            editor.player_mut().and_then(|p| p.take_frame()),
+        ) {
+            self.editor_video
+                .get_or_insert_with(crate::video_texture::VideoTexture::new)
+                .update(rs, &frame);
         }
     }
 }

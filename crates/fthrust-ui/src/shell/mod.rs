@@ -97,6 +97,13 @@ impl Default for FrameResponse {
 /// Lays out the whole window content (no viewport commands): strip,
 /// toolbar, rail + page stack, error bar.
 pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
+    if state.editor.is_some() {
+        let out = crate::editor::layer::ui(ui, state);
+        crate::dialogs::service(state);
+        crate::dialogs::draw_all(ui, state);
+        crate::dialogs::dispatch_results(state);
+        return out;
+    }
     let ctx = ui.ctx().clone();
     // The whole viewport, whatever margin the root ui carries.
     let screen = ctx.content_rect();

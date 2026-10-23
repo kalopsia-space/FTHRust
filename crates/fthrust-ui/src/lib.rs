@@ -62,6 +62,7 @@ impl App {
         if let Some(services) = self.services.as_mut() {
             services.tick(&mut self.state);
         }
+        self.state.tick_editor(self.render_state.as_ref());
     }
 
     /// One frame.

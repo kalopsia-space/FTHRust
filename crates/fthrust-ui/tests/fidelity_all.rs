@@ -393,6 +393,21 @@ fn record_hover() {
     assert_fidelity!(r, "record-hover", &tokens, &ctx);
 }
 
+/// The editor as the Qt render shows it: a 10 s clip, play queued.
+fn editor_state() -> (tempfile::TempDir, AppState) {
+    let (tmp, mut s) = state();
+    s.editor = Some(fthrust_ui::editor::Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        10_000,
+        fthrust_ui::editor::Lifecycle::PlayQueued,
+    ));
+    (tmp, s)
+}
+
 #[test]
-#[ignore = "plan 6 (editor): clip-editor"]
-fn clip_editor() {}
+fn clip_editor() {
+    let (_tmp, s) = editor_state();
+    check("clip-editor", s, |ui, s| {
+        shell::frame(ui, s);
+    });
+}

@@ -20,6 +20,8 @@ use serde_json::json;
 
 use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
+pub mod layer;
+
 /// Builds the player for a clip (real: PipeWire output and the wall clock).
 pub type PlayerFactory = Arc<dyn Fn(&Path) -> Result<PlaybackService, String> + Send + Sync>;
 
