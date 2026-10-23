@@ -161,6 +161,7 @@ pub fn export_now(state: &mut AppState) {
             output_fps: None,
             decode_from_s,
             inactivity_s: None,
+            copy_metadata: false,
             fail_first_encoder: false,
         }),
         expected,

@@ -64,6 +64,9 @@ pub struct Job {
     /// Where decoding may start for a multi-range export (the first kept
     /// range; its trims use source timestamps).
     pub decode_from_s: f64,
+    /// Copy the container's and every copied stream's tags (a post-save
+    /// rewrite keeps track titles; exports start clean).
+    pub copy_metadata: bool,
     /// Test hook: the inactivity bound instead of [`INACTIVITY_S`].
     #[doc(hidden)]
     pub inactivity_s: Option<f64>,

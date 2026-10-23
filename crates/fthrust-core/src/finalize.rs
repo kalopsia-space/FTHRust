@@ -141,10 +141,7 @@ pub fn image_layers(settings: &SettingsStore) -> Vec<ImageLayer> {
                 .get("path")
                 .and_then(Value::as_str)
                 .filter(|p| !p.is_empty())?;
-            if obj
-                .get("enabled")
-                .is_some_and(|v| !truthy(v))
-            {
+            if obj.get("enabled").is_some_and(|v| !truthy(v)) {
                 return None;
             }
             let opacity = obj

@@ -463,6 +463,9 @@ pub(super) fn attempt(
         ost.set_parameters(ist.parameters());
         crate::ffi::export::clear_codec_tag(&mut ost);
         ost.set_time_base(ist.time_base());
+        if job.copy_metadata {
+            ost.set_metadata(ist.metadata().to_owned());
+        }
         outs.push(Out::Copy {
             input: v,
             ost: ost.index(),
@@ -536,6 +539,9 @@ pub(super) fn attempt(
         ost.set_parameters(ist.parameters());
         crate::ffi::export::clear_codec_tag(&mut ost);
         ost.set_time_base(ist.time_base());
+        if job.copy_metadata {
+            ost.set_metadata(ist.metadata().to_owned());
+        }
         outs.push(Out::Copy {
             input: a,
             ost: ost.index(),
@@ -592,7 +598,16 @@ pub(super) fn attempt(
     if outs.is_empty() {
         return Err(Stop::Failed("nothing to export".into()));
     }
-    octx.write_header()?;
+    if job.copy_metadata {
+        // `-map_metadata 0 -movflags use_metadata_tags`: the container's
+        // tags, and stream titles the MP4 muxer would otherwise replace.
+        octx.set_metadata(ictx.metadata().to_owned());
+        let mut opts = ff::Dictionary::new();
+        opts.set("movflags", "use_metadata_tags");
+        octx.write_header_with(opts)?;
+    } else {
+        octx.write_header()?;
+    }
     // Timestamp handling: inputs start at 0 (minus the stream start time),
     // a single range is shifted by its seek point.
     let seek = job.plan.seek_s.unwrap_or(0.0);
