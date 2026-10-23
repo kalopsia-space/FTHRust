@@ -93,6 +93,19 @@ fn prepare_builds_a_proxy_for_a_long_gop_clip() {
         last = Some(s.pts_s);
     }
     assert!((pp.duration_s - p.duration_s).abs() <= 0.2);
+    assert_eq!(
+        fthrust_media::playback::best_audio_stream(&proxy),
+        None,
+        "the proxy is video-only; audio always decodes the original"
+    );
+    assert!(
+        std::fs::read_dir(&cache).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".partial")),
+        "no partial left behind"
+    );
     let mtime = std::fs::metadata(&proxy).unwrap().modified().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
     assert_eq!(prepare(&cache, &clip, &cancel), proxy, "cache hit");
@@ -139,14 +152,26 @@ fn partials_are_pruned_and_entries_capped() {
         let t = std::time::SystemTime::now() - std::time::Duration::from_secs(100 - i);
         filetime_set(&p, t);
     }
-    std::fs::write(cache.join("deadbeef.123-456.partial.mp4"), b"x").unwrap();
+    // A partial from a crashed build (old) goes; one still being written stays.
+    let stale = cache.join("deadbeef.123-456.partial.mp4");
+    std::fs::write(&stale, b"x").unwrap();
+    filetime_set(
+        &stale,
+        std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600),
+    );
+    let live = cache.join("deadbeef.123-457.partial.mp4");
+    std::fs::write(&live, b"x").unwrap();
     prune(&cache, 8, 2 * 1024 * 1024 * 1024);
     let names: Vec<String> = std::fs::read_dir(&cache)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names.len(), 8, "{names:?}");
-    assert!(names.iter().all(|n| !n.contains(".partial.")));
+    assert_eq!(names.len(), 9, "{names:?}");
+    assert!(!stale.exists(), "stale partial pruned");
+    assert!(
+        live.exists(),
+        "a fresh partial is another build in progress"
+    );
     assert!(
         !names.contains(&format!("{:064x}.mp4", 1)),
         "the oldest entry went"
@@ -156,4 +181,33 @@ fn partials_are_pruned_and_entries_capped() {
 fn filetime_set(p: &std::path::Path, t: std::time::SystemTime) {
     let f = std::fs::OpenOptions::new().write(true).open(p).unwrap();
     f.set_modified(t).unwrap();
+}
+
+#[test]
+fn prepare_recovers_from_a_crashed_build() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("long.mp4");
+    let Some(()) = write_gop_clip(&clip, 3, None) else {
+        return;
+    };
+    let cache = d.path().join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let target = fthrust_media::playback::proxy::cache_path(&cache, &clip).unwrap();
+    let stem = target.file_stem().unwrap().to_string_lossy().into_owned();
+    // What a crash leaves: a partial of this clip from a dead process.
+    let stale = cache.join(format!("{stem}.4242-1.partial.mp4"));
+    std::fs::write(&stale, b"garbage").unwrap();
+    filetime_set(
+        &stale,
+        std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600),
+    );
+    let cancel = AtomicBool::new(false);
+    let proxy = prepare(&cache, &clip, &cancel);
+    assert_eq!(proxy, target, "the proxy is built despite the leftover");
+    assert!(!stale.exists());
+    // A truncated final file (crash between write and validation) is rebuilt, not used.
+    std::fs::write(&target, b"short").unwrap();
+    let proxy = prepare(&cache, &clip, &cancel);
+    assert_eq!(proxy, target);
+    assert!(std::fs::metadata(&target).unwrap().len() > 1000, "rebuilt");
 }

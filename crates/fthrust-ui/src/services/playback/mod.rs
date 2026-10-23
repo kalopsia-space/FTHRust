@@ -434,7 +434,19 @@ pub struct PlaybackService {
     sources: Vec<(String, SourceState)>,
     last_frame_pts: Option<u64>,
     eof_reported: bool,
+    /// The audio ran out before the video: the wall clock carries the rest.
+    audio_ended: bool,
     proxy: Option<(Receiver<PathBuf>, Arc<AtomicBool>)>,
+}
+
+impl Drop for PlaybackService {
+    fn drop(&mut self) {
+        if let Some((_, cancel)) = &self.proxy {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.output.stop();
+        self.audio = None;
+    }
 }
 
 impl PlaybackService {
@@ -537,6 +549,7 @@ impl PlaybackService {
             sources,
             last_frame_pts: None,
             eof_reported: false,
+            audio_ended: false,
             proxy: Some((prx, cancel)),
         })
     }
@@ -570,12 +583,21 @@ impl PlaybackService {
         if self.eof_reported {
             return self.duration_ms;
         }
+        if !self.playing {
+            // Paused: the position is where we stopped, not what the audio
+            // worker has or has not processed yet.
+            return self.clock_base_ms.min(self.duration_ms);
+        }
         if self.audio_live
+            && !self.audio_ended
             && let Some(a) = &self.audio
         {
+            // Queued output frames are source frames × rate (the reference's
+            // `queued * playback_rate`).
             let decoded = a.position_ms();
-            let buffered_ms =
-                self.output.buffered_frames() as u64 * 1000 / u64::from(CANONICAL_SAMPLE_RATE);
+            let buffered_ms = (self.output.buffered_frames() as f64 * 1000.0
+                / f64::from(CANONICAL_SAMPLE_RATE)
+                * f64::from(self.rate)) as u64;
             return decoded.saturating_sub(buffered_ms).min(self.duration_ms);
         }
         let elapsed = self
@@ -616,12 +638,18 @@ impl PlaybackService {
         }
         let pos = self.position_ms();
         self.playing = false;
+        // Stop exactly here: no queued audio tail, and the frame on screen is
+        // the one at the paused position (the worker may have decoded ahead).
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Pause);
+            a.send(AudioCmd::Seek(pos));
         }
+        self.queue.clear();
         self.clock_base_ms = pos;
         self.clock_started_ms = None;
         self.video.send(VideoCmd::Pause);
+        self.video.send(VideoCmd::Seek(pos));
+        self.last_frame_pts = None;
         if self.holding {
             self.output.resume();
             self.holding = false;
@@ -632,6 +660,7 @@ impl PlaybackService {
     pub fn seek_ms(&mut self, ms: u64) {
         let ms = ms.min(self.duration_ms);
         self.eof_reported = false;
+        self.audio_ended = false;
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Seek(ms));
         }
@@ -662,6 +691,10 @@ impl PlaybackService {
         self.queue.clear();
         self.clock_base_ms = pos;
         self.clock_started_ms = self.playing.then(|| self.now_ms());
+        if self.holding {
+            self.output.resume();
+            self.holding = false;
+        }
         self.arm_guard();
     }
 
@@ -742,14 +775,26 @@ impl PlaybackService {
         if let Some(null) = self.output.as_null_mut() {
             null.poll();
         }
+        let mut failures: Vec<PlaybackEvent> = Vec::new();
+        if let Some(msg) = self.output.take_failure() {
+            failures.push(PlaybackEvent::AudioFailed(msg));
+        }
         while let Ok(e) = self.events_rx.try_recv() {
-            if matches!(e, PlaybackEvent::AudioFailed(_)) && self.audio_live {
+            failures.push(e);
+        }
+        for e in failures {
+            if matches!(e, PlaybackEvent::AudioFailed(_)) {
+                if !self.audio_live {
+                    continue; // already reported
+                }
                 // Keep going on the video clock from where audio left off.
                 let pos = self.position_ms();
                 self.audio_live = false;
                 self.clock_base_ms = pos;
                 self.clock_started_ms = self.playing.then(|| self.now_ms());
                 self.output.stop();
+                self.audio = None;
+                self.holding = false;
             }
             self.events.push(e);
         }
@@ -766,11 +811,40 @@ impl PlaybackService {
         if !self.playing {
             return;
         }
+        let video_done = self.video.shared.eof.load(Ordering::Relaxed)
+            && self
+                .video
+                .shared
+                .frames
+                .lock()
+                .map(|f| f.is_empty())
+                .unwrap_or(true);
         if self.audio_live
+            && !self.audio_ended
             && let Some(a) = &self.audio
         {
             if a.shared.eof.load(Ordering::Relaxed) && self.queue.frames() == 0 {
-                self.finish();
+                if video_done || self.position_ms() + 50 >= self.duration_ms {
+                    self.finish();
+                } else {
+                    // Audio ran out first: the wall clock carries the video.
+                    let pos = self.position_ms();
+                    self.audio_ended = true;
+                    self.clock_base_ms = pos;
+                    self.clock_started_ms = Some(self.now_ms());
+                    if self.holding {
+                        self.output.resume();
+                        self.holding = false;
+                    }
+                }
+                return;
+            }
+            if video_done {
+                // No more pictures to wait for: never hold the audio.
+                if self.holding {
+                    self.output.resume();
+                    self.holding = false;
+                }
                 return;
             }
             let audio_ms = self.position_ms() as i64;
@@ -789,12 +863,16 @@ impl PlaybackService {
                     a.send(AudioCmd::Seek(v));
                     self.queue.clear();
                     self.arm_guard();
-                    self.holding = false;
+                    if self.holding {
+                        self.output.resume();
+                        self.holding = false;
+                    }
                 }
                 SyncDecision::None => {}
             }
-        } else if self.video.shared.eof.load(Ordering::Relaxed)
-            && self.position_ms() >= self.duration_ms
+        } else if video_done
+            && (self.position_ms() >= self.duration_ms
+                || self.last_frame_pts.is_some_and(|p| self.position_ms() >= p))
         {
             self.finish();
         }
@@ -819,14 +897,9 @@ impl PlaybackService {
         std::mem::take(&mut self.events)
     }
 
-    /// Stops everything.
+    /// Stops everything (dropping the service does the same).
     pub fn close(mut self) {
         self.playing = false;
-        self.output.stop();
-        if let Some((_, cancel)) = &self.proxy {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        self.audio = None;
     }
 }
 

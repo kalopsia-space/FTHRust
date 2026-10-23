@@ -49,8 +49,11 @@ pub struct VideoDecoder {
     info: VideoInfo,
     /// After a seek: frames before this time are skipped.
     target_ms: Option<u64>,
-    /// The newest skipped frame (returned when the target is past the end).
-    last_before: Option<Frame>,
+    /// The newest skipped frame, unconverted (returned when the target is
+    /// past the end).
+    last_before: Option<frame::Video>,
+    /// RGBA conversions so far (for tests).
+    conversions: u64,
     packets_done: bool,
     eof: bool,
 }
@@ -99,6 +102,7 @@ impl VideoDecoder {
             info,
             target_ms: None,
             last_before: None,
+            conversions: 0,
             packets_done: false,
             eof: false,
         })
@@ -107,6 +111,16 @@ impl VideoDecoder {
     /// Stream metadata.
     pub fn info(&self) -> &VideoInfo {
         &self.info
+    }
+
+    /// Frames converted to RGBA so far.
+    pub fn conversions(&self) -> u64 {
+        self.conversions
+    }
+
+    fn pts_ms_of(&self, decoded: &frame::Video) -> u64 {
+        let pts = decoded.pts().or(decoded.timestamp()).unwrap_or(0).max(0);
+        (pts as f64 * self.time_base * 1000.0).round() as u64
     }
 
     /// Seeks so the next frame is the first at or after `position_ms`
@@ -157,8 +171,8 @@ impl VideoDecoder {
         for y in 0..h as usize {
             rgba.extend_from_slice(&data[y * stride..y * stride + row]);
         }
-        let pts = decoded.pts().or(decoded.timestamp()).unwrap_or(0).max(0);
-        let pts_ms = (pts as f64 * self.time_base * 1000.0).round() as u64;
+        let pts_ms = self.pts_ms_of(decoded);
+        self.conversions += 1;
         Ok(Frame {
             pts_ms,
             width: w,
@@ -172,15 +186,15 @@ impl VideoDecoder {
     fn receive(&mut self) -> Result<Option<Frame>> {
         let mut decoded = frame::Video::empty();
         while self.decoder.receive_frame(&mut decoded).is_ok() {
-            let f = self.convert(&decoded)?;
             match self.target_ms {
-                Some(target) if f.pts_ms < target => {
-                    self.last_before = Some(f);
+                Some(target) if self.pts_ms_of(&decoded) < target => {
+                    // Skipped: keep it unconverted in case the target is past the end.
+                    self.last_before = Some(std::mem::replace(&mut decoded, frame::Video::empty()));
                 }
                 _ => {
                     self.target_ms = None;
                     self.last_before = None;
-                    return Ok(Some(f));
+                    return Ok(Some(self.convert(&decoded)?));
                 }
             }
         }
@@ -199,7 +213,10 @@ impl VideoDecoder {
             if self.packets_done {
                 self.eof = true;
                 // A seek past the end lands on the last frame.
-                return Ok(self.last_before.take());
+                return match self.last_before.take() {
+                    Some(last) => Ok(Some(self.convert(&last)?)),
+                    None => Ok(None),
+                };
             }
             let mut packet = ffmpeg_next::Packet::empty();
             match packet.read(&mut self.ictx) {

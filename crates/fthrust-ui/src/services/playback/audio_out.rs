@@ -99,10 +99,25 @@ pub trait AudioOutput: Send {
     fn buffered_frames(&self) -> usize;
     /// Stops for good.
     fn stop(&mut self);
+    /// A failure since the last call (the device vanished, the stream
+    /// errored); the service reports it once and carries on without audio.
+    fn take_failure(&mut self) -> Option<String> {
+        None
+    }
     /// The null output, when this is one (the service polls its drain).
     fn as_null_mut(&mut self) -> Option<&mut NullOutput> {
         None
     }
+}
+
+/// Test hooks on a [`NullOutput`]: `fail` makes the next poll report a
+/// device failure; `suspended` mirrors the hold state.
+#[derive(Clone, Default)]
+pub struct NullSwitches {
+    /// Set to make the output fail mid-play.
+    pub fail: Arc<AtomicBool>,
+    /// Whether the output is currently suspended.
+    pub suspended: Arc<AtomicBool>,
 }
 
 /// Drains the queue at real time from a clock the test controls (ms).
@@ -112,6 +127,8 @@ pub struct NullOutput {
     queue: Option<Arc<PcmQueue>>,
     suspended: bool,
     fail_start: bool,
+    switches: NullSwitches,
+    failed: bool,
     scratch: Vec<f32>,
 }
 
@@ -124,6 +141,8 @@ impl NullOutput {
             queue: None,
             suspended: false,
             fail_start: false,
+            switches: NullSwitches::default(),
+            failed: false,
             scratch: Vec::new(),
         }
     }
@@ -134,11 +153,17 @@ impl NullOutput {
         self
     }
 
+    /// Shares the test switches.
+    pub fn with_switches(mut self, switches: NullSwitches) -> Self {
+        self.switches = switches;
+        self
+    }
+
     fn drain(&mut self) {
         let now = (self.clock)();
         let elapsed = now.saturating_sub(self.last_ms);
         self.last_ms = now;
-        if self.suspended {
+        if self.suspended || self.failed || self.switches.fail.load(Ordering::Relaxed) {
             return;
         }
         let frames = (elapsed * u64::from(CANONICAL_SAMPLE_RATE) / 1000) as usize;
@@ -165,11 +190,21 @@ impl AudioOutput for NullOutput {
     fn suspend(&mut self) {
         self.drain();
         self.suspended = true;
+        self.switches.suspended.store(true, Ordering::Relaxed);
     }
 
     fn resume(&mut self) {
         self.last_ms = (self.clock)();
         self.suspended = false;
+        self.switches.suspended.store(false, Ordering::Relaxed);
+    }
+
+    fn take_failure(&mut self) -> Option<String> {
+        if !self.failed && self.switches.fail.load(Ordering::Relaxed) {
+            self.failed = true;
+            return Some("audio device lost".into());
+        }
+        None
     }
 
     fn buffered_frames(&self) -> usize {
@@ -243,6 +278,10 @@ impl AudioOutput for PipeWireOutput {
         queued + device
     }
 
+    fn take_failure(&mut self) -> Option<String> {
+        self.inner.as_ref().and_then(|s| s.take_failure())
+    }
+
     fn stop(&mut self) {
         self.inner = None;
         self.queue = None;
@@ -267,6 +306,7 @@ mod pipewire_out {
         tx: Option<pw::channel::Sender<Msg>>,
         thread: Option<std::thread::JoinHandle<()>>,
         last_quantum: Arc<AtomicUsize>,
+        failure: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl Stream {
@@ -274,11 +314,13 @@ mod pipewire_out {
             let (tx, rx) = pw::channel::channel::<Msg>();
             let (ready_tx, ready_rx) = std::sync::mpsc::channel();
             let last_quantum = Arc::new(AtomicUsize::new(0));
+            let failure = Arc::new(std::sync::Mutex::new(None));
             let thread = {
                 let lq = last_quantum.clone();
+                let failure = failure.clone();
                 std::thread::Builder::new()
                     .name("fthrust-playback-out".into())
-                    .spawn(move || run(queue, lq, rx, ready_tx))
+                    .spawn(move || run(queue, lq, failure, rx, ready_tx))
                     .map_err(|e| e.to_string())?
             };
             match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
@@ -286,6 +328,7 @@ mod pipewire_out {
                     tx: Some(tx),
                     thread: Some(thread),
                     last_quantum,
+                    failure,
                 }),
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err("PipeWire did not answer".into()),
@@ -300,6 +343,10 @@ mod pipewire_out {
 
         pub fn last_quantum(&self) -> usize {
             self.last_quantum.load(Ordering::Relaxed)
+        }
+
+        pub fn take_failure(&self) -> Option<String> {
+            self.failure.lock().ok().and_then(|mut f| f.take())
         }
     }
 
@@ -355,6 +402,7 @@ mod pipewire_out {
     fn run(
         queue: Arc<PcmQueue>,
         last_quantum: Arc<AtomicUsize>,
+        failure: Arc<std::sync::Mutex<Option<String>>>,
         rx: pw::channel::Receiver<Msg>,
         ready: std::sync::mpsc::Sender<Result<(), String>>,
     ) {
@@ -387,6 +435,26 @@ mod pipewire_out {
         let active = Arc::new(AtomicBool::new(true));
         let listener = stream
             .add_local_listener_with_user_data(())
+            .state_changed({
+                let failure = failure.clone();
+                move |_stream, _, _old, new| {
+                    let msg = match new {
+                        pw::stream::StreamState::Error(e) => {
+                            Some(format!("PipeWire stream error: {e}"))
+                        }
+                        pw::stream::StreamState::Unconnected => {
+                            Some("PipeWire stream disconnected".to_owned())
+                        }
+                        _ => None,
+                    };
+                    if let Some(m) = msg
+                        && let Ok(mut f) = failure.lock()
+                        && f.is_none()
+                    {
+                        *f = Some(m);
+                    }
+                }
+            })
             .process({
                 let queue = queue.clone();
                 let last_quantum = last_quantum.clone();

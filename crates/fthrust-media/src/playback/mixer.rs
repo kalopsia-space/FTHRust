@@ -99,7 +99,16 @@ struct Track {
     /// Frames to drop after a seek (the decoded audio before the target).
     skip_frames: usize,
     eof: bool,
+    /// Demux time of this track's newest packet (s); `None` since the seek
+    /// (the landing point then stands in).
+    last_packet_s: Option<f64>,
+    /// No packet for over `ENDED_GAP_S` while the demuxer moved on: the
+    /// track is treated as finished (silence) until a packet arrives.
+    ended: bool,
 }
+
+/// A track with no packets this far behind the demuxer has ended.
+const ENDED_GAP_S: f64 = 1.0;
 
 struct Tempo {
     graph: filter::Graph,
@@ -116,6 +125,11 @@ pub struct Mixer {
     consumed_frames: u64,
     seek_base_ms: u64,
     demux_eof: bool,
+    /// Demux time of the newest packet from any stream (s); `None` right
+    /// after a seek until the first packet shows where it landed.
+    demux_pos_s: Option<f64>,
+    /// Where the last seek landed (the first packet's time).
+    landing_s: f64,
     rate: f32,
     preserve_pitch: bool,
     tempo: Option<Tempo>,
@@ -147,6 +161,8 @@ impl Mixer {
                     pending: VecDeque::new(),
                     skip_frames: 0,
                     eof: false,
+                    last_packet_s: None,
+                    ended: false,
                 })
             });
             match opened {
@@ -168,6 +184,8 @@ impl Mixer {
             consumed_frames: 0,
             seek_base_ms: 0,
             demux_eof: false,
+            demux_pos_s: None,
+            landing_s: 0.0,
             rate: 1.0,
             preserve_pitch: true,
             tempo: None,
@@ -219,12 +237,15 @@ impl Mixer {
             t.decoder.flush();
             t.pending.clear();
             t.eof = false;
+            t.ended = false;
+            t.last_packet_s = None;
             t.skip_frames = 0;
             if let Some(r) = t.resampler.as_mut() {
                 r.reset();
             }
         }
         self.demux_eof = false;
+        self.demux_pos_s = None;
         self.seek_base_ms = position_ms;
         self.consumed_frames = 0;
         if let Some(t) = &self.tempo {
@@ -240,7 +261,10 @@ impl Mixer {
         // the frames before the target.
         let target_s = position_ms as f64 / 1000.0;
         loop {
-            let need_more = self.tracks.iter().any(|t| !t.eof && t.pending.is_empty());
+            let need_more = self
+                .tracks
+                .iter()
+                .any(|t| !t.eof && !t.ended && t.pending.is_empty());
             if !need_more {
                 return Ok(());
             }
@@ -266,13 +290,55 @@ impl Mixer {
             }
             return Ok(());
         };
+        let tb = stream.time_base();
+        let packet_s = packet
+            .pts()
+            .or(packet.dts())
+            .map(|p| p as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()));
+        if let Some(p) = packet_s {
+            match self.demux_pos_s {
+                None => {
+                    self.demux_pos_s = Some(p);
+                    self.landing_s = p;
+                }
+                Some(cur) if p > cur => self.demux_pos_s = Some(p),
+                _ => {}
+            }
+        }
+        let pos = self.demux_pos_s.unwrap_or(self.landing_s);
         let Some(t) = self.tracks.iter_mut().find(|t| t.index == stream.index()) else {
+            self.mark_ended(pos);
             return Ok(());
         };
+        t.last_packet_s = Some(packet_s.unwrap_or(pos));
+        t.ended = false;
         if t.decoder.send_packet(&packet).is_err() {
+            self.mark_ended(pos);
             return Ok(());
         }
-        drain(t, trim_before)
+        drain(t, trim_before)?;
+        self.mark_ended(pos);
+        Ok(())
+    }
+
+    /// Tracks the demuxer has left behind by `ENDED_GAP_S` count as ended.
+    fn mark_ended(&mut self, pos: f64) {
+        for t in &mut self.tracks {
+            let reference = t.last_packet_s.unwrap_or(self.landing_s);
+            if !t.eof && !t.ended && pos - reference > ENDED_GAP_S {
+                t.ended = true;
+            }
+        }
+    }
+
+    /// The largest decoded-but-unmixed buffer across tracks, in frames
+    /// (bounded by the ended-track rule; for tests).
+    pub fn pending_frames(&self) -> usize {
+        self.tracks
+            .iter()
+            .map(|t| t.pending.len() / CANONICAL_CHANNELS)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Produces `frames` mixed canonical frames at the source rate (no tempo).
@@ -282,7 +348,7 @@ impl Mixer {
             let short = self
                 .tracks
                 .iter()
-                .any(|t| !t.eof && t.pending.len() < frames * CANONICAL_CHANNELS);
+                .any(|t| !t.eof && !t.ended && t.pending.len() < frames * CANONICAL_CHANNELS);
             if !short {
                 break;
             }

@@ -187,3 +187,117 @@ fn mixer_eof_returns_none() {
     );
     assert!(m.pull(10, &[1.0], 1.0).unwrap().is_none(), "stays at EOF");
 }
+
+/// A track that ends before the others (a short mic track) must not make a
+/// seek or pull decode the rest of the file into the other tracks' buffers.
+#[test]
+fn short_track_does_not_unbound_the_others() {
+    use fthrust_core::capture_config::{Codec, EncoderPref};
+    use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
+    use fthrust_media::encoder::{Encoder, EncoderConfig};
+    use fthrust_media::ring::EncodedRing;
+    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("uneven.mp4");
+    const FPS: u32 = 30;
+    const SECOND: i64 = 1_000_000_000;
+    let seconds = 8u32;
+    let cfg = EncoderConfig {
+        src_width: 160,
+        src_height: 90,
+        enc_width: 160,
+        enc_height: 90,
+        fps: FPS,
+        bitrate_kbps: 300,
+        codec: Codec::H264,
+        encoder: EncoderPref::Software,
+        preset: 1,
+    };
+    let mut encoder = Encoder::open(&cfg).unwrap();
+    let ring = EncodedRing::new(u64::from(seconds) * 1000 + 5000, FPS, 0);
+    let mut out = Vec::new();
+    for i in 0..seconds * FPS {
+        let bgra = support::synthetic_bgra(160, 90, i);
+        encoder
+            .encode(
+                &bgra,
+                160 * 4,
+                160,
+                90,
+                i64::from(i) * SECOND / i64::from(FPS),
+                &mut out,
+            )
+            .unwrap();
+    }
+    encoder.flush(&mut out).unwrap();
+    for p in out {
+        ring.push(p);
+    }
+    let snapshot = ring
+        .snapshot(seconds * 1000, i64::from(seconds) * SECOND, 0)
+        .unwrap();
+    let video = ClipVideo {
+        snapshot: &snapshot,
+        codec_id: encoder.codec_id(),
+        extradata: &encoder.extradata(),
+        width: 160,
+        height: 90,
+        bitrate_kbps: 300,
+        separate_audio: true,
+    };
+    let tone = |secs: u64, hz: f32| -> Vec<f32> {
+        (0..secs * 48_000)
+            .flat_map(|i| {
+                let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
+                [v, v]
+            })
+            .collect()
+    };
+    let long = tone(8, 440.0);
+    let short = tone(1, 880.0);
+    let tracks = [
+        ClipAudio {
+            samples: &long,
+            sample_rate: 48_000,
+            channels: 2,
+            title: "Game",
+        },
+        ClipAudio {
+            samples: &short,
+            sample_rate: 48_000,
+            channels: 2,
+            title: "Mic",
+        },
+    ];
+    let result = write_clip(&clip, &video, &tracks, None).unwrap();
+    assert_eq!(result.audio_tracks.len(), 2, "{result:?}");
+    let specs = [
+        SourceSpec {
+            source_id: "game".into(),
+            container_index: 1,
+        },
+        SourceSpec {
+            source_id: "mic".into(),
+            container_index: 2,
+        },
+    ];
+    let mut mixer = Mixer::open(&clip, &specs).unwrap();
+    assert!(mixer.failed_sources().is_empty());
+    mixer.seek(3000).unwrap();
+    let block = mixer
+        .pull(1024, &[1.0, 1.0], 1.0)
+        .unwrap()
+        .expect("audio after the short track ended");
+    assert!(
+        support::tone_power(&block, 440.0, 48_000.0)
+            > 10.0 * support::tone_power(&block, 880.0, 48_000.0),
+        "the long track still plays"
+    );
+    assert!(
+        mixer.pending_frames() <= 2 * 48_000,
+        "decoded ahead by {} frames; the short track must count as ended",
+        mixer.pending_frames()
+    );
+}

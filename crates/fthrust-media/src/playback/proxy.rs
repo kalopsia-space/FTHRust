@@ -12,12 +12,10 @@ use ffmpeg_next::util::color::TransferCharacteristic;
 use ffmpeg_next::{codec, format};
 use sha2::{Digest, Sha256};
 
-use super::mixer::Mixer;
 use super::video::VideoDecoder;
-use super::{CANONICAL_CHANNELS, SourceSpec};
-use crate::clip_writer::{ClipAudio, ClipVideo, write_clip};
 use crate::encoder::{Encoder, EncoderConfig};
-use crate::ring::EncodedRing;
+use crate::ffi::mux::Muxer;
+use crate::ring::EncodedPacket;
 use crate::{MediaError, Result};
 
 /// A keyframe gap longer than this needs a proxy.
@@ -152,16 +150,18 @@ pub fn prepare(cache_dir: &Path, source: &Path, cancel: &AtomicBool) -> PathBuf 
     let Ok(target) = cache_path(cache_dir, source) else {
         return source.to_path_buf();
     };
-    if target.is_file()
-        && std::fs::metadata(&target)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    {
-        return target;
+    if target.is_file() {
+        // A published proxy was validated before its rename; a truncated or
+        // unreadable file is a crash leftover and is rebuilt.
+        if probe(&target, 1.0).is_ok_and(|p| p.duration_s > 0.0) {
+            return target;
+        }
+        let _ = std::fs::remove_file(&target);
     }
     if cancel.load(Ordering::Relaxed) {
         return source.to_path_buf();
     }
+    prune(cache_dir, MAX_ENTRIES, MAX_BYTES);
     let Ok(p) = probe(source, PROBE_SECONDS) else {
         return source.to_path_buf();
     };
@@ -197,12 +197,14 @@ pub fn discard(cache_dir: &Path, source: &Path, cached: &Path) {
     }
 }
 
-/// Deletes leftovers (anything that is not `<64 hex>.mp4`) and the oldest
-/// entries beyond `max_entries` or `max_bytes`.
+/// Deletes partials older than an hour (a dead build's leftovers; fresh
+/// ones are builds in progress), anything else that is not `<64 hex>.mp4`,
+/// and the oldest entries beyond `max_entries` or `max_bytes`.
 pub fn prune(cache_dir: &Path, max_entries: usize, max_bytes: u64) {
     let Ok(rd) = std::fs::read_dir(cache_dir) else {
         return;
     };
+    let now = std::time::SystemTime::now();
     let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
     for e in rd.flatten() {
         let path = e.path();
@@ -210,6 +212,20 @@ pub fn prune(cache_dir: &Path, max_entries: usize, max_bytes: u64) {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let Ok(m) = e.metadata() else {
+            continue;
+        };
+        let modified = m.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if name.contains(".partial") {
+            let age = now
+                .duration_since(modified)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if age > STALE_PARTIAL_S {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
+        }
         let well_formed = name.len() == 68
             && name.ends_with(".mp4")
             && name[..64].chars().all(|c| c.is_ascii_hexdigit());
@@ -217,9 +233,7 @@ pub fn prune(cache_dir: &Path, max_entries: usize, max_bytes: u64) {
             let _ = std::fs::remove_file(&path);
             continue;
         }
-        if let Ok(m) = e.metadata() {
-            entries.push((path, m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
-        }
+        entries.push((path, m.len(), modified));
     }
     entries.sort_by_key(|a| std::cmp::Reverse(a.2));
     let mut total = 0u64;
@@ -231,8 +245,13 @@ pub fn prune(cache_dir: &Path, max_entries: usize, max_bytes: u64) {
     }
 }
 
-/// Decodes the source, re-encodes the video with a 30-frame GOP through
-/// the software H.264 encoder and remuxes every audio track, transactionally.
+/// Partials older than this are leftovers of a dead build.
+const STALE_PARTIAL_S: u64 = 3600;
+
+/// Decodes the source and re-encodes the video with a 30-frame GOP through
+/// the software H.264 encoder, streaming packets into a uniquely named
+/// partial that is validated and then renamed into place. The proxy is
+/// video-only: the editor always decodes audio from the original.
 fn build(
     cache_dir: &Path,
     source: &Path,
@@ -241,6 +260,106 @@ fn build(
     cancel: &AtomicBool,
 ) -> Result<()> {
     std::fs::create_dir_all(cache_dir)?;
+    let stem = target
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp = cache_dir.join(format!("{stem}.{}-{nanos}.partial.mp4", std::process::id()));
+    let result = build_into(source, &temp, cancel).and_then(|()| validate(&temp, duration_s));
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    if std::fs::rename(&temp, target).is_err() {
+        // Another build won the race (or the directory vanished); ours goes.
+        let _ = std::fs::remove_file(&temp);
+        if !target.is_file() {
+            return Err(MediaError::Invalid("could not publish the proxy".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Size and duration checks, before anything can see the file under its
+/// final name.
+fn validate(temp: &Path, duration_s: f64) -> Result<()> {
+    let size = std::fs::metadata(temp)?.len();
+    if size > MAX_BYTES {
+        return Err(MediaError::Invalid(
+            "proxy larger than the cache budget".into(),
+        ));
+    }
+    let check = probe(temp, 1.0)?;
+    if (check.duration_s - duration_s).abs() > 0.2 {
+        return Err(MediaError::Invalid(format!(
+            "proxy duration {:.2}s differs from the source {duration_s:.2}s",
+            check.duration_s
+        )));
+    }
+    Ok(())
+}
+
+/// The muxer is opened on the first packet (the encoder's extradata is
+/// only known then).
+struct ProxyMux {
+    mux: Option<(Muxer, usize)>,
+    written: usize,
+    fps: u32,
+    width: u32,
+    height: u32,
+}
+
+impl ProxyMux {
+    fn write(
+        &mut self,
+        temp: &Path,
+        encoder: &Encoder,
+        out: &mut Vec<EncodedPacket>,
+    ) -> Result<()> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        if self.mux.is_none() {
+            let mut m = Muxer::new(temp, false)?;
+            m.set_metadata("comment", "fthr-playback-proxy")?;
+            m.set_metadata("fthr_frame_rate", &format!("{}/1", self.fps))?;
+            let index = m.add_video_stream(
+                encoder.codec_id().into(),
+                self.width,
+                self.height,
+                self.fps,
+                self.fps as i32,
+                i64::from(PROXY_BITRATE_KBPS) * 1000,
+                &encoder.extradata(),
+            )?;
+            m.write_header()?;
+            self.mux = Some((m, index));
+        }
+        let (m, index) = self.mux.as_mut().expect("muxer");
+        for p in out.drain(..) {
+            if p.data.is_empty() {
+                continue;
+            }
+            m.write_packet(
+                *index,
+                &p.data,
+                p.pts,
+                p.dts,
+                1,
+                p.keyframe,
+                (1, self.fps as i32),
+            )?;
+            self.written += 1;
+        }
+        Ok(())
+    }
+}
+
+fn build_into(source: &Path, temp: &Path, cancel: &AtomicBool) -> Result<()> {
     let mut dec = VideoDecoder::open(source)?;
     let info = dec.info().clone();
     let fps = info.fps.round().max(1.0) as u32;
@@ -256,11 +375,15 @@ fn build(
         preset: 1,
     };
     let mut encoder = Encoder::open_with_gop(&cfg, PROXY_GOP)?;
-    let duration_ms = (duration_s * 1000.0).round() as u64;
-    let ring = EncodedRing::new(duration_ms + 5000, fps, 0);
+    let mut sink = ProxyMux {
+        mux: None,
+        written: 0,
+        fps,
+        width: info.width,
+        height: info.height,
+    };
     let mut out = Vec::new();
     let mut bgra: Vec<u8> = Vec::new();
-    let mut last_pts_ns = 0i64;
     while let Some(frame) = dec.next_frame()? {
         if cancel.load(Ordering::Relaxed) {
             return Err(MediaError::Invalid("cancelled".into()));
@@ -275,7 +398,6 @@ fn build(
                 .flat_map(|p| [p[2], p[1], p[0], p[3]]),
         );
         let pts_ns = frame.pts_ms as i64 * 1_000_000;
-        last_pts_ns = pts_ns;
         encoder.encode(
             &bgra,
             (frame.width * 4) as usize,
@@ -284,81 +406,16 @@ fn build(
             pts_ns,
             &mut out,
         )?;
+        sink.write(temp, &encoder, &mut out)?;
     }
     encoder.flush(&mut out)?;
-    if out.is_empty() {
+    sink.write(temp, &encoder, &mut out)?;
+    let Some((mut m, _)) = sink.mux else {
+        return Err(MediaError::Invalid("no video packets".into()));
+    };
+    if sink.written == 0 {
         return Err(MediaError::Invalid("no video packets".into()));
     }
-    for p in out {
-        ring.push(p);
-    }
-    let end_ns = last_pts_ns + 1_000_000_000 / i64::from(fps);
-    let snapshot = ring
-        .snapshot(duration_ms.max(1) as u32 + 1000, end_ns, 0)
-        .ok_or_else(|| MediaError::Invalid("empty proxy snapshot".into()))?;
-    // Audio: every track, decoded whole and re-muxed as AAC.
-    let mut pcm: Vec<(String, Vec<f32>)> = Vec::new();
-    {
-        let ictx = format::input(source)?;
-        for stream in ictx.streams() {
-            if stream.parameters().medium() != Type::Audio {
-                continue;
-            }
-            let title = stream
-                .metadata()
-                .get("title")
-                .map(str::to_owned)
-                .unwrap_or_else(|| "Default Mix".to_owned());
-            let spec = SourceSpec {
-                source_id: title.clone(),
-                container_index: stream.index(),
-            };
-            let Ok(mut mixer) = Mixer::open(source, std::slice::from_ref(&spec)) else {
-                continue;
-            };
-            let mut samples: Vec<f32> = Vec::new();
-            while let Some(block) = mixer.pull(4096, &[1.0], 1.0)? {
-                samples.extend(block);
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(MediaError::Invalid("cancelled".into()));
-                }
-            }
-            if samples.len() >= CANONICAL_CHANNELS {
-                pcm.push((title, samples));
-            }
-        }
-    }
-    let tracks: Vec<ClipAudio<'_>> = pcm
-        .iter()
-        .map(|(title, samples)| ClipAudio {
-            samples,
-            sample_rate: 48_000,
-            channels: 2,
-            title,
-        })
-        .collect();
-    let video = ClipVideo {
-        snapshot: &snapshot,
-        codec_id: encoder.codec_id(),
-        extradata: &encoder.extradata(),
-        width: info.width,
-        height: info.height,
-        bitrate_kbps: PROXY_BITRATE_KBPS,
-        separate_audio: tracks.len() > 1,
-    };
-    write_clip(target, &video, &tracks, None).map_err(|e| MediaError::Invalid(e.to_string()))?;
-    let size = std::fs::metadata(target)?.len();
-    if size > MAX_BYTES {
-        return Err(MediaError::Invalid(
-            "proxy larger than the cache budget".into(),
-        ));
-    }
-    let check = probe(target, 1.0)?;
-    if (check.duration_s - duration_s).abs() > 0.2 {
-        return Err(MediaError::Invalid(format!(
-            "proxy duration {:.2}s differs from the source {duration_s:.2}s",
-            check.duration_s
-        )));
-    }
+    m.finish()?;
     Ok(())
 }

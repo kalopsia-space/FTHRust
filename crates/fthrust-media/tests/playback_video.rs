@@ -113,3 +113,19 @@ fn frame_at_matches_decoder() {
     assert_eq!(one.pts_ms, f.pts_ms);
     assert_eq!(one.rgba, f.rgba);
 }
+
+/// Seeking forward across a long GOP decodes the skipped frames but converts
+/// only the one returned (scrubbing stays fast at high resolutions).
+#[test]
+fn seek_converts_only_the_returned_frame() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("long.mp4");
+    if support::write_gop_clip(&clip, 4, None).is_none() {
+        return;
+    }
+    let mut dec = VideoDecoder::open(&clip).unwrap();
+    dec.seek(2500).unwrap();
+    let f = dec.next_frame().unwrap().expect("frame");
+    assert!((2460..=2540).contains(&f.pts_ms), "{}", f.pts_ms);
+    assert_eq!(dec.conversions(), 1, "skipped frames were converted");
+}
