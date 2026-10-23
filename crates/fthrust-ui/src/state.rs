@@ -498,6 +498,14 @@ pub struct AppState {
     pub open_screenshot_requested: Option<std::path::PathBuf>,
     /// Upload a clip (plan 7 consumes).
     pub upload_requested: Option<std::path::PathBuf>,
+    /// `~/.fthr/uploader/settings.json`.
+    pub uploader_settings: fthrust_core::upload::settings::UploaderSettings,
+    /// `~/.fthr/uploader/upload_history.json` (reloaded when it changes).
+    pub upload_history: fthrust_core::upload::history::History,
+    /// Card overlays of clips being uploaded (`Uploading…`).
+    pub upload_status: std::collections::HashMap<std::path::PathBuf, String>,
+    /// Clips the engine committed since the last tick (immediate uploads).
+    pub saved_clips: Vec<std::path::PathBuf>,
     /// Show a file in the file manager (plan 5 services consume).
     pub show_in_file_manager_requested: Option<std::path::PathBuf>,
     /// Scrolling settled: the last wheel/drag time.
@@ -583,7 +591,18 @@ pub enum CaptureProfile {
 impl AppState {
     /// Loads settings and theme from `paths`.
     pub fn load(paths: FthrPaths) -> fthrust_core::Result<AppState> {
-        let settings = SettingsStore::load(paths.clone())?;
+        let mut settings = SettingsStore::load(paths.clone())?;
+        // Pre-extension upload keys move to the uploader's own file.
+        let _ = fthrust_core::upload::history::History::migrate_legacy(&paths);
+        let mut uploader_settings = fthrust_core::upload::settings::UploaderSettings::load(&paths);
+        if fthrust_core::upload::settings::migrate_legacy_core_keys(
+            &mut settings,
+            &mut uploader_settings,
+        ) {
+            let _ = uploader_settings.save(&paths);
+            let _ = settings.save();
+        }
+        let upload_history = fthrust_core::upload::history::History::load(&paths);
         let mut tokens = theme::load(&paths);
         tokens.reduce_motion = settings.get_bool("reduce_ui_animations").unwrap_or(false);
         let error_bar = crate::shell::error_bar::ErrorBarState::new(
@@ -715,6 +734,10 @@ impl AppState {
             editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,
             upload_requested: None,
+            uploader_settings,
+            upload_history,
+            upload_status: std::collections::HashMap::new(),
+            saved_clips: Vec::new(),
             show_in_file_manager_requested: None,
             library_last_scroll: -10.0,
             diagnostics: None,
