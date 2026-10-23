@@ -21,6 +21,7 @@ pub mod state;
 pub mod theme;
 pub mod tokens;
 pub mod ui_dump;
+pub mod video_texture;
 pub mod widgets;
 
 /// The application: state, services and the per-frame UI.
@@ -33,6 +34,9 @@ pub struct App {
     clamped: bool,
     /// The bench's state dump (`FTHRUST_UI_DUMP`), if enabled.
     dump: Option<ui_dump::Writer>,
+    /// The painter's wgpu state for video textures (set by the runner;
+    /// `None` in tests and before the window exists).
+    pub render_state: Option<egui_wgpu::RenderState>,
 }
 
 impl App {
@@ -48,6 +52,7 @@ impl App {
             services: None,
             clamped: false,
             dump: ui_dump::from_env(),
+            render_state: None,
         }
     }
 

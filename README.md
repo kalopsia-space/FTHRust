@@ -23,6 +23,8 @@ engine is started by the UI (plan 5) or by hand as below.
 The capture side of the UI (engine supervision, hotkeys, saves, screenshots,
 recordings, game detection, the capture card) is described in
 [docs/capture-and-library.md](docs/capture-and-library.md).
+The editor's playback pipeline (decoders, mixer, audio clock, sync, the
+seek proxy) is described in [docs/playback.md](docs/playback.md).
 
 ## Running the engine by hand
 

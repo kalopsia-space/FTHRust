@@ -52,6 +52,8 @@
 
 ## Added
 
+- Playback pipeline for the editor (`docs/playback.md`): per-track mixer with `atempo` rate change, keyframe-aware video decoder, the seek-proxy cache for long-GOP clips, the playback service with the PipeWire audio clock and the reference's sync rule, and the wgpu video texture.
+
 - Clips page: the virtualised card grid with thumbnails, filters and sorting, rename and delete, keyboard navigation chords, and the file watcher that keeps it current.
 - Engine supervision, replay saves, screenshots, manual recording, hotkey delivery (socket, Hyprland config, GlobalShortcuts portal), game detection, focus pause, the capture card and sounds, single instance and diagnostics export (`docs/capture-and-library.md`).
 
