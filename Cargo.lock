@@ -1632,6 +1632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fthrust-uploader"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "fthrust-core",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "fthrust-wayland"
 version = "2.0.0-alpha.1"
 dependencies = [
