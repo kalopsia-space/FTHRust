@@ -6,6 +6,8 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use uidrive::bench::Bench;
 use uidrive::dump;
+use uidrive::keys::parse_chord;
+use uidrive::wl::{self, Button, Session};
 
 #[derive(Parser)]
 #[command(
@@ -101,6 +103,18 @@ fn main() -> ExitCode {
 
 fn current_frame(bench: &Bench) -> Option<u64> {
     dump::read(&bench.dump).ok().map(|d| d.frame)
+}
+
+/// A marker name (centre) or `x,y`.
+fn resolve(bench: &Bench, target: &str, nth: usize) -> Result<(f64, f64), String> {
+    if let Some((x, y)) = target.split_once(',')
+        && let (Ok(x), Ok(y)) = (x.trim().parse::<f64>(), y.trim().parse::<f64>())
+    {
+        return Ok((x, y));
+    }
+    let d = dump::read(&bench.dump)?;
+    let m = dump::find(&d, target, nth).ok_or_else(|| format!("no marker matches '{target}'"))?;
+    Ok(m.center())
 }
 
 fn print_marker(m: &dump::Marker) {
@@ -240,11 +254,35 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 Err(format!("hotkey client exited with {status}"))
             }
         }
-        Cmd::Shot { .. }
-        | Cmd::Click { .. }
-        | Cmd::Move { .. }
-        | Cmd::Drag { .. }
-        | Cmd::Key { .. }
-        | Cmd::Type { .. } => Err("not implemented yet (Task 3)".into()),
+        Cmd::Shot { name } => {
+            let p = wl::shot(&bench, name.as_deref().unwrap_or("shot"))?;
+            println!("{}", p.display());
+            Ok(())
+        }
+        Cmd::Move { target } => {
+            let (x, y) = resolve(&bench, &target, 0)?;
+            Session::connect(&bench)?.move_to(x, y)
+        }
+        Cmd::Click {
+            target,
+            button,
+            double,
+            nth,
+        } => {
+            let (x, y) = resolve(&bench, &target, nth)?;
+            let mut s = Session::connect(&bench)?;
+            s.move_to(x, y)?;
+            s.click(Button::parse(&button)?, double)
+        }
+        Cmd::Drag { from, to, steps } => {
+            let a = resolve(&bench, &from, 0)?;
+            let b = resolve(&bench, &to, 0)?;
+            Session::connect(&bench)?.drag(a, b, steps)
+        }
+        Cmd::Key { chord } => {
+            let c = parse_chord(&chord)?;
+            Session::connect(&bench)?.key(&c)
+        }
+        Cmd::Type { text } => Session::connect(&bench)?.type_text(&text),
     }
 }
