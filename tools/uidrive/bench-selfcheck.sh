@@ -15,6 +15,7 @@ pgrep -f "dbus-daemon.*$D/" >/dev/null && fail "dbus-daemon left after a failed 
 echo "--- bus activates nothing"
 out=$(BENCH_DIR=$D "$HERE/bench.sh" up) || fail "up"
 eval "$out"
+[ -f "$BENCH/dbus.pid" ] || { BENCH=$BENCH "$HERE/bench.sh" down; fail "the bench bus daemon did not start"; }
 names=$(busctl --address="unix:path=$BENCH/rt/bus" call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ListActivatableNames 2>&1)
 case "$names" in
   'as 1 "org.freedesktop.DBus"') ;;

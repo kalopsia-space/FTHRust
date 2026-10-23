@@ -44,8 +44,8 @@ bench_up() {
   [ -x "$(dirname "$APP")/fthrust-engine" ] || die "engine binary missing next to $APP"
   BENCH=${BENCH_DIR:-/tmp/uidrive-$$}
   rm -rf "$BENCH"
-  mkdir -p "$BENCH/home/.fthr" "$BENCH/rt" "$BENCH/clips" "$BENCH/shots" "$BENCH/logs"
-  chmod 0700 "$BENCH/rt"
+  mkdir -p "$BENCH/home/.fthr" "$BENCH/clips" "$BENCH/shots" "$BENCH/logs"
+  mkdir -m 700 "$BENCH/rt"
   # Seed settings: sounds off, clips under the bench, then the caller's file on top.
   python3 - "$BENCH" "$SETTINGS" <<'PY'
 import json, sys, pathlib
@@ -70,11 +70,14 @@ PY
 <busconfig>
   <type>session</type>
   <listen>unix:path=$BENCH/rt/bus</listen>
+  <!-- Only the invoking user may connect (the socket dir is 0700 as well).
+       The eavesdrop allows are the standard session-bus ones: without the
+       bare one, dbus-daemon denies clients their own replies. -->
   <policy context="default">
+    <allow user="$(id -un)"/>
     <allow send_destination="*" eavesdrop="true"/>
     <allow eavesdrop="true"/>
     <allow own="*"/>
-    <allow user="*"/>
   </policy>
 </busconfig>
 XML
