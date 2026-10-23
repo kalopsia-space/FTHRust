@@ -40,6 +40,7 @@ fn builder() -> Box<dyn FnOnce(&Path) -> Job + Send> {
         output_fps: None,
         decode_from_s: 0.0,
         inactivity_s: None,
+        copy_metadata: false,
         fail_first_encoder: false,
     })
 }

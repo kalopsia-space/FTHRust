@@ -144,6 +144,17 @@ pub fn shutdown(state: &mut AppState) {
 
 /// Opens `path` (library double-click, `OpenClip`).
 pub fn open(state: &mut AppState, path: &Path) -> bool {
+    if path.is_file() && !state.readiness.can_access(path) {
+        state.error_bar.push_error(
+            "CLIP STILL FINALIZING",
+            "Playback, editing and upload become available after optional processing has finished.",
+            crate::shell::error_bar::Level::Warning,
+            Vec::new(),
+            None,
+            false,
+        );
+        return false;
+    }
     if !path.is_file() {
         let name = path
             .file_name()

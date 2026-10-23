@@ -351,6 +351,7 @@ impl Worker {
             output_fps,
             decode_from_s: export_ui::first_range_start(&self.spec),
             inactivity_s: None,
+            copy_metadata: false,
             fail_first_encoder: false,
         };
         let tx = self.tx.clone();

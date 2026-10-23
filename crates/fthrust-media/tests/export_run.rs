@@ -123,6 +123,7 @@ fn job(source: &Path, output: PathBuf, s: &ExportSpec, quality: Quality) -> Job 
         output_fps: None,
         decode_from_s: 0.0,
         inactivity_s: None,
+        copy_metadata: false,
         fail_first_encoder: false,
     }
 }
@@ -543,4 +544,169 @@ fn a_corrupt_packet_does_not_abort_the_export() {
     let (r, _, _) = run_job(&job(&bad, out.clone(), &s, Quality::Fast));
     assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
     assert!(out.exists());
+}
+
+// ---------------------------------------------------------------------------
+// Post-save rewrites (plan 6d).
+
+/// RGB at `(x, y)` of the frame nearest `t` seconds.
+fn pixel_at(path: &Path, t: f64, x: u32, y: u32) -> [u8; 3] {
+    use ffmpeg_next as ff;
+    ff::init().unwrap();
+    let mut ictx = ff::format::input(&path).unwrap();
+    let s = ictx.streams().best(ff::media::Type::Video).unwrap();
+    let (index, tb) = (s.index(), s.time_base());
+    let mut dec = ff::codec::context::Context::from_parameters(s.parameters())
+        .unwrap()
+        .decoder()
+        .video()
+        .unwrap();
+    let mut frame = ff::frame::Video::empty();
+    let mut found = None;
+    'outer: for (st, p) in ictx.packets() {
+        if st.index() != index {
+            continue;
+        }
+        dec.send_packet(&p).unwrap();
+        while dec.receive_frame(&mut frame).is_ok() {
+            let ft = frame.pts().unwrap_or(0) as f64 * f64::from(tb.numerator())
+                / f64::from(tb.denominator());
+            if ft >= t {
+                found = Some(frame.clone());
+                break 'outer;
+            }
+        }
+    }
+    let f = found.expect("a frame at t");
+    let mut sc = ff::software::scaling::Context::get(
+        f.format(),
+        f.width(),
+        f.height(),
+        ff::format::Pixel::RGB24,
+        f.width(),
+        f.height(),
+        ff::software::scaling::Flags::BILINEAR,
+    )
+    .unwrap();
+    let mut rgb = ff::frame::Video::empty();
+    sc.run(&f, &mut rgb).unwrap();
+    let i = y as usize * rgb.stride(0) + x as usize * 3;
+    let d = rgb.data(0);
+    [d[i], d[i + 1], d[i + 2]]
+}
+
+fn close_rgb(a: [u8; 3], b: [u8; 3], tol: i32) -> bool {
+    a.iter()
+        .zip(b)
+        .all(|(x, y)| (i32::from(*x) - i32::from(y)).abs() <= tol)
+}
+
+fn rewrite_job(src: &Path, out: PathBuf, plan: fthrust_core::export::graph::GraphPlan) -> Job {
+    Job {
+        source: src.to_path_buf(),
+        output: out,
+        plan,
+        quality: Quality::Quality,
+        video_bitrate_kbps: None,
+        max_rate_kbps: None,
+        expected_duration_s: 2.0,
+        target_size_mb: None,
+        output_fps: None,
+        decode_from_s: 0.0,
+        copy_metadata: true,
+        inactivity_s: None,
+        fail_first_encoder: false,
+    }
+}
+
+/// Audio stream titles in order.
+fn audio_titles(path: &Path) -> Vec<String> {
+    let ictx = ffmpeg_next::format::input(&path).unwrap();
+    ictx.streams()
+        .filter(|s| s.parameters().medium() == ffmpeg_next::media::Type::Audio)
+        .map(|s| s.metadata().get("handler_name").unwrap_or("").to_owned())
+        .collect()
+}
+
+#[test]
+fn rewrite_keeps_tracks_and_titles() {
+    use fthrust_core::finalize::{CAMERA_DEFAULT, ImageLayer, Rect, plan as burn};
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "m.mp4", 2, 3) else {
+        return;
+    };
+    let png = tmp.path().join("red.png");
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([255, 0, 0, 255]))
+        .save(&png)
+        .unwrap();
+    let layer = ImageLayer {
+        path: png,
+        opacity: 100,
+        fill: true,
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.5,
+            h: 0.6,
+        },
+    };
+    let p = burn(&[layer], None, CAMERA_DEFAULT, (160, 90)).unwrap();
+    let out = tmp.path().join("m_out.mp4");
+    let (r, _, _) = run_job(&rewrite_job(&src, out.clone(), p));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let before = probe(&src);
+    let after = probe(&out);
+    assert_eq!(after.audio, 3);
+    assert_eq!(audio_titles(&src), ["Desktop", "Mic", "Game"]);
+    assert_eq!(audio_titles(&out), audio_titles(&src));
+    assert_eq!(after.audio_codec, before.audio_codec, "audio copied");
+    assert!((after.duration_s - before.duration_s).abs() < 0.2);
+    // The layer is burned: red inside its box, the clip outside it.
+    let inside = pixel_at(&out, 1.0, 20, 20);
+    assert!(
+        inside[0] > 200 && inside[1] < 60 && inside[2] < 60,
+        "{inside:?}"
+    );
+    assert!(close_rgb(
+        pixel_at(&out, 1.0, 140, 80),
+        pixel_at(&src, 1.0, 140, 80),
+        40
+    ));
+}
+
+#[test]
+fn camera_movie_overlay_burns() {
+    use fthrust_core::finalize::{Rect, plan as burn};
+    use fthrust_media::camera::{CameraRecorder, Source};
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "c.mp4", 2, 1) else {
+        return;
+    };
+    let rec = CameraRecorder::start(Source::synthetic(160, 120, 15)).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2300));
+    let cam = tmp.path().join("camera.mkv");
+    rec.write_segment(std::time::Instant::now(), 2.0, &cam)
+        .unwrap();
+    rec.stop();
+    let rect = Rect {
+        x: 0.5,
+        y: 0.4,
+        w: 0.5,
+        h: 0.6,
+    };
+    let p = burn(&[], Some(&cam), rect, (160, 90)).unwrap();
+    let out = tmp.path().join("c_out.mp4");
+    let (r, _, _) = run_job(&rewrite_job(&src, out.clone(), p));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    // Box at x 80..160, y 36..90: the test pattern replaces the clip there.
+    let differs = [(100, 50), (120, 60), (140, 80)]
+        .iter()
+        .filter(|(x, y)| !close_rgb(pixel_at(&out, 1.0, *x, *y), pixel_at(&src, 1.0, *x, *y), 40))
+        .count();
+    assert!(differs >= 2, "camera not visible");
+    assert!(close_rgb(
+        pixel_at(&out, 1.0, 20, 10),
+        pixel_at(&src, 1.0, 20, 10),
+        40
+    ));
 }

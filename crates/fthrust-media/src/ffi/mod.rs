@@ -6,6 +6,7 @@
 
 pub mod aac;
 pub mod codec;
+pub mod device;
 pub mod export;
 pub mod frame;
 pub mod hw;

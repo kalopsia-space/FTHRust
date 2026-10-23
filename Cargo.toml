@@ -18,7 +18,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 zip = "9"
 tempfile = "3"
 ffmpeg-next = "9"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "ico"] }
 fast_image_resize = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -33,7 +33,7 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 pipewire = { version = "0.10", features = ["v0_3_49"] }
 libspa = "0.10"
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "screenshot", "global_shortcuts", "notification"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast", "screenshot", "global_shortcuts", "notification", "file_chooser"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 memmap2 = "0.9"
 raw-window-handle = "0.6"

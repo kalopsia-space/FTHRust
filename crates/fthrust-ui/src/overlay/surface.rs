@@ -58,7 +58,22 @@ impl OverlaySurface {
         margins: (i32, i32, i32, i32),
         ctx: Context,
     ) -> Result<Self, OverlayError> {
-        let layer = LayerSurface::create(output, size, margins, "fthrust-capture-card")?;
+        OverlaySurface::new_placed(
+            output,
+            fthrust_wayland::layer_shell::Placement::Corner { size, margins },
+            "fthrust-capture-card",
+            ctx,
+        )
+    }
+
+    /// Creates an overlay with any placement and layer namespace.
+    pub fn new_placed(
+        output: Option<&str>,
+        placement: fthrust_wayland::layer_shell::Placement,
+        namespace: &str,
+        ctx: Context,
+    ) -> Result<Self, OverlayError> {
+        let layer = LayerSurface::create_placed(output, placement, namespace)?;
         let size = layer.size();
         let handles = layer.handles();
         let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(handles));

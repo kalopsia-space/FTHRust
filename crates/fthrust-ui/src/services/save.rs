@@ -44,6 +44,15 @@ pub enum SaveAction {
         /// Actions.
         actions: Vec<Action>,
     },
+    /// Burn the post-save overlays into a committed clip.
+    Finalize {
+        /// The clip.
+        path: PathBuf,
+        /// When the save was requested (the clip's end).
+        end: std::time::Instant,
+        /// The requested length.
+        seconds: u32,
+    },
     /// A diagnostics event.
     Diag {
         /// Event name.
@@ -59,6 +68,8 @@ pub struct SaveService {
     last_request: f64,
     next_request_id: u64,
     paths: HashMap<u64, PathBuf>,
+    /// The in-flight save's request instant and length.
+    requested: Option<(std::time::Instant, u32)>,
     transient: Option<(StatusText, Option<f64>)>,
 }
 
@@ -76,6 +87,7 @@ impl SaveService {
             last_request: -10.0,
             next_request_id: 1,
             paths: HashMap::new(),
+            requested: None,
             transient: None,
         }
     }
@@ -217,6 +229,7 @@ impl SaveService {
             }
         }
         self.paths.insert(request_id, path.clone());
+        self.requested = Some((std::time::Instant::now(), seconds));
         out.push(SaveAction::Send(Command::SaveClip {
             request_id,
             path,
@@ -389,8 +402,22 @@ impl SaveService {
                     event: "mux_completed".into(),
                     fields: json!({"late": late, "bytes": size}),
                 });
-                state.readiness.engine_committed(&path, false);
-                state.readiness.ready(&path);
+                // Overlays to burn keep the clip `Finalizing` until done.
+                let finalize = super::finalize::needed(state);
+                state.readiness.engine_committed(&path, finalize);
+                if finalize {
+                    let (end, seconds) = self
+                        .requested
+                        .take()
+                        .unwrap_or((std::time::Instant::now(), 0));
+                    out.push(SaveAction::Finalize {
+                        path: path.clone(),
+                        end,
+                        seconds,
+                    });
+                } else {
+                    state.readiness.ready(&path);
+                }
                 if state.library.upsert(&path, false) {
                     state.library_dirty = true;
                 }

@@ -25,6 +25,7 @@
 
 pub mod audio_decode;
 pub mod audio_timing;
+pub mod camera;
 pub mod capabilities;
 pub mod clip_writer;
 pub mod combined_audio;

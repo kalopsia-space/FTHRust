@@ -3,14 +3,18 @@
 //! [`Request`]s the UI sets as `AppState` flags; nothing else touches the
 //! state from another thread.
 
+pub mod browse;
+pub mod camera;
 pub mod diagnostics;
 pub mod engine;
 pub mod export;
+pub mod finalize;
 pub mod focus;
 pub mod game;
 pub mod hotkey_client;
 pub mod hotkeys;
 pub mod instance;
+pub mod mic_level;
 pub mod playback;
 pub mod portal_shortcuts;
 pub mod recording;
@@ -121,6 +125,13 @@ pub enum Event {
     Engine(fthrust_ipc::Event),
     /// Show a capture card.
     Card(CardKind),
+    /// A file chooser answered: the paths (empty on cancel) or the error.
+    Picked {
+        /// What was asked for.
+        kind: crate::state::BrowseKind,
+        /// The result.
+        paths: Result<Vec<PathBuf>, String>,
+    },
     /// Play a sound cue.
     Sound(String),
     /// The engine's active (applied) capture configuration.
@@ -258,6 +269,13 @@ pub struct Services {
     portal_cleared: std::collections::BTreeSet<String>,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
+    finalizer: finalize::Finalizer,
+    camera: camera::CameraService,
+    mic_level: Option<mic_level::MicLevel>,
+    mic_level_retry: f64,
+    mic_generation: u64,
+    gary: Option<crate::overlay::gary::GaryOverlay>,
+    gary_key: Option<String>,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
     test_commands: Option<Vec<Command>>,
@@ -324,6 +342,13 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            finalizer: finalize::Finalizer::new(),
+            camera: camera::CameraService::new(),
+            mic_level: None,
+            mic_level_retry: 0.0,
+            mic_generation: 0,
+            gary: None,
+            gary_key: None,
             clock_offset: 0.0,
             wall_override: None,
             test_commands: None,
@@ -540,6 +565,13 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            finalizer: finalize::Finalizer::new(),
+            camera: camera::CameraService::new(),
+            mic_level: None,
+            mic_level_retry: 0.0,
+            mic_generation: 0,
+            gary: None,
+            gary_key: None,
             clock_offset: 0.0,
             wall_override: None,
             test_commands: Some(Vec::new()),
@@ -748,6 +780,22 @@ impl Services {
                 } => state
                     .error_bar
                     .push(&title, &detail, level, actions, None, true),
+                save::SaveAction::Finalize { path, end, seconds } => {
+                    let duration_s = if seconds > 0 {
+                        f64::from(seconds)
+                    } else {
+                        fthrust_media::export::media_facts(&path).map_or(30.0, |f| f.duration_s)
+                    };
+                    self.finalizer.submit(finalize::FinalizeJob {
+                        clip: path,
+                        end,
+                        duration_s,
+                        layers: fthrust_core::finalize::image_layers(&state.settings),
+                        camera: self.camera.for_save(state, end, duration_s),
+                        camera_rect: fthrust_core::finalize::camera_rect(&state.settings),
+                        panic_for_tests: false,
+                    });
+                }
                 save::SaveAction::Diag { event, fields } => {
                     diagnostics::emit(state, "clip_save", &event, fields)
                 }
@@ -902,6 +950,40 @@ impl Services {
     /// Applies pending events to the state, then turns request flags into
     /// requests.
     pub fn tick(&mut self, state: &mut AppState) {
+        {
+            let now = self.now();
+            if self.test_commands.is_none() {
+                self.camera.ensure_scanned();
+            }
+            self.camera.tick(state, now);
+            for outcome in self.finalizer.poll() {
+                finalize::apply(state, &outcome);
+            }
+            // Nothing else wakes the UI for these: the heartbeat ticks
+            // services without painting.
+            if self.finalizer.busy() {
+                self.outbox
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            if self.camera.preview_active(state) {
+                self.outbox
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            if self.test_commands.is_none() {
+                self.tick_mic_and_gary(state, now);
+            }
+            if let Some(kind) = state.browse_requested.take()
+                && let Some(handle) = self.runtime()
+            {
+                let outbox = self.outbox.clone();
+                handle.spawn(async move {
+                    let paths = browse::pick(&kind).await;
+                    outbox.send(Event::Picked { kind, paths });
+                });
+            }
+        }
         if self
             .instance
             .as_ref()
@@ -1027,6 +1109,16 @@ impl Services {
                     apply_event(state, Event::Status { text, style });
                 }
                 Event::Card(card) => self.show_card(state, card),
+                Event::Picked { kind, paths } => match paths {
+                    Ok(paths) => browse::apply(state, kind, paths),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "file chooser unavailable");
+                        state.dialogs.push_message(
+                            "File chooser unavailable",
+                            format!("The desktop file chooser could not open: {e}"),
+                        );
+                    }
+                },
                 other => apply_event(state, other),
             }
         }
@@ -1182,6 +1274,10 @@ impl Services {
                     }
                 }
                 "edit-game-crop" => state.popups.game.show(),
+                "open-camera-settings" => {
+                    state.page = crate::state::Page::Settings;
+                    state.settings_tab = crate::state::Tab::Visuals;
+                }
                 "configure-shortcuts" => state.open_desktop_shortcuts_requested = true,
                 "learn-more" => crate::shell::open_url("https://github.com/kalopsia-space/FTHRust"),
                 other => tracing::debug!(other, "unknown error-bar action"),
@@ -1222,7 +1318,101 @@ impl Services {
                     true,
                 ),
             },
+            Request::RefreshCameras => self.camera.refresh(),
             other => tracing::debug!(?other, "request without a consumer yet"),
+        }
+    }
+
+    /// The mic level stream (Audio page meter, Gary) and the Gary thread.
+    fn tick_mic_and_gary(&mut self, state: &mut AppState, now: f64) {
+        use crate::state::{Page, Tab};
+        let audio_on = state
+            .settings
+            .get_bool("audio_capture_enabled")
+            .unwrap_or(true);
+        let gary_on = state.flag("gary_mode_enabled", false) && audio_on;
+        let audio_page = state.page == Page::Settings && state.settings_tab == Tab::Audio;
+        let target = state
+            .settings
+            .get_str("mic_device_id")
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let gain = state
+            .settings
+            .get_i64("mic_volume")
+            .unwrap_or(100)
+            .clamp(0, 200) as f32
+            / 100.0;
+        if audio_page || gary_on {
+            let restart =
+                mic_level::needs_restart(self.mic_level.as_ref().map(|m| &m.target), &target);
+            if let Some(m) = &self.mic_level {
+                m.set_gain(gain);
+            }
+            if restart && now >= self.mic_level_retry {
+                self.mic_level = None;
+                match mic_level::MicLevel::start(target, gain) {
+                    Ok(m) => {
+                        self.mic_level = Some(m);
+                        // Gary must pick up the new stream's meter.
+                        self.mic_generation += 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mic level unavailable");
+                        self.mic_level_retry = now + 5.0;
+                    }
+                }
+            }
+        } else {
+            self.mic_level = None;
+        }
+        state.mic_level = self.mic_level.as_ref().map(|m| m.read());
+        if audio_page && self.mic_level.is_some() {
+            self.outbox
+                .ctx
+                .request_repaint_after(std::time::Duration::from_millis(60));
+        }
+        // Gary: started on first use, told about every change.
+        if gary_on && self.gary.is_none() {
+            self.gary = Some(crate::overlay::gary::GaryOverlay::start(crate::assets_dir()));
+        }
+        if let Some(g) = &self.gary {
+            let (low, high) = fthrust_core::gary::clamp_thresholds(
+                state
+                    .settings
+                    .get_i64("gary_min_level")
+                    .unwrap_or(fthrust_core::gary::DEFAULT_MIN),
+                state
+                    .settings
+                    .get_i64("gary_max_level")
+                    .unwrap_or(fthrust_core::gary::DEFAULT_MAX),
+            );
+            let image = state
+                .settings
+                .get_str("gary_image_path")
+                .filter(|p| !p.is_empty())
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_file());
+            let output = state
+                .settings
+                .get_str("notification_monitor")
+                .filter(|m| !m.is_empty() && *m != "auto")
+                .map(str::to_owned);
+            let key = format!(
+                "{gary_on}|{low}|{high}|{image:?}|{output:?}|{}|{}",
+                self.mic_level.is_some(),
+                self.mic_generation
+            );
+            if self.gary_key.as_deref() != Some(&key) {
+                self.gary_key = Some(key);
+                g.set(crate::overlay::gary::GarySettings {
+                    enabled: gary_on,
+                    thresholds: (low, high),
+                    image,
+                    output,
+                    meter: self.mic_level.as_ref().map(|m| m.meter()),
+                });
+            }
         }
     }
 
@@ -1233,6 +1423,10 @@ impl Services {
         // `_perform_full_shutdown`: close the share windows (cancelling
         // their exports), then cancel queued exports with a bounded wait.
         crate::editor::share::close_all(state);
+        self.finalizer.shutdown(std::time::Duration::from_secs(5));
+        self.camera.shutdown();
+        self.gary = None;
+        self.mic_level = None;
         state
             .export_queue
             .shutdown(std::time::Duration::from_secs(12));
@@ -1365,6 +1559,16 @@ fn apply_event(state: &mut AppState, ev: Event) {
         | Event::Toplevels(_)
         | Event::GameDetectionAvailability(_) => {}
         Event::Card(card) => state.pending_cards.push(card),
+        Event::Picked {
+            kind,
+            paths: Ok(paths),
+        } => browse::apply(state, kind, paths),
+        Event::Picked { paths: Err(e), .. } => {
+            state.dialogs.push_message(
+                "File chooser unavailable",
+                format!("The desktop file chooser could not open: {e}"),
+            );
+        }
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
             state.engine_connected = on;

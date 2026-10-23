@@ -64,6 +64,9 @@ pub struct Job {
     /// Where decoding may start for a multi-range export (the first kept
     /// range; its trims use source timestamps).
     pub decode_from_s: f64,
+    /// Copy the container's and every copied stream's tags (a post-save
+    /// rewrite keeps track titles; exports start clean).
+    pub copy_metadata: bool,
     /// Test hook: the inactivity bound instead of [`INACTIVITY_S`].
     #[doc(hidden)]
     pub inactivity_s: Option<f64>,
@@ -316,4 +319,36 @@ pub fn media_facts(path: &Path) -> Result<fthrust_core::export::plan::MediaFacts
         audio_codec,
         audio_kbps,
     })
+}
+
+/// The image (or video) at `path` opens and its first frame decodes:
+/// an overlay layer FFmpeg would fail on is dropped before the burn.
+pub fn image_decodes(path: &Path) -> bool {
+    use ffmpeg_next as ff;
+    if crate::init().is_err() {
+        return false;
+    }
+    let Ok(mut ictx) = ff::format::input(&path) else {
+        return false;
+    };
+    let Some(stream) = ictx.streams().best(ff::media::Type::Video) else {
+        return false;
+    };
+    let index = stream.index();
+    let Ok(mut dec) = ff::codec::context::Context::from_parameters(stream.parameters())
+        .and_then(|c| c.decoder().video())
+    else {
+        return false;
+    };
+    let mut frame = ff::frame::Video::empty();
+    for (s, p) in ictx.packets() {
+        if s.index() == index
+            && dec.send_packet(&p).is_ok()
+            && dec.receive_frame(&mut frame).is_ok()
+        {
+            return true;
+        }
+    }
+    let _ = dec.send_eof();
+    dec.receive_frame(&mut frame).is_ok()
 }

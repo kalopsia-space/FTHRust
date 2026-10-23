@@ -16,6 +16,7 @@ egui.workspace = true
 egui_extras.workspace = true
 resvg.workspace = true
 image.workspace = true
+skrifa = "0.44"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

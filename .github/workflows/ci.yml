@@ -37,6 +37,7 @@ jobs:
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/save_clip.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/export.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
+      - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/overlays.sh --release --renderer pixman --settings tools/uidrive/overlays-settings.json
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
