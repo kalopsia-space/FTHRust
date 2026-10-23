@@ -12,14 +12,15 @@ run uidrive wait "cardThumb" --timeout 15
 step "open it"; run uidrive click cardThumb
 run uidrive wait ctrlBar --timeout 10
 run uidrive wait-text "0:00 →" --timeout 10
-step "split at 0:01"; run uidrive click playBtn
-run uidrive wait-text "0:01 /" --timeout 10
-run uidrive click playBtn
+# The playhead is set by clicking the track (playback timing varies on
+# CPU-only runners).
+at() { uidrive find timelineTrack | awk -v f="$1" '{printf "%d,%d\n", $1 + $3 * f, $2 + $4 / 2}'; }
+step "split at 20%"; run uidrive click "$(at 0.2)"
+sleep 0.5
 run uidrive key Ctrl+C
 run uidrive wait-text "1 cut" --timeout 5
-step "split at 0:02 and delete the tail"; run uidrive click playBtn
-run uidrive wait-text "0:02 /" --timeout 10
-run uidrive click playBtn
+step "split at 45% and delete the tail"; run uidrive click "$(at 0.45)"
+sleep 0.5
 run uidrive key Ctrl+C
 run uidrive wait-text "2 cuts" --timeout 5
 run uidrive key Ctrl+D

@@ -560,6 +560,7 @@ fn paint(ui: &mut Ui, t: &Tokens, w: Rect, state: &AppState) {
     }
     // Track.
     let track = Rect::from_min_size(Pos2::new(x0, ty), Vec2::new(tw, TH));
+    fidelity::mark(ui, "timelineTrack", track).done();
     p.rect_filled(track, 0.0, t.color(Color::Surface2));
     p.rect_stroke(
         track,
