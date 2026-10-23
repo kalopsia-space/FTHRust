@@ -63,3 +63,10 @@ Widget names come from the app's `FTHRUST_UI_DUMP` file (`$BENCH/ui.json`):
 1. `cat $BENCH/logs/app.log` (the app; `RUST_LOG=info`), `$BENCH/logs/engine.log`.
 2. Open the last screenshot in `$BENCH/shots/`.
 3. `uidrive state --json` (while the bench is up) for the widgets on screen.
+
+## CI
+
+The GitHub runner has no GPU encoder, so the CI scenarios pass
+`--settings tools/uidrive/ci-settings.json` (software encoder). The
+fidelity tests need Noto Sans Mono (`fonts-noto-mono`), the monospace face
+the reference screenshots were taken with.

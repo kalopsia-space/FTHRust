@@ -56,8 +56,9 @@ pub fn is_font_file(bytes: &[u8]) -> bool {
     }
 }
 
-const MONO_CANDIDATES: [&str; 4] = [
+const MONO_CANDIDATES: [&str; 5] = [
     "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
