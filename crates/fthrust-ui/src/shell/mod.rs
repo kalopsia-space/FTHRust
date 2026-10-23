@@ -35,6 +35,10 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             height: screen.height().round() as u32,
         };
     }
+    if std::mem::take(&mut state.activation_requested) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
     let resp = frame(ui, state);
     if let Some(action) = resp.action {
         state.error_action_requested = Some(action);

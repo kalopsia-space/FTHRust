@@ -456,6 +456,12 @@ pub struct AppState {
     pub show_in_file_manager_requested: Option<std::path::PathBuf>,
     /// Scrolling settled: the last wheel/drag time.
     pub library_last_scroll: f64,
+    /// The live diagnostics session (events, report export).
+    pub diagnostics: Option<std::sync::Arc<fthrust_core::diagnostics::session::DiagnosticsSession>>,
+    /// The clips-folder-unavailable warning was shown.
+    pub storage_error_reported: bool,
+    /// A second launch asked for the window (the shell focuses it).
+    pub activation_requested: bool,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -620,6 +626,9 @@ impl AppState {
             upload_requested: None,
             show_in_file_manager_requested: None,
             library_last_scroll: -10.0,
+            diagnostics: None,
+            storage_error_reported: false,
+            activation_requested: false,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,

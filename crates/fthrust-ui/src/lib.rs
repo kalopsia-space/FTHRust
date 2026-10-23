@@ -12,6 +12,7 @@ pub mod library;
 pub mod motion;
 pub mod pages;
 pub mod popups;
+pub mod services;
 pub mod settings;
 pub mod shell;
 pub mod state;
@@ -23,6 +24,8 @@ pub mod widgets;
 pub struct App {
     /// Shared state.
     pub state: state::AppState,
+    /// Background services (`None` in tests that build the app by hand).
+    pub services: Option<services::Services>,
     /// The first-frame monitor clamp has run.
     clamped: bool,
 }
@@ -34,6 +37,7 @@ impl App {
         tokens::install_style(&cc.egui_ctx, &state.tokens);
         App {
             state,
+            services: None,
             clamped: false,
         }
     }
@@ -68,10 +72,16 @@ impl eframe::App for App {
                 self.clamped = true;
             }
         }
+        if let Some(services) = self.services.as_mut() {
+            services.tick(&mut self.state);
+        }
         shell::ui(ui, &mut self.state);
     }
 
     fn on_exit(&mut self) {
+        if let Some(services) = self.services.take() {
+            services.shutdown();
+        }
         // winit on Wayland has no window position; keep size and state.
         let rect = self.state.window.last_inner;
         if rect.width > 0 && rect.height > 0 {

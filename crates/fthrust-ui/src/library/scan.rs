@@ -71,6 +71,7 @@ struct Shared {
 pub struct ScanService {
     shared: Arc<Shared>,
     events: Receiver<ScanEvent>,
+    forward: Arc<Mutex<Option<Sender<ScanEvent>>>>,
     wake: Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -92,13 +93,26 @@ impl ScanService {
         let (wake_tx, wake_rx) = channel::<()>();
         let worker_shared = shared.clone();
         let watch_wake = wake_tx.clone();
+        let forward: Arc<Mutex<Option<Sender<ScanEvent>>>> = Arc::new(Mutex::new(None));
+        let forward_w = forward.clone();
         let thread = std::thread::Builder::new()
             .name("fthrust-library-scan".into())
-            .spawn(move || worker(worker_shared, event_tx, wake_rx, watch_wake))
+            .spawn(move || {
+                worker(
+                    worker_shared,
+                    Emit {
+                        direct: event_tx,
+                        forward: forward_w,
+                    },
+                    wake_rx,
+                    watch_wake,
+                )
+            })
             .expect("spawn scan worker");
         ScanService {
             shared,
             events: event_rx,
+            forward,
             wake: wake_tx,
             thread: Some(thread),
         }
@@ -135,9 +149,16 @@ impl ScanService {
         self.request(ScanKind::Foreground);
     }
 
-    /// Scan results.
+    /// Scan results (direct channel).
     pub fn events(&self) -> &Receiver<ScanEvent> {
         &self.events
+    }
+
+    /// Also sends every event to `tx` (the services outbox).
+    pub fn forward_to(&self, tx: Sender<ScanEvent>) {
+        if let Ok(mut f) = self.forward.lock() {
+            *f = Some(tx);
+        }
     }
 
     /// Stops the worker.
@@ -163,12 +184,23 @@ impl Drop for ScanService {
     }
 }
 
-fn worker(
-    shared: Arc<Shared>,
-    events: Sender<ScanEvent>,
-    wake: Receiver<()>,
-    watch_wake: Sender<()>,
-) {
+struct Emit {
+    direct: Sender<ScanEvent>,
+    forward: Arc<Mutex<Option<Sender<ScanEvent>>>>,
+}
+
+impl Emit {
+    fn send(&self, ev: ScanEvent) {
+        if let Ok(f) = self.forward.lock()
+            && let Some(tx) = f.as_ref()
+        {
+            let _ = tx.send(ev.clone());
+        }
+        let _ = self.direct.send(ev);
+    }
+}
+
+fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sender<()>) {
     let watcher_flag = Arc::new(AtomicBool::new(false));
     let flag = watcher_flag.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -232,12 +264,11 @@ fn worker(
             .map(|r| r.clone())
             .unwrap_or_else(|e| e.into_inner().clone());
         let started = Instant::now();
-        let tx = events.clone();
         let mut first = true;
         let result = scan(&roots, &cancel, |batch| {
             if first {
                 first = false;
-                let _ = tx.send(ScanEvent::Batch {
+                events.send(ScanEvent::Batch {
                     generation,
                     records: batch,
                 });
@@ -258,7 +289,7 @@ fn worker(
                     }
                 }
                 watched = dirs.clone();
-                let _ = events.send(ScanEvent::Done {
+                events.send(ScanEvent::Done {
                     generation,
                     kind,
                     records,
@@ -267,7 +298,7 @@ fn worker(
                 });
             }
             Err(e) => {
-                let _ = events.send(ScanEvent::Failed {
+                events.send(ScanEvent::Failed {
                     kind,
                     error: e.to_string(),
                 });
