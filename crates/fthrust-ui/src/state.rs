@@ -476,6 +476,8 @@ pub struct AppState {
     pub record_label: String,
     /// The Record button uses the active (red) style.
     pub record_active: bool,
+    /// The last Hyprland bind line copied from the hotkey popup.
+    pub last_copied_bind_line: Option<String>,
     /// Confirm the detected game.
     pub game_confirm_requested: bool,
     /// Dismiss the detected game.
@@ -654,6 +656,7 @@ impl AppState {
             screenshot_requested: false,
             record_label: "Record".into(),
             record_active: false,
+            last_copied_bind_line: None,
             game_confirm_requested: false,
             game_dismiss_requested: false,
             input_draft: None,

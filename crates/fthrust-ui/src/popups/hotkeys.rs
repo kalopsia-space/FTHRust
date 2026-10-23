@@ -469,6 +469,40 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
         body.allocate_exact_size(Vec2::new(w, 30.0), egui::Sense::hover());
     } else if let Some(text) = &instructions {
         instructions_label(&mut body, &t, text, w);
+        if state.compositor == "hyprland" {
+            // FTHRust addition: one click copies the `save_clip` bind line.
+            let top = body.cursor().min;
+            let g = galley(
+                &body,
+                "COPY LINE",
+                size::MICRO,
+                Weight::W600,
+                Color32::WHITE,
+            );
+            let bw = g.size().x.round() + 14.0 + 2.0;
+            let rect = Rect::from_min_size(top, Vec2::new(bw, 30.0));
+            if clear_button(
+                &mut body,
+                &t,
+                rect,
+                "COPY LINE",
+                true,
+                "QPushButton[COPY LINE]",
+            )
+            .clicked()
+            {
+                let combo = state.hotkeys.get("save_clip").unwrap_or("").to_owned();
+                let line = fthrust_core::hotkeys::hyprland::bind_line(
+                    "save_clip",
+                    &combo,
+                    std::path::Path::new(&state.client_exe),
+                    std::path::Path::new(&state.hotkey_socket_path),
+                );
+                ui.ctx().copy_text(line.clone());
+                state.last_copied_bind_line = Some(line);
+            }
+            body.allocate_exact_size(Vec2::new(w, 30.0), egui::Sense::hover());
+        }
     }
     // Input handling for a recording in progress.
     if let Some(action) = toggle_recording {

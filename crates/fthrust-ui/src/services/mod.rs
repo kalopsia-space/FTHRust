@@ -6,7 +6,9 @@
 pub mod diagnostics;
 pub mod engine;
 pub mod hotkey_client;
+pub mod hotkeys;
 pub mod instance;
+pub mod portal_shortcuts;
 pub mod recording;
 pub mod save;
 pub mod screenshot;
@@ -118,6 +120,10 @@ pub enum Event {
     Sound(String),
     /// The engine's active (applied) capture configuration.
     ActiveConfig(Option<fthrust_core::capture_config::CaptureConfig>),
+    /// The GlobalShortcuts portal bound these (`action`, trigger description).
+    PortalShortcutsBound(Vec<(String, String)>),
+    /// The GlobalShortcuts portal failed.
+    PortalShortcutsFailed(String),
 }
 
 impl PartialEq for ScanEvent {
@@ -191,6 +197,11 @@ pub struct Outbox {
 }
 
 impl Outbox {
+    /// An outbox over `tx` that repaints `ctx`.
+    pub fn new(tx: Sender<Event>, ctx: egui::Context) -> Self {
+        Outbox { tx, ctx }
+    }
+
     /// Sends an event and requests a repaint.
     pub fn send(&self, event: Event) {
         let _ = self.tx.send(event);
@@ -212,6 +223,11 @@ pub struct Services {
     save: save::SaveService,
     recording: recording::RecordingService,
     screenshot: screenshot::ScreenshotService,
+    hotkey_server: Option<hotkeys::HotkeyServer>,
+    portal: Option<portal_shortcuts::PortalShortcuts>,
+    portal_active: bool,
+    portal_requested: std::collections::BTreeMap<String, String>,
+    portal_cleared: std::collections::BTreeSet<String>,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
     clock_offset: f64,
@@ -255,6 +271,11 @@ impl Services {
             save: save::SaveService::new(),
             recording: recording::RecordingService::new(),
             screenshot: screenshot::ScreenshotService::new(),
+            hotkey_server: None,
+            portal: None,
+            portal_active: false,
+            portal_requested: std::collections::BTreeMap::new(),
+            portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
@@ -275,7 +296,60 @@ impl Services {
                     handle,
                 )));
         }
+        services.start_hotkeys(state);
         services
+    }
+
+    /// Starts hotkey delivery: the private socket, the compositor binds
+    /// (Hyprland) and the GlobalShortcuts portal.
+    fn start_hotkeys(&mut self, state: &AppState) {
+        self.portal_cleared =
+            fthrust_core::hotkeys::load_portal_cleared(&state.paths).unwrap_or_default();
+        match fthrust_core::runtime_dir() {
+            Ok(dir) => {
+                match hotkeys::HotkeyServer::start(&dir, state.hotkeys.clone(), self.outbox.clone())
+                {
+                    Ok(server) => self.hotkey_server = Some(server),
+                    Err(e) => tracing::warn!(error = %e, "hotkey socket unavailable"),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "no runtime directory for the hotkey socket"),
+        }
+        self.apply_compositor_binds(state);
+        if let Some(handle) = self.runtime() {
+            self.portal_requested =
+                portal_shortcuts::requested_triggers(&state.hotkeys, &self.portal_cleared);
+            self.portal = Some(portal_shortcuts::PortalShortcuts::start(
+                handle,
+                self.outbox.clone(),
+                &state.hotkeys,
+                &self.portal_cleared,
+            ));
+        }
+    }
+
+    fn apply_compositor_binds(&self, state: &AppState) {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let sock = std::path::PathBuf::from(&state.hotkey_socket_path);
+        let exe = std::path::PathBuf::from(&state.client_exe);
+        match hotkeys::apply_compositor_config(
+            &home,
+            &state.hotkeys,
+            &exe,
+            &sock,
+            &state.compositor,
+            hotkeys::hyprland_instance_present(),
+            None,
+        ) {
+            Ok(a) => tracing::info!(
+                changed = a.changed,
+                reloaded = a.reloaded,
+                "compositor binds applied"
+            ),
+            Err(e) => tracing::warn!(error = %e, "compositor binds not applied"),
+        }
     }
 
     fn attach_scan(&mut self, scan: ScanService) {
@@ -316,6 +390,11 @@ impl Services {
             save: save::SaveService::new(),
             recording: recording::RecordingService::new(),
             screenshot: screenshot::ScreenshotService::new(),
+            hotkey_server: None,
+            portal: None,
+            portal_active: false,
+            portal_requested: std::collections::BTreeMap::new(),
+            portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
@@ -669,6 +748,44 @@ impl Services {
                     state.pending_engine_events.push(ipc);
                 }
                 Event::ActiveConfig(c) => self.active_config = c,
+                Event::PortalShortcutsBound(bound) => {
+                    let (changed, kept) = portal_shortcuts::adopt_bound(
+                        &mut state.hotkeys,
+                        &self.portal_requested,
+                        &self.portal_cleared,
+                        &bound,
+                    );
+                    if changed {
+                        let _ = state.hotkeys.save(&state.paths);
+                    }
+                    self.portal_active = true;
+                    state.hotkeys_portal_active = true;
+                    if !kept.is_empty() {
+                        state.error_bar.push(
+                            "DESKTOP KEPT ITS SHORTCUT",
+                            &portal_shortcuts::kept_warning(&kept),
+                            Level::Warning,
+                            Vec::new(),
+                            None,
+                            true,
+                        );
+                    }
+                }
+                Event::PortalShortcutsFailed(reason) => {
+                    tracing::info!(reason, "GlobalShortcuts portal");
+                    if self.portal_active {
+                        state.error_bar.push(
+                            "GLOBAL HOTKEYS",
+                            &reason,
+                            Level::Warning,
+                            Vec::new(),
+                            None,
+                            true,
+                        );
+                    } else if let Some(p) = self.portal.take() {
+                        p.stop();
+                    }
+                }
                 Event::Health(h) => self.health = Some(h),
                 Event::EngineConnected(on) => {
                     self.engine_connected = on;
@@ -824,6 +941,27 @@ impl Services {
                 "learn-more" => crate::shell::open_url("https://github.com/kalopsia-space/FTHRust"),
                 other => tracing::debug!(other, "unknown error-bar action"),
             },
+            Request::HotkeysChanged => {
+                if let Some(s) = &self.hotkey_server {
+                    s.update_bindings(state.hotkeys.clone());
+                }
+                self.apply_compositor_binds(state);
+                self.portal_requested = portal_shortcuts::requested_triggers(&state.hotkeys, &self.portal_cleared);
+                if let Some(p) = &self.portal {
+                    p.rebind(&state.hotkeys, &self.portal_cleared);
+                }
+            }
+            Request::OpenDesktopShortcuts => match &self.portal {
+                Some(p) => p.configure(),
+                None => state.error_bar.push(
+                    "GLOBAL HOTKEYS",
+                    "Your desktop does not offer the GlobalShortcuts portal; bind the socket commands in your compositor instead.",
+                    Level::Warning,
+                    Vec::new(),
+                    None,
+                    true,
+                ),
+            },
             other => tracing::debug!(?other, "request without a consumer yet"),
         }
     }
@@ -832,6 +970,12 @@ impl Services {
     pub fn shutdown(mut self) {
         if let Some(engine) = self.engine.take() {
             engine.shutdown();
+        }
+        if let Some(p) = self.portal.take() {
+            p.stop();
+        }
+        if let Some(s) = self.hotkey_server.take() {
+            s.close();
         }
         if let Some(scan) = self.scan.take() {
             scan.stop();
@@ -904,7 +1048,12 @@ fn apply_event(state: &mut AppState, ev: Event) {
             state.error_bar.remove_by_key(&key);
         }
         Event::EncoderActive(codec) => state.active_encoder = Some(codec),
-        Event::Health(_) | Event::Hotkey(_) | Event::Engine(_) | Event::ActiveConfig(_) => {}
+        Event::Health(_)
+        | Event::Hotkey(_)
+        | Event::Engine(_)
+        | Event::ActiveConfig(_)
+        | Event::PortalShortcutsBound(_)
+        | Event::PortalShortcutsFailed(_) => {}
         Event::Card(card) => state.pending_cards.push(card),
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
