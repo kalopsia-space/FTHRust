@@ -132,7 +132,16 @@ fn socket_server_refuses_symlink_path() {
     let stale = d.path().join("stale");
     std::fs::create_dir_all(&stale).unwrap();
     drop(std::os::unix::net::UnixListener::bind(stale.join("hotkey.sock")).unwrap());
-    assert!(prepare_socket_path(&stale.join("hotkey.sock")).is_ok());
+    // A process another test forks before it execs can hold a copy of the
+    // listener for a moment, so the socket still accepts: retry briefly.
+    let removed = (0..50).any(|_| {
+        let ok = prepare_socket_path(&stale.join("hotkey.sock")).is_ok();
+        if !ok {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        ok
+    });
+    assert!(removed);
     assert!(!stale.join("hotkey.sock").exists());
 }
 
