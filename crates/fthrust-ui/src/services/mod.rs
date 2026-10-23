@@ -7,14 +7,67 @@ pub mod diagnostics;
 pub mod engine;
 pub mod hotkey_client;
 pub mod instance;
+pub mod save;
 pub mod status;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use fthrust_core::capture_health::HealthSnapshot;
+use fthrust_core::hotkeys::HotkeyAction;
+use fthrust_ipc::Command;
+
 use crate::library::scan::{ScanEvent, ScanKind, ScanService};
 use crate::shell::error_bar::{Action, Level};
 use crate::state::{AppState, StatusStyle, StatusText};
+
+/// A capture-card notification (drawn by the overlay in Task 15).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CardKind {
+    /// A clip was saved.
+    Clip {
+        /// Length.
+        seconds: u32,
+        /// Capture fps.
+        fps: u32,
+        /// Resolution label (`1080P`, `SOURCE`).
+        resolution: String,
+    },
+    /// A screenshot was saved.
+    Screenshot,
+    /// A save failed.
+    Error {
+        /// Detail (may be empty).
+        detail: String,
+    },
+    /// An upload finished.
+    Upload {
+        /// File name.
+        filename: String,
+    },
+    /// An upload failed.
+    UploadFailed {
+        /// Detail.
+        detail: String,
+    },
+    /// A manual recording was saved.
+    RecordingSaved {
+        /// File name.
+        filename: String,
+    },
+    /// A prompt (game detected).
+    Prompt {
+        /// Text.
+        text: String,
+    },
+    /// Capture switched to a source.
+    Capturing {
+        /// Source name.
+        source: String,
+    },
+    /// The startup card.
+    Startup,
+}
 
 /// What a service tells the UI.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +104,16 @@ pub enum Event {
     EncoderActive(String),
     /// Engine connection state for the pages (Record button, Save).
     EngineConnected(bool),
+    /// The latest capture health.
+    Health(HealthSnapshot),
+    /// A global hotkey fired.
+    Hotkey(HotkeyAction),
+    /// An engine event for the save / recording services.
+    Engine(fthrust_ipc::Event),
+    /// Show a capture card.
+    Card(CardKind),
+    /// Play a sound cue.
+    Sound(String),
 }
 
 impl PartialEq for ScanEvent {
@@ -140,6 +203,17 @@ pub struct Services {
     scan_roots: (PathBuf, Vec<PathBuf>),
     instance: Option<instance::Instance>,
     engine: Option<engine::EngineDriver>,
+    save: save::SaveService,
+    epoch: std::time::Instant,
+    clock_offset: f64,
+    wall_override: Option<time::OffsetDateTime>,
+    test_commands: Option<Vec<Command>>,
+    test_cards: Vec<CardKind>,
+    engine_connected: bool,
+    health: Option<HealthSnapshot>,
+    engine_status: Option<StatusText>,
+    recording_transition: bool,
+    save_transient_ended: bool,
 }
 
 impl Services {
@@ -169,6 +243,17 @@ impl Services {
             scan_roots: (state.library.clips_root.clone(), imported),
             instance: None,
             engine: None,
+            save: save::SaveService::new(),
+            epoch: std::time::Instant::now(),
+            clock_offset: 0.0,
+            wall_override: None,
+            test_commands: None,
+            test_cards: Vec::new(),
+            engine_connected: false,
+            health: None,
+            engine_status: None,
+            recording_transition: false,
+            save_transient_ended: false,
         };
         services.attach_scan(scan);
         services
@@ -209,6 +294,127 @@ impl Services {
             scan_roots: (PathBuf::new(), Vec::new()),
             instance: None,
             engine: None,
+            save: save::SaveService::new(),
+            epoch: std::time::Instant::now(),
+            clock_offset: 0.0,
+            wall_override: None,
+            test_commands: Some(Vec::new()),
+            test_cards: Vec::new(),
+            engine_connected: false,
+            health: None,
+            engine_status: None,
+            recording_transition: false,
+            save_transient_ended: false,
+        }
+    }
+
+    /// Seconds since the services started (tests can advance it).
+    pub fn now(&self) -> f64 {
+        self.epoch.elapsed().as_secs_f64() + self.clock_offset
+    }
+
+    /// Advances the clock (tests).
+    pub fn advance_clock_for_tests(&mut self, seconds: f64) {
+        self.clock_offset += seconds;
+    }
+
+    /// Fixes the wall clock used for file names (tests).
+    pub fn set_wall_clock_for_tests(&mut self, at: time::OffsetDateTime) {
+        self.wall_override = Some(at);
+    }
+
+    fn wall(&self) -> time::OffsetDateTime {
+        self.wall_override.unwrap_or_else(|| {
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        })
+    }
+
+    /// Commands sent to the engine so far (tests).
+    pub fn drain_commands_for_tests(&mut self) -> Vec<Command> {
+        let taken = self.test_commands.take().unwrap_or_default();
+        self.test_commands = Some(Vec::new());
+        taken
+    }
+
+    /// Cards shown so far (tests).
+    pub fn cards_for_tests(&self) -> &[CardKind] {
+        &self.test_cards
+    }
+
+    /// Sends a command to the engine (recorded in tests).
+    pub fn send_command(&mut self, cmd: Command) {
+        if let Some(recorded) = self.test_commands.as_mut() {
+            recorded.push(cmd);
+            return;
+        }
+        if let Some(d) = &self.engine {
+            d.request(engine::Input::Send(cmd));
+        }
+    }
+
+    fn show_card(&mut self, state: &mut AppState, card: CardKind) {
+        if self.test_commands.is_some() {
+            self.test_cards.push(card.clone());
+        }
+        state.pending_cards.push(card);
+    }
+
+    fn run_save_actions(&mut self, state: &mut AppState, actions: Vec<save::SaveAction>) {
+        for a in actions {
+            match a {
+                save::SaveAction::Send(cmd) => self.send_command(cmd),
+                save::SaveAction::Card(card) => self.show_card(state, card),
+                save::SaveAction::Sound(key) => state.pending_sounds.push(key),
+                save::SaveAction::Error {
+                    title,
+                    detail,
+                    level,
+                    actions,
+                } => state
+                    .error_bar
+                    .push(&title, &detail, level, actions, None, true),
+                save::SaveAction::Diag { event, fields } => {
+                    diagnostics::emit(state, "clip_save", &event, fields)
+                }
+            }
+        }
+    }
+
+    /// `_save_clip` for `seconds`.
+    pub fn save_clip(&mut self, state: &mut AppState, seconds: u32) {
+        let now = self.now();
+        let wall = self.wall();
+        let health = self.health.clone();
+        let actions = self.save.save_clip(
+            state,
+            seconds,
+            self.engine_connected,
+            health.as_ref(),
+            self.recording_transition,
+            now,
+            wall,
+        );
+        self.run_save_actions(state, actions);
+        if let Some(d) = &self.engine
+            && let Ok(mut sv) = d.supervisor().lock()
+        {
+            sv.set_save_busy(self.save.is_busy());
+        }
+    }
+
+    fn on_hotkey(&mut self, state: &mut AppState, action: HotkeyAction) {
+        match action {
+            HotkeyAction::SaveClip => {
+                let seconds = state.settings.get_i64("clip_length").unwrap_or(30).max(1) as u32;
+                self.save_clip(state, seconds);
+            }
+            HotkeyAction::SaveCustomClip(n) => self.save_clip(state, n),
+            HotkeyAction::SaveScreenshot => state.screenshot_requested = true,
+            HotkeyAction::StartRecording | HotkeyAction::StopRecording => {
+                state.record_requested = true
+            }
+            HotkeyAction::ConfirmGameDetection => state.game_confirm_requested = true,
+            HotkeyAction::DismissGameDetection => state.game_dismiss_requested = true,
         }
     }
 
@@ -313,8 +519,55 @@ impl Services {
         {
             apply_event(state, Event::ActivationRequested);
         }
+        let now = self.now();
         while let Ok(ev) = self.events.try_recv() {
-            apply_event(state, ev);
+            match ev {
+                Event::Hotkey(action) => self.on_hotkey(state, action),
+                Event::Engine(ipc) => {
+                    let actions = self.save.on_engine_event(state, &ipc, now);
+                    self.run_save_actions(state, actions);
+                    state.pending_engine_events.push(ipc);
+                }
+                Event::Health(h) => self.health = Some(h),
+                Event::EngineConnected(on) => {
+                    self.engine_connected = on;
+                    if !on {
+                        self.health = None;
+                    }
+                    apply_event(state, Event::EngineConnected(on));
+                }
+                Event::Status { text, style } => {
+                    self.engine_status = Some(StatusText {
+                        text: text.clone(),
+                        style,
+                    });
+                    apply_event(state, Event::Status { text, style });
+                }
+                Event::Card(card) => self.show_card(state, card),
+                other => apply_event(state, other),
+            }
+        }
+        let actions = self.save.on_tick(state, now);
+        self.run_save_actions(state, actions);
+        // A transient save status overrides the engine's; when it ends the
+        // engine's last status returns.
+        match self.save.transient_status(now) {
+            Some(t) => {
+                state.status = t;
+                self.save_transient_ended = true;
+            }
+            None if self.save_transient_ended => {
+                if let Some(t) = &self.engine_status {
+                    state.status = t.clone();
+                }
+                self.save_transient_ended = false;
+            }
+            None => {}
+        }
+        if let Some(d) = &self.engine
+            && let Ok(mut sv) = d.supervisor().lock()
+        {
+            sv.set_save_busy(self.save.is_busy());
         }
         for req in collect_requests(state) {
             self.dispatch(req, state);
@@ -480,6 +733,9 @@ fn apply_event(state: &mut AppState, ev: Event) {
             state.error_bar.remove_by_key(&key);
         }
         Event::EncoderActive(codec) => state.active_encoder = Some(codec),
+        Event::Health(_) | Event::Hotkey(_) | Event::Engine(_) => {}
+        Event::Card(card) => state.pending_cards.push(card),
+        Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {
             state.engine_connected = on;
             state.record_enabled = on;

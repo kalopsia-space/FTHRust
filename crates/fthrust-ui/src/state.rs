@@ -464,6 +464,18 @@ pub struct AppState {
     pub activation_requested: bool,
     /// The engine is connected (Record and Save are allowed).
     pub engine_connected: bool,
+    /// Cards to show (the overlay drains them).
+    pub pending_cards: Vec<crate::services::CardKind>,
+    /// Sound cues to play (the sound service drains them).
+    pub pending_sounds: Vec<String>,
+    /// Engine events for the recording service (drained each tick).
+    pub pending_engine_events: Vec<fthrust_ipc::Event>,
+    /// A screenshot hotkey fired.
+    pub screenshot_requested: bool,
+    /// Confirm the detected game.
+    pub game_confirm_requested: bool,
+    /// Dismiss the detected game.
+    pub game_dismiss_requested: bool,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -632,6 +644,12 @@ impl AppState {
             storage_error_reported: false,
             activation_requested: false,
             engine_connected: false,
+            pending_cards: Vec::new(),
+            pending_sounds: Vec::new(),
+            pending_engine_events: Vec::new(),
+            screenshot_requested: false,
+            game_confirm_requested: false,
+            game_dismiss_requested: false,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,

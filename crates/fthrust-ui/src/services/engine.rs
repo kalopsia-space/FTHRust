@@ -107,6 +107,8 @@ pub enum Input {
         /// Exit code (`None` on a signal).
         code: Option<i32>,
     },
+    /// Send a command when connected (save / recording services).
+    Send(Command),
     /// Time passed (≈100 ms).
     Tick,
 }
@@ -673,6 +675,11 @@ impl Supervisor {
                 let detail = engine_stopped_detail(code, previous);
                 self.engine_gone(&mut out, detail, now);
             }
+            Input::Send(cmd) => {
+                if self.is_connected() {
+                    out.push(Effect::Send(cmd));
+                }
+            }
             Input::Tick => {}
         }
         // Timers.
@@ -1090,6 +1097,7 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                     let (tx, mut rx) = tokio::sync::mpsc::channel::<IpcEvent>(64);
                     // Forward events from the client's receiver to inputs.
                     let forward_inputs = inputs.clone();
+                    let outbox = c.outbox.clone();
                     c.handle.spawn(async move {
                         while let Some(ev) = rx.recv().await {
                             let input = match ev {
@@ -1103,7 +1111,7 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                 IpcEvent::Status(s) => Input::Status(*s),
                                 IpcEvent::Heartbeat => Input::Heartbeat,
                                 other => {
-                                    tracing::trace!(?other, "engine event for another service");
+                                    outbox.send(Event::Engine(other));
                                     continue;
                                 }
                             };
