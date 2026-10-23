@@ -6,6 +6,7 @@ license.workspace = true
 description = "FFmpeg-backed encode, replay ring, clip save and probe layer for FTHRust"
 
 [dependencies]
+sha2.workspace = true
 fthrust-core = { path = "../fthrust-core" }
 ffmpeg-next.workspace = true
 image.workspace = true

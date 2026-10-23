@@ -22,6 +22,8 @@ pub struct OpenParams {
     pub bitrate_bps: i64,
     /// Private options applied before `avcodec_open2`.
     pub options: Vec<(&'static str, String)>,
+    /// Keyframe interval in frames (`None` = two seconds).
+    pub gop_frames: Option<u32>,
     /// Pixel format of the frames the caller will send (NV12 for hardware,
     /// YUV420P for software).
     pub pix_fmt: ffi::AVPixelFormat,
@@ -106,7 +108,7 @@ impl RawEncoder {
                 den: 1,
             };
             (*ctx).bit_rate = params.bitrate_bps;
-            (*ctx).gop_size = params.fps as i32 * 2;
+            (*ctx).gop_size = params.gop_frames.unwrap_or(params.fps * 2) as i32;
             (*ctx).max_b_frames = 0;
             (*ctx).color_range = ffi::AVColorRange::AVCOL_RANGE_MPEG;
             (*ctx).color_primaries = ffi::AVColorPrimaries::AVCOL_PRI_BT709;

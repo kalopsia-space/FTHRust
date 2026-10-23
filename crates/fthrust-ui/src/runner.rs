@@ -113,6 +113,7 @@ impl Runner {
         egui_winit::update_viewport_info(&mut self.info, &self.ctx, &window, true);
         let (state, instance) = self.pending.take().ok_or("already started")?;
         let mut app = App::new(&self.ctx, state);
+        app.render_state = painter.render_state();
         let waker = {
             let proxy = self.proxy.clone();
             Arc::new(move || {

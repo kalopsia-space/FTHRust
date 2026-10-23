@@ -133,6 +133,14 @@ impl Drop for Scaler {
     }
 }
 
+/// An `ffmpeg_next` software scaler that may move to a worker thread. The
+/// wrapped `SwsContext` is only used through `&mut self` by one owner.
+pub struct SendScaler(pub ffmpeg_next::software::scaling::Context);
+
+// SAFETY: `sws_scale` has no thread affinity; the context is never shared,
+// only moved with its owner.
+unsafe impl Send for SendScaler {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

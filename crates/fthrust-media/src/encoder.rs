@@ -58,6 +58,13 @@ pub struct Encoder {
     keyframe_requested: bool,
     pending: VecDeque<FrameTiming>,
     generation: u64,
+    /// Forced keyframe interval in frames (two seconds unless overridden).
+    forced_keyframe_interval: i64,
+}
+
+/// Whether this FFmpeg build has the named encoder (tests skip on `false`).
+pub fn encoder_exists(name: &str) -> bool {
+    crate::init().is_ok() && RawEncoder::exists(name)
 }
 
 impl Encoder {
@@ -71,6 +78,17 @@ impl Encoder {
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
+        Self::open_inner(cfg, devices, None)
+    }
+
+    /// [`Encoder::open`] with an explicit keyframe interval in frames
+    /// (playback proxies and tests; capture keeps the two-second default).
+    pub fn open_with_gop(cfg: &EncoderConfig, gop_frames: u32) -> Result<Self> {
+        crate::init()?;
+        Self::open_inner(cfg, &candidate_devices(), Some(gop_frames.max(1)))
+    }
+
+    fn open_inner(cfg: &EncoderConfig, devices: &[String], gop: Option<u32>) -> Result<Self> {
         crate::init()?;
         if cfg.fps == 0 || cfg.enc_width == 0 || cfg.enc_height == 0 {
             return Err(MediaError::Invalid(
@@ -84,7 +102,7 @@ impl Encoder {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg, devices) {
+            match Self::try_open(name, cfg, devices, gop) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -95,7 +113,7 @@ impl Encoder {
                         preset = cfg.preset,
                         "encoder opened"
                     );
-                    return Self::finish_open(raw, cfg);
+                    return Self::finish_open(raw, cfg, gop);
                 }
                 Err(e) => failures.push(format!("{name}: {e}")),
             }
@@ -115,7 +133,12 @@ impl Encoder {
         )))
     }
 
-    fn try_open(name: &'static str, cfg: &EncoderConfig, devices: &[String]) -> Result<RawEncoder> {
+    fn try_open(
+        name: &'static str,
+        cfg: &EncoderConfig,
+        devices: &[String],
+        gop: Option<u32>,
+    ) -> Result<RawEncoder> {
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
             is_vaapi || name.contains("nvenc") || name.contains("amf") || name.contains("qsv");
@@ -125,6 +148,7 @@ impl Encoder {
             fps: cfg.fps,
             bitrate_bps: i64::from(cfg.bitrate_kbps) * 1000,
             options: preset_options(name, cfg.preset).unwrap_or_default(),
+            gop_frames: gop,
             pix_fmt: if is_hw {
                 ffi::AVPixelFormat::AV_PIX_FMT_NV12
             } else {
@@ -153,7 +177,7 @@ impl Encoder {
         }))
     }
 
-    fn finish_open(raw: RawEncoder, cfg: &EncoderConfig) -> Result<Self> {
+    fn finish_open(raw: RawEncoder, cfg: &EncoderConfig, gop: Option<u32>) -> Result<Self> {
         let (w, h) = raw.size();
         let scaler = Scaler::new(
             cfg.src_width.max(1),
@@ -180,6 +204,7 @@ impl Encoder {
             keyframe_requested: false,
             pending: VecDeque::new(),
             generation: 0,
+            forced_keyframe_interval: i64::from(gop.unwrap_or(cfg.fps * 2).max(1)),
         })
     }
 
@@ -200,10 +225,10 @@ impl Encoder {
             encoder: EncoderPref::Auto,
             preset: 4,
         };
-        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices()) else {
+        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices(), None) else {
             return false;
         };
-        let Ok(mut encoder) = Self::finish_open(raw, &cfg) else {
+        let Ok(mut encoder) = Self::finish_open(raw, &cfg, None) else {
             return false;
         };
         let black = vec![0u8; 640 * 360 * 4];
@@ -315,7 +340,7 @@ impl Encoder {
         let frame_pts = frame_pts.max(self.last_input_pts + 1);
         self.last_input_pts = frame_pts;
         let force_key = self.last_forced_keyframe_pts < 0
-            || frame_pts - self.last_forced_keyframe_pts >= fps * 2
+            || frame_pts - self.last_forced_keyframe_pts >= self.forced_keyframe_interval
             || std::mem::take(&mut self.keyframe_requested);
         self.sw_frame.set_pts(frame_pts);
         self.sw_frame.set_forced_keyframe(force_key);
