@@ -50,3 +50,11 @@ egui-winit = { version = "0.37", default-features = false, features = ["clipboar
 winit = { version = "0.30", default-features = false, features = ["wayland", "rwh_06"] }
 pollster = "0.4"
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
+
+# CI linkers ran out of space/memory on full debug info for the large test
+# binaries (ld: Bus error); line tables keep backtraces useful.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
