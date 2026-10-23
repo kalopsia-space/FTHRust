@@ -1,0 +1,8 @@
+{
+  "encoder_pref": "software",
+  "image_overlay_enabled": true,
+  "image_overlays": [
+    {"path": "${ROOT}/assets/fthr_logo.png", "enabled": true, "opacity": 100, "fit": "fit",
+     "rect": {"x": 0.76, "y": 0.04, "w": 0.2, "h": 0.24}}
+  ]
+}

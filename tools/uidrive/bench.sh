@@ -47,12 +47,13 @@ bench_up() {
   mkdir -p "$BENCH/home/.fthr" "$BENCH/clips" "$BENCH/shots" "$BENCH/logs"
   mkdir -m 700 "$BENCH/rt"
   # Seed settings: sounds off, clips under the bench, then the caller's file on top.
-  python3 - "$BENCH" "$SETTINGS" <<'PY'
+  # `${ROOT}` in the caller's file is the repository root.
+  python3 - "$BENCH" "$SETTINGS" "$ROOT" <<'PY'
 import json, sys, pathlib
-bench, extra = sys.argv[1], sys.argv[2]
+bench, extra, root = sys.argv[1], sys.argv[2], sys.argv[3]
 s = {"notification_sounds_enabled": False, "clips_directory": f"{bench}/clips"}
 if extra:
-    s.update(json.loads(pathlib.Path(extra).read_text()))
+    s.update(json.loads(pathlib.Path(extra).read_text().replace("${ROOT}", root)))
 pathlib.Path(bench, "home", ".fthr", "settings.json").write_text(json.dumps(s))
 PY
   case "$ENGINE" in

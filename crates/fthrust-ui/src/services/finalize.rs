@@ -301,6 +301,12 @@ pub fn apply(state: &mut AppState, outcome: &Outcome) {
         state.readiness.record_warning(&outcome.clip, w);
     }
     state.readiness.complete(&outcome.clip);
+    // The card's thumbnail and details were read from the base clip.
+    state.thumb_textures.remove(&outcome.clip);
+    state.thumb_meta.remove(&outcome.clip);
+    if state.library.upsert(&outcome.clip, false) {
+        state.library_dirty = true;
+    }
     state.library_dirty = true;
     if outcome.camera_failed {
         state.error_bar.push_error(

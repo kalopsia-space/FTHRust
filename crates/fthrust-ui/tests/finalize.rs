@@ -426,3 +426,25 @@ fn opening_a_finalizing_clip_is_refused() {
     );
     assert!(s.editor.is_none());
 }
+
+#[test]
+fn a_finalized_clip_gets_a_new_thumbnail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    let c = tmp.path().join("t.mp4");
+    std::fs::write(&c, b"x").unwrap();
+    s.readiness.engine_committed(&c, true);
+    s.thumb_meta.insert(c.clone(), Default::default());
+    finalize::apply(
+        &mut s,
+        &Outcome {
+            clip: c.clone(),
+            warnings: vec![],
+            camera_failed: false,
+        },
+    );
+    assert!(
+        !s.thumb_meta.contains_key(&c),
+        "the pre-burn thumbnail is dropped"
+    );
+}

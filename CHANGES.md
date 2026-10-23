@@ -2,6 +2,14 @@
 
 ## Fixed
 
+- Image layers and the webcam are burned into a saved clip in one re-encode (the reference re-encoded the whole clip once per overlay), with every audio track, its title and the audio manifest kept.
+- Webcam frames are placed at their capture times; the reference wrote them at a fixed 30 fps, so a 15 fps camera played at double speed and drifted.
+- An unreadable image layer is skipped with its own warning ("Image overlay could not be read: …") instead of failing every layer.
+- Cameras are listed with their V4L2 names (libavdevice) instead of "Camera 1…8" from probing OpenCV indices; the running camera is never reopened by a refresh.
+- Every Settings browse button works through the desktop file chooser portal; theme, font, icon and sound import failures show a message instead of only printing to the console. Custom icons are resized and stored without the reference's crop dialog.
+- The saved card's thumbnail refreshes after its overlays are burned in.
+- Gary mode draws on a click-through layer-shell surface (Qt's stay-on-top hints do nothing on Wayland).
+
 - Exports run in-process through FFmpeg's libraries instead of the `ffmpeg` command line; the same graphs, encoders and validation apply.
 - A sped-up export of several kept ranges keeps every range's video: speed now applies to each range's audio before the concat (the reference sped audio up after it, so `-shortest` cut the later ranges).
 - Ctrl+Q in the editor is only the quick crop: egui's built-in Ctrl+Q quit (which closed the whole app while a clip was still loading) and its Ctrl+plus/minus zoom are off.
