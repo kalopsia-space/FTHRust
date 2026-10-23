@@ -60,10 +60,30 @@ PY
     real) ENGINE_ENV="FTHR_CAPTURE_BACKEND=screencopy" ;;
     *) die "--engine must be synthetic or real" ;;
   esac
+  # A private session bus with NO service directories: nothing can be
+  # activated on it (no portal, no notification daemon), so portal calls
+  # fail at once and never reach the user's session.
   DBUS_ENV=""
   if command -v dbus-daemon >/dev/null 2>&1; then
-    DBUS_ADDR=$(dbus-daemon --session --fork --print-address --address="unix:path=$BENCH/rt/bus" 2>/dev/null || true)
-    [ -n "$DBUS_ADDR" ] && DBUS_ENV="DBUS_SESSION_BUS_ADDRESS=$DBUS_ADDR"
+    cat > "$BENCH/bus.conf" <<XML
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path=$BENCH/rt/bus</listen>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+    <allow user="*"/>
+  </policy>
+</busconfig>
+XML
+    DBUS_PID=$(env -i HOME="$BENCH/home" XDG_RUNTIME_DIR="$BENCH/rt" PATH="$PATH" \
+      dbus-daemon --config-file="$BENCH/bus.conf" --fork --print-pid 2>/dev/null || true)
+    if [ -n "$DBUS_PID" ]; then
+      echo "$DBUS_PID" > "$BENCH/dbus.pid"
+      DBUS_ENV="DBUS_SESSION_BUS_ADDRESS=unix:path=$BENCH/rt/bus"
+    fi
   fi
   if [ "$RENDERER" = auto ]; then
     if ls /dev/dri/renderD* >/dev/null 2>&1; then RENDERER=gles2; else RENDERER=pixman; fi
@@ -83,6 +103,7 @@ PY
     [ -s "$BENCH/ui.json" ] && break
     if ! kill -0 "$(cat "$BENCH/cage.pid")" 2>/dev/null; then
       tail -20 "$BENCH/logs/app.log" >&2
+      BENCH=$BENCH bench_down
       die "cage or the app exited before the first frame"
     fi
     sleep 0.1
@@ -108,7 +129,10 @@ bench_down() {
     kill -KILL "$pid" 2>/dev/null || true
     pkill -KILL -P "$pid" 2>/dev/null || true
   fi
-  [ -S "$b/rt/bus" ] && pkill -f "dbus-daemon.*$b/rt/bus" 2>/dev/null || true
+  if [ -f "$b/dbus.pid" ]; then
+    kill -TERM "$(cat "$b/dbus.pid")" 2>/dev/null || true
+    rm -f "$b/dbus.pid"
+  fi
   rm -f "$b/cage.pid"
 }
 
@@ -120,9 +144,12 @@ bench_run() {
   local out; out=$(bench_up "$@")
   eval "$out"
   export BENCH BENCH_SOCKET BENCH_APP
+  trap 'bench_down' EXIT
+  trap 'exit 130' INT TERM
   export PATH="$HERE/target/debug:$PATH"
   local code=0
   bash "$scenario" || code=$?
+  trap - EXIT
   bench_down
   echo "scenario exit $code (shots in $BENCH/shots, logs in $BENCH/logs)"
   exit $code

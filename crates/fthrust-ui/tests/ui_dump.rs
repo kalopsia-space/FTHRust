@@ -7,7 +7,7 @@ use fthrust_ui::fidelity::{Marker, TextRun};
 use fthrust_ui::fonts::Weight;
 use fthrust_ui::shell::error_bar::Level;
 use fthrust_ui::state::{AppState, DialogKind, Page};
-use fthrust_ui::ui_dump::{Writer, from_env, snapshot};
+use fthrust_ui::ui_dump::{WriteOutcome, Writer, from_env, snapshot};
 
 fn marker() -> Marker {
     Marker {
@@ -69,7 +69,7 @@ fn writer_is_atomic_and_skips_unchanged() {
     let mut w = Writer::new(path.clone());
     let state = AppState::for_tests(tmp.path(), serde_json::json!({}));
     let v1 = snapshot(&state, &[marker()], 1.0, 1, 0.0);
-    assert!(w.write(&v1).unwrap());
+    assert_eq!(w.write(&v1).unwrap(), WriteOutcome::Written);
     let back: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(back["frame"], 1);
     assert!(
@@ -77,20 +77,29 @@ fn writer_is_atomic_and_skips_unchanged() {
         "no temp file left behind"
     );
     let v1b = snapshot(&state, &[marker()], 1.0, 2, 1.0);
-    assert!(
-        !w.write(&v1b).unwrap(),
+    assert_eq!(
+        w.write(&v1b).unwrap(),
+        WriteOutcome::Unchanged,
         "same content apart from frame/time is skipped"
     );
     std::thread::sleep(Duration::from_millis(60));
     let mut changed = state;
     changed.status.text = "SAVING".into();
     let v2 = snapshot(&changed, &[marker()], 1.0, 3, 1.1);
-    assert!(w.write(&v2).unwrap());
+    assert_eq!(w.write(&v2).unwrap(), WriteOutcome::Written);
     changed.status.text = "SAVE FAILED".into();
     let v3 = snapshot(&changed, &[marker()], 1.0, 4, 1.12);
-    assert!(!w.write(&v3).unwrap(), "throttled within 50 ms");
+    let deferred = w.write(&v3).unwrap();
+    assert!(
+        matches!(deferred, WriteOutcome::Deferred(d) if d <= Duration::from_millis(50)),
+        "throttled within 50 ms: {deferred:?}"
+    );
     std::thread::sleep(Duration::from_millis(60));
-    assert!(w.write(&v3).unwrap());
+    assert_eq!(
+        w.write(&v3).unwrap(),
+        WriteOutcome::Written,
+        "the deferred value is written by the next call after the gap"
+    );
     let back: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(back["status"], "SAVE FAILED");
 }

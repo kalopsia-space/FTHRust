@@ -91,8 +91,11 @@ impl App {
             let markers = fidelity::take(ctx);
             let (ppp, time) = ctx.input(|i| (i.pixels_per_point(), i.time));
             let v = ui_dump::snapshot(&self.state, &markers, ppp, ctx.cumulative_pass_nr(), time);
-            if let Err(e) = w.write(&v) {
-                tracing::warn!(error = %e, "ui dump failed");
+            match w.write(&v) {
+                // Throttled: paint once more after the gap so the file catches up.
+                Ok(ui_dump::WriteOutcome::Deferred(after)) => ctx.request_repaint_after(after),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "ui dump failed"),
             }
         }
     }

@@ -69,6 +69,17 @@ pub fn snapshot(
     })
 }
 
+/// What a write did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOutcome {
+    /// Written.
+    Written,
+    /// Same content as the last write.
+    Unchanged,
+    /// Changed, but too soon: write again after this long.
+    Deferred(Duration),
+}
+
 /// Writes dumps atomically, skipping unchanged content and throttling.
 pub struct Writer {
     path: PathBuf,
@@ -98,23 +109,23 @@ impl Writer {
         }
     }
 
-    /// Writes `value` unless it is unchanged or too soon; `Ok(true)` when written.
-    pub fn write(&mut self, value: &Value) -> std::io::Result<bool> {
+    /// Writes `value` unless it is unchanged or too soon.
+    pub fn write(&mut self, value: &Value) -> std::io::Result<WriteOutcome> {
         let hash = content_hash(value);
         if self.last_hash == Some(hash) {
-            return Ok(false);
+            return Ok(WriteOutcome::Unchanged);
         }
         if let Some(t) = self.last_write
             && t.elapsed() < MIN_GAP
         {
-            return Ok(false);
+            return Ok(WriteOutcome::Deferred(MIN_GAP - t.elapsed()));
         }
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec(value)?)?;
         std::fs::rename(&tmp, &self.path)?;
         self.last_hash = Some(hash);
         self.last_write = Some(Instant::now());
-        Ok(true)
+        Ok(WriteOutcome::Written)
     }
 }
 
