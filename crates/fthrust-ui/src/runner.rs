@@ -47,6 +47,19 @@ struct Runner {
     error: Option<String>,
 }
 
+/// The app's egui context. egui's own Ctrl+Q quit and Ctrl+plus/minus
+/// zoom are off: Ctrl+Q is the editor's quick crop (egui closed the app
+/// whenever the editor skipped it, e.g. while a clip loads), and the
+/// reference has no keyboard zoom.
+pub fn new_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.options_mut(|o| {
+        o.quit_shortcuts.clear();
+        o.zoom_with_keyboard = false;
+    });
+    ctx
+}
+
 /// Runs the application until the window closes.
 pub fn run(
     state: AppState,
@@ -57,7 +70,7 @@ pub fn run(
         .build()
         .map_err(|e| e.to_string())?;
     let proxy: EventLoopProxy<Wake> = event_loop.create_proxy();
-    let ctx = egui::Context::default();
+    let ctx = new_context();
     {
         let proxy = proxy.clone();
         ctx.set_request_repaint_callback(move |info| {
@@ -171,6 +184,7 @@ impl Runner {
                 &mut actions,
             );
             if self.info.events.contains(&egui::ViewportEvent::Close) {
+                tracing::info!("window closed by the app");
                 el.exit();
                 return;
             }
@@ -255,7 +269,10 @@ impl ApplicationHandler<Wake> for Runner {
             }
         }
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::CloseRequested => {
+                tracing::info!("window close requested by the compositor");
+                el.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let (Some(p), Some(w), Some(h)) = (
                     self.painter.as_mut(),

@@ -1,0 +1,283 @@
+{
+ "schema": 1,
+ "screen": "share-window-ready",
+ "size": [
+  340,
+  242
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "swHdr",
+   "class": "QFrame",
+   "rect": [
+    0,
+    0,
+    340,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      170,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      19
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      170,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ]
+  },
+  {
+   "name": "QLabel[SHARE CLIP]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    0,
+    39,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      35,
+      19
+     ],
+     "rgb": "#7d8881",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      19
+     ],
+     "rgb": "#131816",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      35,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 8,
+    "content": "SHARE CLIP",
+    "px": 8,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 10,
+    "descent": 2,
+    "height": 12,
+    "leading": 0,
+    "line_spacing": 12,
+    "avg_char_width": 4,
+    "bounding_height": 12,
+    "bounding_width": 39,
+    "advance": 38
+   }
+  },
+  {
+   "name": "QLabel[Ready]",
+   "class": "QLabel",
+   "rect": [
+    271,
+    0,
+    17,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      279,
+      19
+     ],
+     "rgb": "#19815d",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      271,
+      19
+     ],
+     "rgb": "#1a8d65",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      279,
+      0
+     ],
+     "rgb": "#101512",
+     "token": "CARD_BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 7,
+    "content": "Ready",
+    "px": 7,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 8,
+    "descent": 2,
+    "height": 10,
+    "leading": 0,
+    "line_spacing": 10,
+    "avg_char_width": 4,
+    "bounding_height": 10,
+    "bounding_width": 17,
+    "advance": 17
+   }
+  },
+  {
+   "name": "QLabel[⊡  drag to share]",
+   "class": "QLabel",
+   "rect": [
+    0,
+    184,
+    340,
+    28
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      170,
+      198
+     ],
+     "rgb": "#58615b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      0,
+      198
+     ],
+     "rgb": "#080b0a",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      170,
+      184
+     ],
+     "rgb": "#080b0a",
+     "token": null
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 8,
+    "content": "⊡  drag to share",
+    "px": 8,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 10,
+    "descent": 2,
+    "height": 12,
+    "leading": 0,
+    "line_spacing": 12,
+    "avg_char_width": 4,
+    "bounding_height": 12,
+    "bounding_width": 52,
+    "advance": 52
+   }
+  },
+  {
+   "name": "QLabel[Overwatch_clip_share_12-00-00_0123abcd.m]",
+   "class": "QLabel",
+   "rect": [
+    14,
+    213,
+    142,
+    29
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      85,
+      227
+     ],
+     "rgb": "#5f6963",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      14,
+      227
+     ],
+     "rgb": "#0a0f0d",
+     "token": "SHELL_BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      85,
+      213
+     ],
+     "rgb": "#181f1b",
+     "token": "HAIRLINE"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 8,
+    "content": "Overwatch_clip_share_12-00-00_0123abcd.mp4",
+    "px": 8,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 10,
+    "descent": 2,
+    "height": 12,
+    "leading": 0,
+    "line_spacing": 12,
+    "avg_char_width": 4,
+    "bounding_height": 12,
+    "bounding_width": 139,
+    "advance": 139
+   }
+  }
+ ]
+}

@@ -5,6 +5,7 @@
 
 pub mod diagnostics;
 pub mod engine;
+pub mod export;
 pub mod focus;
 pub mod game;
 pub mod hotkey_client;
@@ -177,8 +178,6 @@ pub enum Request {
     ExportTheme,
     /// Preview a sound.
     PreviewSound(String),
-    /// Open the export jobs dialog.
-    ExportJobs,
     /// Toggle manual recording.
     ToggleRecording,
     /// Upload a clip.
@@ -1227,9 +1226,16 @@ impl Services {
         }
     }
 
-    /// The reference's exit order, part one: a running manual recording is
-    /// stopped and finalised (bounded) before anything else goes away.
+    /// The reference's exit order, part one: exports are cancelled (12 s
+    /// bound) and a running manual recording is stopped and finalised
+    /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
+        // `_perform_full_shutdown`: close the share windows (cancelling
+        // their exports), then cancel queued exports with a bounded wait.
+        crate::editor::share::close_all(state);
+        state
+            .export_queue
+            .shutdown(std::time::Duration::from_secs(12));
         if self.recording.state() == recording::RecordState::Recording {
             self.toggle_recording(state);
         }
@@ -1413,9 +1419,6 @@ fn collect_requests(state: &mut AppState) -> Vec<Request> {
     }
     if let Some(key) = state.sound_preview_requested.take() {
         out.push(Request::PreviewSound(key));
-    }
-    if std::mem::take(&mut state.export_jobs_requested) {
-        out.push(Request::ExportJobs);
     }
     if std::mem::take(&mut state.record_requested) {
         out.push(Request::ToggleRecording);

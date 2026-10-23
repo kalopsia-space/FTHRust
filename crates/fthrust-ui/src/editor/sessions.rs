@@ -18,6 +18,8 @@ use crate::state::{AppState, DialogKind, DialogResult, Page, SessionSummary};
 pub const MAX_SESSIONS: usize = 3;
 /// Dialog tag prefix of the delete confirmation.
 const DELETE_TAG: &str = "editor-delete:";
+/// Title of the export guards.
+const EXPORT_BUSY: &str = "Export in progress";
 
 /// One editor session.
 #[derive(Clone, Debug, PartialEq)]
@@ -315,11 +317,38 @@ fn imported_roots(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The Delete button: ownership check, then a confirmation.
+/// A share of the open clip is running (its window holds the editor).
+fn sharing_open_clip(state: &AppState) -> bool {
+    state
+        .editor
+        .as_ref()
+        .is_some_and(|e| state.active_shares.iter().any(|p| same_path(p, &e.path)))
+}
+
+/// Refuses leaving the editor while one of its shares runs. The
+/// reference's guard watched the viewer's own export thread; queued
+/// exports keep running while the user browses.
+fn refuse_while_sharing(state: &mut AppState, message: &str) -> bool {
+    if sharing_open_clip(state) {
+        state.dialogs.push_message(EXPORT_BUSY, message);
+        return true;
+    }
+    false
+}
+
+/// The Delete button: exports of this clip, ownership, then a
+/// confirmation.
 fn request_delete(state: &mut AppState) {
     let Some(path) = state.editor.as_ref().map(|e| e.path.clone()) else {
         return;
     };
+    if state.export_queue.active_for(&path) || sharing_open_clip(state) {
+        state.dialogs.push_message(
+            EXPORT_BUSY,
+            "Finish or cancel this clip\u{2019}s exports before deleting the source.",
+        );
+        return;
+    }
     let owned = state.library.clips_root.clone();
     if classify_media_path(&path, &owned, &imported_roots(state)) != Ownership::FthrOwned {
         state.dialogs.push_message(
@@ -391,13 +420,29 @@ pub fn service(state: &mut AppState) {
     let mut keep = Vec::new();
     for r in requests {
         match r {
-            EditorRequest::Park => park(state),
+            EditorRequest::Park => {
+                if !refuse_while_sharing(
+                    state,
+                    "Finish or cancel the export before minimizing this editor.",
+                ) {
+                    park(state);
+                }
+            }
             EditorRequest::Close => {
                 if let Some(i) = state.active_session {
                     close(state, i + 1);
                 }
             }
-            EditorRequest::Navigate(step) => navigate(state, step),
+            EditorRequest::Navigate(step) => {
+                if !refuse_while_sharing(
+                    state,
+                    "Finish or cancel the export before switching clips.",
+                ) {
+                    navigate(state, step);
+                }
+            }
+            EditorRequest::Export => super::export_ui::export_now(state),
+            EditorRequest::Share => super::share::open_picker(state),
             EditorRequest::DeleteClip => request_delete(state),
             other => keep.push(other),
         }

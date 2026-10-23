@@ -533,3 +533,132 @@ fn clip_editor() {
         shell::frame(ui, s);
     });
 }
+
+// ---------------------------------------------------------------------------
+// Export jobs window (`ui/export_jobs.py`): the render script's two tasks.
+
+fn export_jobs_state(with_tasks: bool) -> (tempfile::TempDir, AppState) {
+    use fthrust_media::export::Quality;
+    use fthrust_ui::services::export::TaskView;
+    let (tmp, s) = state();
+    if with_tasks {
+        let row = |id, name: &str, quality, status: &str, progress, done| TaskView {
+            id,
+            source: tmp.path().join(name),
+            output: tmp.path().join("Exported").join(name),
+            quality,
+            status: status.into(),
+            progress,
+            detail: String::new(),
+            done,
+        };
+        s.export_queue.insert_for_tests(row(
+            1,
+            "Overwatch_clip.mp4",
+            Quality::Quality,
+            "Exporting · software",
+            42.0,
+            false,
+        ));
+        s.export_queue.insert_for_tests(row(
+            2,
+            "Valorant_clip.mp4",
+            Quality::Fast,
+            "Completed",
+            100.0,
+            true,
+        ));
+    }
+    (tmp, s)
+}
+
+#[test]
+fn export_jobs() {
+    let (_tmp, s) = export_jobs_state(true);
+    check("export-jobs", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::dialogs::export_jobs::SIZE);
+        fthrust_ui::dialogs::export_jobs::draw(ui, s, rect);
+    });
+}
+
+#[test]
+fn export_jobs_empty() {
+    let (_tmp, s) = export_jobs_state(false);
+    check("export-jobs-empty", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::dialogs::export_jobs::SIZE);
+        fthrust_ui::dialogs::export_jobs::draw(ui, s, rect);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Share picker and windows (`ShareModeDialog`, `ShareWindow`).
+
+#[test]
+fn share_picker() {
+    let (_tmp, mut s) = editor_state();
+    let mut p = fthrust_core::export_presets::ExportPreset::builtin_discord();
+    p.preset_id = "clip-25-mb".into();
+    p.name = "Clip 25 MB".into();
+    p.target_size_mb = 25.0;
+    p.built_in = false;
+    fthrust_core::export_presets::ExportPresetStore::new(&s.paths)
+        .save(&p)
+        .unwrap();
+    fthrust_ui::editor::share::open_picker(&mut s);
+    check("share-picker", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::share::PICKER_SIZE);
+        fthrust_ui::editor::share::draw_picker(ui, s, rect);
+    });
+}
+
+fn share_window(
+    status: fthrust_ui::editor::share::ShareStatus,
+    line: &str,
+) -> (tempfile::TempDir, AppState) {
+    let (tmp, mut s) = editor_state();
+    s.share_windows
+        .push(fthrust_ui::editor::share::ShareWindow::for_tests(
+            "SHARE CLIP",
+            status,
+            line,
+        ));
+    (tmp, s)
+}
+
+fn check_share_window(screen: &str, status: fthrust_ui::editor::share::ShareStatus, line: &str) {
+    let (_tmp, s) = share_window(status, line);
+    check(screen, s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::share::WINDOW_SIZE);
+        fthrust_ui::editor::share::draw_window(ui, s, 0, rect);
+    });
+}
+
+#[test]
+fn share_window_exporting() {
+    use fthrust_ui::editor::share::ShareStatus;
+    check_share_window(
+        "share-window-exporting",
+        ShareStatus::Exporting,
+        "Preparing...",
+    );
+}
+
+#[test]
+fn share_window_ready() {
+    use fthrust_ui::editor::share::ShareStatus;
+    check_share_window(
+        "share-window-ready",
+        ShareStatus::Ready,
+        "Overwatch_clip_share_12-00-00_0123abcd.mp4",
+    );
+}
+
+#[test]
+fn share_window_failed() {
+    use fthrust_ui::editor::share::ShareStatus;
+    check_share_window(
+        "share-window-failed",
+        ShareStatus::Failed,
+        "FFmpeg exited with code 1",
+    );
+}

@@ -11,7 +11,7 @@ the navigation rail.
   fractions, trim handles, kept ranges, the hide-deleted display mapping,
   zoom and pan), snapshots with the 100-step undo stack, the draft codec
   with the reference's validation, speed presets, quick-crop scaling and
-  the label formats. Plan 6c's export reads the same model.
+  the label formats. The export (`docs/export.md`) reads the same model.
 - **Controller** (`fthrust_ui::editor::Editor`): one open clip. It builds
   the player on a worker thread, owns the edit state and the undo stack,
   and runs every timer from the `now_s` it is ticked with: the 50 ms scrub
@@ -56,12 +56,13 @@ Undo history is kept while a session is parked but is not persisted.
   "COLOR_EFFECTS" because `&` marks a mnemonic in button text.
 - Source rows of the audio mix are live as soon as the player is loaded.
 
-## Plan 6c
+## Export and share (plan 6c)
 
-Plan 6c adds the export and share flows behind the Export and Share
-buttons (the editor queues `EditorRequest::Export` / `Share` today), the
-export-jobs list, the delete check for running exports, and the live
-preview of crop, stretch and colour on the video surface.
+Export, Ctrl+E, Share and the Export jobs label are live; the video
+surface previews crop, stretch and colour. See `docs/export.md`. Deleting
+a clip with an export or share in flight is refused ("Export in
+progress"); leaving the editor is refused only while one of its shares
+runs.
 
 ## Tests
 

@@ -21,10 +21,13 @@ use serde_json::json;
 use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
 pub mod dialogs;
+pub mod export_ui;
 pub mod filmstrip;
 pub mod keys;
 pub mod layer;
+pub mod preview;
 pub mod sessions;
+pub mod share;
 pub mod sidebar;
 pub mod timeline_ui;
 
@@ -404,6 +407,14 @@ impl Editor {
         self.player
             .as_ref()
             .map(|p| p.sources().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Each track's `0:a:N` index, parallel to [`Editor::sources`].
+    pub fn source_audio_indexes(&self) -> Vec<Option<u32>> {
+        self.player
+            .as_ref()
+            .map(|p| p.audio_indexes().to_vec())
             .unwrap_or_default()
     }
 

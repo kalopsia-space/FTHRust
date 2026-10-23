@@ -410,6 +410,21 @@ pub struct AppState {
     pub sound_preview_requested: Option<String>,
     /// Open the export jobs dialog (plan 6).
     pub export_jobs_requested: bool,
+    /// The export queue (editor exports and shares).
+    pub export_queue: crate::services::export::ExportQueue,
+    /// Clips with a share export running (Task 6 windows).
+    pub active_shares: Vec<std::path::PathBuf>,
+    /// The "Exports" jobs window is open.
+    pub export_jobs_open: bool,
+    /// The jobs window's selected task.
+    pub export_jobs_selected: Option<crate::services::export::TaskId>,
+    /// The editor's "Export jobs" label and when it was computed (refreshed
+    /// once a second, `_update_export_jobs_status`).
+    pub export_jobs_label: Option<(String, f64)>,
+    /// The open share picker.
+    pub share_picker: Option<crate::editor::share::PickerState>,
+    /// Open share windows.
+    pub share_windows: Vec<crate::editor::share::ShareWindow>,
     /// Keyboard navigation bindings.
     pub nav: fthrust_core::navigation::NavigationBindings,
     /// Last binding error shown on the Shortcuts page.
@@ -653,6 +668,13 @@ impl AppState {
             theme_export_requested: false,
             sound_preview_requested: None,
             export_jobs_requested: false,
+            export_queue: crate::services::export::ExportQueue::new(),
+            active_shares: Vec::new(),
+            export_jobs_open: false,
+            export_jobs_selected: None,
+            export_jobs_label: None,
+            share_picker: None,
+            share_windows: Vec::new(),
             nav,
             shortcut_error: String::new(),
             shortcut_recording: None,
@@ -780,6 +802,7 @@ impl AppState {
             render_state,
             editor.player_mut().and_then(|p| p.take_frame()),
         ) {
+            crate::editor::preview::install(rs);
             self.editor_video
                 .get_or_insert_with(crate::video_texture::VideoTexture::new)
                 .update(rs, &frame);

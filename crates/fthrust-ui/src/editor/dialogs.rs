@@ -80,7 +80,12 @@ impl FrameState {
     }
 }
 
-fn decode(path: &Path, position_ms: u64, crop: Option<(u32, u32, u32, u32)>) -> Option<ColorImage> {
+/// One frame at `position_ms` (else the first), cropped.
+pub(crate) fn decode(
+    path: &Path,
+    position_ms: u64,
+    crop: Option<(u32, u32, u32, u32)>,
+) -> Option<ColorImage> {
     let f = fthrust_media::playback::video::frame_at(path, position_ms)
         .or_else(|_| fthrust_media::playback::video::frame_at(path, 0))
         .ok()?;

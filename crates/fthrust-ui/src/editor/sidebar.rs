@@ -40,11 +40,7 @@ pub const PANELS: [&str; 6] = [
     "FILE DETAILS",
 ];
 /// `QUALITY_OPTIONS`: label and `export_quality` value.
-pub const QUALITY_OPTIONS: [(&str, &str); 3] = [
-    ("Very fast", "fast"),
-    ("High quality", "quality"),
-    ("Lossless · MKV", "lossless"),
-];
+pub use fthrust_core::export::QUALITY_OPTIONS;
 const EFFECT_TITLES: [&str; 6] = [
     "Exposure",
     "Contrast",
@@ -378,6 +374,8 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
         19.0,
     );
     let jobs = ui.interact(r, ui.scope_id().with("exportJobs"), Sense::click());
+    let now = state.editor_now();
+    let jobs_text = super::export_ui::jobs_label_cached(state, now);
     let fg = if jobs.hovered() {
         Color::Accent
     } else {
@@ -389,7 +387,7 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
         ui,
         t,
         r,
-        "Export jobs",
+        &jobs_text,
         size::BODY,
         Weight::W400,
         fg,
@@ -397,6 +395,9 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
         "",
     );
     fidelity::mark(ui, "QPushButton[Export jobs]", r).done();
+    if jobs.clicked() {
+        state.export_jobs_open = true;
+    }
     if let Some(e) = state.editor.as_mut() {
         if share.clicked() {
             e.requests.push(EditorRequest::Share);

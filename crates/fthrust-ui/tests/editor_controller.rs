@@ -231,9 +231,26 @@ fn play_outside_kept_range_jumps_forward() {
     r.run(&mut e, 60);
     e.toggle_play(r.now());
     let target = e.timeline.kept_ranges_ms()[1].0;
-    r.run(&mut e, 100);
-    let p = e.player_position_ms().unwrap();
-    assert!((target..target + 150).contains(&p), "{p} from {target}");
+    let deleted_start = e.timeline.kept_ranges_ms()[0].1;
+    // Wait for the jump (slow CI runners apply the seek late), recording
+    // every position: none may fall inside the deleted range on the way.
+    let mut seen = Vec::new();
+    let mut p = 0;
+    for _ in 0..150 {
+        r.run(&mut e, 20);
+        p = e.player_position_ms().unwrap_or(0);
+        seen.push(p);
+        if p >= target {
+            break;
+        }
+    }
+    assert!((target..target + 300).contains(&p), "{p} from {target}");
+    let scrubbed = (0.375 * e.duration_ms() as f64) as u64;
+    assert!(
+        seen.iter()
+            .all(|&q| q <= scrubbed + 50 || q >= target || q < deleted_start),
+        "played through the deleted range: {seen:?}"
+    );
 }
 
 #[test]

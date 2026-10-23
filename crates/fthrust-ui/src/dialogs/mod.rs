@@ -4,6 +4,7 @@
 
 pub mod custom_clip_length;
 pub mod diagnostic_report;
+pub mod export_jobs;
 pub mod export_preset;
 
 use egui::{Pos2, Ui, Vec2};

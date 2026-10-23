@@ -10,6 +10,9 @@ use fthrust_media::playback::video::Frame;
 #[derive(Default)]
 pub struct VideoTexture {
     texture: Option<wgpu::Texture>,
+    /// A non-sRGB view: the preview shader grades gamma-encoded values,
+    /// as the reference's shader does.
+    view_unorm: Option<wgpu::TextureView>,
     id: Option<egui::TextureId>,
     size: Option<(u32, u32)>,
 }
@@ -28,6 +31,11 @@ impl VideoTexture {
     /// The loaded frame's size.
     pub fn size(&self) -> Option<(u32, u32)> {
         self.size
+    }
+
+    /// The frame as gamma-encoded `Rgba8Unorm` (the preview shader's input).
+    pub fn view_unorm(&self) -> Option<&wgpu::TextureView> {
+        self.view_unorm.as_ref()
     }
 
     /// The wgpu texture (for readback tests).
@@ -65,9 +73,13 @@ impl VideoTexture {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.view_unorm = Some(texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(wgpu::TextureFormat::Rgba8Unorm),
+                ..Default::default()
+            }));
             let id = rs.renderer.write().register_native_texture(
                 &rs.device,
                 &view,
@@ -107,6 +119,7 @@ impl VideoTexture {
             rs.renderer.write().free_texture(&id);
         }
         self.texture = None;
+        self.view_unorm = None;
         self.size = None;
     }
 }

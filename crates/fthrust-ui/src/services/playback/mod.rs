@@ -432,6 +432,8 @@ pub struct PlaybackService {
     preserve_pitch: bool,
     master_percent: u8,
     sources: Vec<(String, SourceState)>,
+    /// Each source's `0:a:N` index (`None`: not an audio stream).
+    audio_indexes: Vec<Option<u32>>,
     last_frame_pts: Option<u64>,
     eof_reported: bool,
     /// The audio ran out before the video: the wall clock carries the rest.
@@ -477,6 +479,16 @@ impl PlaybackService {
                 .collect(),
             None => default_audio_spec(path).into_iter().collect(),
         };
+        let order = fthrust_media::playback::audio_stream_indexes(path);
+        let audio_indexes: Vec<Option<u32>> = specs
+            .iter()
+            .map(|s| {
+                order
+                    .iter()
+                    .position(|&i| i == s.container_index)
+                    .map(|n| n as u32)
+            })
+            .collect();
         let sources: Vec<(String, SourceState)> = specs
             .iter()
             .map(|s| (s.source_id.clone(), SourceState::default()))
@@ -547,6 +559,7 @@ impl PlaybackService {
             preserve_pitch: true,
             master_percent: 100,
             sources,
+            audio_indexes,
             last_frame_pts: None,
             eof_reported: false,
             audio_ended: false,
@@ -720,6 +733,12 @@ impl PlaybackService {
     /// The tracks and their states.
     pub fn sources(&self) -> &[(String, SourceState)] {
         &self.sources
+    }
+
+    /// Each track's `0:a:N` index for export, parallel to
+    /// [`PlaybackService::sources`].
+    pub fn audio_indexes(&self) -> &[Option<u32>] {
+        &self.audio_indexes
     }
 
     fn push_mix(&self) {

@@ -89,3 +89,18 @@ def test_editor_variants(rendered):
     for screen in ('clip-editor-sidebar', 'clip-editor-timeline', 'clip-editor-crop',
                    'clip-editor-stretch', 'clip-editor-rail'):
         assert (rendered / f'{screen}.png').exists(), screen
+
+
+def test_export_screens(rendered):
+    def texts(screen):
+        return [(w.get('text') or {}).get('content', '') for w in load(rendered, screen)['widgets']]
+
+    jobs = texts('export-jobs')
+    assert 'Cancel selected' in jobs and 'Open output folder' in jobs
+    assert any('Exporting · software' in t for t in jobs), jobs
+    assert 'No export jobs yet. Start an export from a clip.' in texts('export-jobs-empty')
+    picker = texts('share-picker')
+    assert 'Share as' in picker and '10 MB  ·  Discord' in picker, picker
+    for state, badge in (('exporting', 'Exporting...'), ('ready', 'Ready'), ('failed', 'Failed')):
+        window = texts(f'share-window-{state}')
+        assert 'SHARE CLIP' in window and badge in window, (state, window)
