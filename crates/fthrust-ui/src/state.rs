@@ -228,6 +228,8 @@ pub struct SessionSummary {
     pub number: usize,
     /// Clip file stem.
     pub stem: String,
+    /// Clip file name (tooltip).
+    pub file_name: String,
 }
 
 /// A connected monitor (plan 5 fills these from the engine).
@@ -448,6 +450,31 @@ pub struct AppState {
     pub card_feedback: std::collections::HashMap<std::path::PathBuf, (String, f64)>,
     /// Open a clip in the editor (plan 6 consumes).
     pub open_clip_requested: Option<std::path::PathBuf>,
+    /// The active clip editor; while set it covers the window.
+    pub editor: Option<crate::editor::Editor>,
+    /// The active editor's video frame texture.
+    pub editor_video: Option<crate::video_texture::VideoTexture>,
+    /// Builds editor players (`None`: PipeWire output and the wall clock).
+    pub editor_factory: Option<crate::editor::PlayerFactory>,
+    /// Editor sessions, active and parked (the rail shows `editor_sessions`).
+    pub editor_slots: Vec<crate::editor::sessions::Session>,
+    /// The session `editor` belongs to.
+    pub active_session: Option<usize>,
+    /// The editor's open crop or stretch dialog.
+    pub editor_dialog: Option<crate::editor::dialogs::EditorDialog>,
+    /// Resume playback when the dialog closes.
+    pub editor_resume_after_dialog: bool,
+    /// Editor sidebar panels open (speed, edit tools, audio mix, colour,
+    /// clip details, file details).
+    pub editor_panels: [bool; 6],
+    /// Editor sidebar scroll offset.
+    pub editor_sidebar_scroll: f32,
+    /// The active editor's filmstrip frames.
+    pub editor_filmstrip: Vec<egui::TextureHandle>,
+    /// Clip tags, descriptions and editor drafts (opened on first use).
+    pub clip_metadata: Option<fthrust_core::clip_metadata::ClipMetadataStore>,
+    /// Origin of the editor's clock (`editor_now`).
+    pub editor_clock: std::time::Instant,
     /// Open a screenshot (plan 6 consumes).
     pub open_screenshot_requested: Option<std::path::PathBuf>,
     /// Upload a clip (plan 7 consumes).
@@ -646,6 +673,18 @@ impl AppState {
             thumb_requested: std::collections::HashSet::new(),
             card_feedback: std::collections::HashMap::new(),
             open_clip_requested: None,
+            editor: None,
+            editor_video: None,
+            editor_factory: None,
+            editor_slots: Vec::new(),
+            active_session: None,
+            editor_dialog: None,
+            editor_resume_after_dialog: false,
+            editor_panels: [true, true, true, false, false, false],
+            editor_sidebar_scroll: 0.0,
+            editor_filmstrip: Vec::new(),
+            clip_metadata: None,
+            editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,
             upload_requested: None,
             show_in_file_manager_requested: None,
@@ -706,6 +745,44 @@ impl AppState {
         }
         if let Err(e) = self.settings.save() {
             tracing::warn!("settings not saved: {e}");
+        }
+    }
+}
+
+impl AppState {
+    /// Seconds on the editor's clock: every editor timer and UI event uses it.
+    pub fn editor_now(&self) -> f64 {
+        self.editor_clock.elapsed().as_secs_f64()
+    }
+
+    /// Ticks the active editor (timers, player, draft) and uploads its
+    /// newest video frame when a render state exists.
+    pub fn tick_editor(&mut self, render_state: Option<&egui_wgpu::RenderState>) {
+        if self.editor.is_none() {
+            return;
+        }
+        if self.clip_metadata.is_none() {
+            match fthrust_core::clip_metadata::ClipMetadataStore::open(&self.paths) {
+                Ok(store) => self.clip_metadata = Some(store),
+                Err(e) => {
+                    tracing::warn!(error = %e, "clip metadata store unavailable");
+                    return;
+                }
+            }
+        }
+        let now = self.editor_now();
+        let (Some(editor), Some(store)) = (self.editor.as_mut(), self.clip_metadata.as_mut())
+        else {
+            return;
+        };
+        editor.tick(now, &mut self.settings, store);
+        if let (Some(rs), Some(frame)) = (
+            render_state,
+            editor.player_mut().and_then(|p| p.take_frame()),
+        ) {
+            self.editor_video
+                .get_or_insert_with(crate::video_texture::VideoTexture::new)
+                .update(rs, &frame);
         }
     }
 }

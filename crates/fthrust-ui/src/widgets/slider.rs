@@ -20,7 +20,8 @@ pub fn settings_slider(
     slider(ui, t, value, range, 12.0, geom::RADIUS_SM, 26.0, name)
 }
 
-/// Editor variant: 10 px r6 handle.
+/// Editor variant: a square 10 px handle (the QSS asks for r6, which Qt
+/// drops on a handle that small; the reference draws a square).
 pub fn editor_slider(
     ui: &mut Ui,
     t: &Tokens,
@@ -28,7 +29,7 @@ pub fn editor_slider(
     range: RangeInclusive<f32>,
     name: &str,
 ) -> Response {
-    slider(ui, t, value, range, 10.0, geom::RADIUS, 26.0, name)
+    slider(ui, t, value, range, 10.0, 0.0, 26.0, name)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -88,10 +89,11 @@ fn slider(
         .sample(
             "fill",
             Pos2::new(rect.min.x + 1.0, cy),
+            // At the minimum the handle covers the groove's first pixels.
             if frac > 0.0 {
                 Color::Accent
             } else {
-                Color::Border
+                handle_color
             },
         )
         .done();

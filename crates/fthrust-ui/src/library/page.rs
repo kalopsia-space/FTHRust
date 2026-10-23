@@ -265,6 +265,11 @@ pub fn triggered_actions(
                     modifiers,
                     ..
                 } => Some(chord(*modifiers, *key, tab_held)),
+                // egui-winit turns the clipboard chords into these events and
+                // sends no key event for them.
+                egui::Event::Copy => Some("Ctrl+C".to_owned()),
+                egui::Event::Cut => Some("Ctrl+X".to_owned()),
+                egui::Event::Paste(_) => Some("Ctrl+V".to_owned()),
                 _ => None,
             })
             .collect()

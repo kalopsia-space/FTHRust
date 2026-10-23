@@ -84,8 +84,17 @@ pub fn ui(ui: &mut Ui, state: &mut AppState, rect: Rect) -> RailResponse {
             s.number,
             elide_stem(ui, &s.stem, btn.x - 16.0)
         );
-        let name = format!("editorSidebarButton[{}]", s.number);
-        let resp = ui.interact(r, ui.scope_id().with(&name), Sense::click());
+        let name = format!("editorSidebarButton[{}]", label.replace('\n', " "));
+        let resp = ui
+            .interact(
+                r,
+                ui.scope_id().with(("editorSidebarButton", s.number)),
+                Sense::click(),
+            )
+            .on_hover_text(format!(
+                "{}\nPaused — click to restore\nRight-click to close",
+                s.file_name
+            ));
         draw_tool_button(
             ui,
             &t,
@@ -100,9 +109,12 @@ pub fn ui(ui: &mut Ui, state: &mut AppState, rect: Rect) -> RailResponse {
         if resp.clicked() {
             out.editor = Some(s.number);
         }
-        if resp.secondary_clicked() {
-            out.close_editor = Some(s.number);
-        }
+        resp.context_menu(|ui| {
+            if ui.button("Close editor").clicked() {
+                out.close_editor = Some(s.number);
+                ui.close();
+            }
+        });
         y += btn.y + 12.0;
     }
     ui.allocate_rect(rect, Sense::hover());

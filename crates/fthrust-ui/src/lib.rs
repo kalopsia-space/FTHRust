@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 
 pub mod dialogs;
+pub mod editor;
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
@@ -61,6 +62,7 @@ impl App {
         if let Some(services) = self.services.as_mut() {
             services.tick(&mut self.state);
         }
+        self.state.tick_editor(self.render_state.as_ref());
     }
 
     /// One frame.
@@ -110,6 +112,7 @@ impl App {
 
     /// The reference's shutdown order, then the window geometry is saved.
     pub fn on_exit(&mut self) {
+        editor::sessions::shutdown(&mut self.state);
         if let Some(mut services) = self.services.take() {
             services.prepare_exit(&mut self.state);
             services.shutdown();

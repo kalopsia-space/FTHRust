@@ -393,6 +393,143 @@ fn record_hover() {
     assert_fidelity!(r, "record-hover", &tokens, &ctx);
 }
 
+/// The editor as the Qt render shows it: a 10 s clip, play queued.
+fn editor_state() -> (tempfile::TempDir, AppState) {
+    let (tmp, mut s) = state();
+    s.editor = Some(fthrust_ui::editor::Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        10_000,
+        fthrust_ui::editor::Lifecycle::PlayQueued,
+    ));
+    (tmp, s)
+}
+
 #[test]
-#[ignore = "plan 6 (editor): clip-editor"]
-fn clip_editor() {}
+fn clip_editor_covers_every_widget() {
+    let (_tmp, mut s) = editor_state();
+    let tokens = s.tokens.clone();
+    let r = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    let qt = fthrust_ui::fidelity::QtScreen::load("clip-editor").unwrap();
+    let missing: Vec<&str> = qt
+        .widgets
+        .iter()
+        .map(|w| w.name.as_str())
+        .filter(|n| !n.starts_with("qt_scrollarea"))
+        .filter(|n| r.marker(n).is_none())
+        .collect();
+    assert!(missing.is_empty(), "no marker for {missing:?}");
+}
+
+#[test]
+fn clip_editor_sidebar() {
+    let (_tmp, mut s) = editor_state();
+    {
+        let e = s.editor.as_mut().unwrap();
+        e.set_source_rows_for_tests(vec![
+            ("desktop".into(), "Desktop".into()),
+            ("mic".into(), "Mic".into()),
+        ]);
+    }
+    s.editor_panels = [true; 6];
+    check("clip-editor-sidebar", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(280.0, 2160.0));
+        fthrust_ui::editor::sidebar::ui(ui, rect, s);
+    });
+}
+
+#[test]
+fn clip_editor_rail() {
+    let (tmp, mut s) = state();
+    s.status = StatusText {
+        text: "Connecting".into(),
+        style: StatusStyle::Idle,
+    };
+    // The Qt render had the engine's failure notice showing.
+    s.error_bar.push(
+        "CAPTURE FAILED",
+        "The compositor stopped answering",
+        Level::Error,
+        vec![Action {
+            label: "RESTART ENGINE".into(),
+            id: "restart".into(),
+        }],
+        None,
+        true,
+    );
+    for (n, name) in ["Overwatch_clip.mp4", "Valorant_clip.mp4"]
+        .iter()
+        .enumerate()
+    {
+        let path = tmp.path().join(name);
+        s.editor_slots.push(fthrust_ui::editor::sessions::Session {
+            path: path.clone(),
+            state: None,
+        });
+        s.editor_sessions.push(fthrust_ui::state::SessionSummary {
+            number: n + 1,
+            stem: name.trim_end_matches(".mp4").into(),
+            file_name: (*name).into(),
+        });
+    }
+    check("clip-editor-rail", s, |ui, s| {
+        shell::frame(ui, s);
+    });
+}
+
+/// The editor with a dialog open on a clip whose frame cannot be decoded
+/// (the Qt renders show that state).
+fn editor_dialog(request: fthrust_ui::editor::EditorRequest) -> (tempfile::TempDir, AppState) {
+    let (tmp, mut s) = editor_state();
+    s.editor.as_mut().unwrap().requests.push(request);
+    fthrust_ui::editor::dialogs::service(&mut s);
+    let ctx = egui::Context::default();
+    fthrust_ui::editor::dialogs::wait_frame(&ctx, &mut s);
+    (tmp, s)
+}
+
+#[test]
+fn clip_editor_crop() {
+    let (_tmp, s) = editor_dialog(fthrust_ui::editor::EditorRequest::OpenCrop);
+    check("clip-editor-crop", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::dialogs::CROP_SIZE);
+        fthrust_ui::editor::dialogs::draw_crop(ui, s, rect);
+    });
+}
+
+#[test]
+fn clip_editor_stretch() {
+    let (_tmp, s) = editor_dialog(fthrust_ui::editor::EditorRequest::OpenStretch);
+    check("clip-editor-stretch", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::editor::dialogs::STRETCH_SIZE);
+        fthrust_ui::editor::dialogs::draw_stretch(ui, s, rect);
+    });
+}
+
+#[test]
+fn clip_editor_timeline() {
+    let (_tmp, mut s) = editor_state();
+    {
+        let e = s.editor.as_mut().unwrap();
+        e.timeline.split_at(0.3);
+        e.timeline.split_at(0.6);
+        e.timeline.selected = 1;
+        e.timeline.toggle_selected();
+        e.timeline.playhead = 0.45;
+        e.timeline.set_zoom(1.25, None);
+        e.segments_changed();
+    }
+    check("clip-editor-timeline", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1160.0, 198.0));
+        fthrust_ui::editor::timeline_ui::ui(ui, rect, s);
+    });
+}
+
+#[test]
+fn clip_editor() {
+    let (_tmp, s) = editor_state();
+    check("clip-editor", s, |ui, s| {
+        shell::frame(ui, s);
+    });
+}

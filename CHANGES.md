@@ -2,6 +2,9 @@
 
 ## Fixed
 
+- The editor's "Ready" status clears after 900 ms as intended (the reference compared it to "READY" and never cleared it).
+- The editor's Color & Effects panel title shows "COLOR & EFFECTS" instead of Qt's mnemonic rendering "COLOR_EFFECTS".
+
 - Screenshots go through the Screenshot portal, so the hotkey no longer produces black images on Wayland.
 - Game detection and focus pause work on Wayland through the compositor's toplevel list instead of `xdotool`.
 - Manual recording works on Linux (the reference disabled the button there).
@@ -51,6 +54,8 @@
 - Clip saves carry one AAC track per captured source, labelled `Default Mix` and `Microphone`, and report which tracks were written.
 
 ## Added
+
+- Clip editor (`docs/editor.md`): timeline with splits, deleted segments, trim handles, zoom, minimap and filmstrip; undo and redo; drafts in `clip_metadata.sqlite3`; speed with pitch preservation, quick crop, crop and stretch dialogs, audio mix, colour and effect values, clip and file details, delete; up to three parked sessions in the rail; clip navigation and the editor keyboard shortcuts. The editor is a layer inside the one window; the reference's basic viewer (editor disabled) is not ported.
 
 - Playback pipeline for the editor (`docs/playback.md`): per-track mixer with `atempo` rate change, keyframe-aware video decoder, the seek-proxy cache for long-GOP clips, the playback service with the PipeWire audio clock and the reference's sync rule, and the wgpu video texture.
 

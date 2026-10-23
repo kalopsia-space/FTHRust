@@ -68,3 +68,24 @@ def test_text_metrics_present(rendered):
     brand = next(w for w in data['widgets'] if w.get('text', {}).get('content') == 'FTHR Clips')
     assert brand['text']['px'] == 17 and brand['text']['weight'] == 700
     assert brand['text']['height'] > 0
+
+
+def test_editor_variants(rendered):
+    def names(screen):
+        return [w['name'] for w in load(rendered, screen)['widgets']]
+
+    assert 'audioMixName#3' in names('clip-editor-sidebar'), 'MASTER plus two source rows'
+    danger = [w for w in load(rendered, 'clip-editor-timeline')['widgets']
+              if w['name'] == 'timelineActionDanger']
+    assert danger and danger[0]['text']['content'] == 'RESTORE SEGMENT'
+    # The dump lists a root's children, never the root: the dialogs are
+    # identified by their accept buttons and their default sizes.
+    assert 'QPushButton[Apply crop]' in names('clip-editor-crop')
+    assert load(rendered, 'clip-editor-crop')['size'] == [900, 580]
+    assert 'stretchDialogApply' in names('clip-editor-stretch')
+    assert load(rendered, 'clip-editor-stretch')['size'] == [760, 540]
+    rail = [n for n in names('clip-editor-rail') if n.startswith('editorSidebarButton')]
+    assert len(rail) == 2, rail
+    for screen in ('clip-editor-sidebar', 'clip-editor-timeline', 'clip-editor-crop',
+                   'clip-editor-stretch', 'clip-editor-rail'):
+        assert (rendered / f'{screen}.png').exists(), screen
