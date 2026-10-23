@@ -178,8 +178,6 @@ pub enum Request {
     ExportTheme,
     /// Preview a sound.
     PreviewSound(String),
-    /// Open the export jobs dialog.
-    ExportJobs,
     /// Toggle manual recording.
     ToggleRecording,
     /// Upload a clip.
@@ -260,7 +258,6 @@ pub struct Services {
     portal_cleared: std::collections::BTreeSet<String>,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
-    export: export::ExportQueue,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
     test_commands: Option<Vec<Command>>,
@@ -327,7 +324,6 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
-            export: export::ExportQueue::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: None,
@@ -544,7 +540,6 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
-            export: export::ExportQueue::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: Some(Vec::new()),
@@ -1231,17 +1226,14 @@ impl Services {
         }
     }
 
-    /// The export queue (editor exports and shares).
-    pub fn export_queue(&self) -> &export::ExportQueue {
-        &self.export
-    }
-
     /// The reference's exit order, part one: exports are cancelled (12 s
     /// bound) and a running manual recording is stopped and finalised
     /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
         // `_perform_full_shutdown`: cancel exports, bounded wait.
-        self.export.shutdown(std::time::Duration::from_secs(12));
+        state
+            .export_queue
+            .shutdown(std::time::Duration::from_secs(12));
         if self.recording.state() == recording::RecordState::Recording {
             self.toggle_recording(state);
         }
@@ -1425,9 +1417,6 @@ fn collect_requests(state: &mut AppState) -> Vec<Request> {
     }
     if let Some(key) = state.sound_preview_requested.take() {
         out.push(Request::PreviewSound(key));
-    }
-    if std::mem::take(&mut state.export_jobs_requested) {
-        out.push(Request::ExportJobs);
     }
     if std::mem::take(&mut state.record_requested) {
         out.push(Request::ToggleRecording);

@@ -322,6 +322,16 @@ impl ExportQueue {
         self.shared.run(ticket, job, cancel, on_status, on_progress)
     }
 
+    /// Adds a finished-looking record without a worker (fixtures).
+    #[doc(hidden)]
+    pub fn insert_for_tests(&self, view: TaskView) {
+        self.shared.lock().records.push(Record {
+            view,
+            cancel: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        });
+    }
+
     /// Snapshots, oldest first.
     pub fn tasks(&self) -> Vec<TaskView> {
         self.shared

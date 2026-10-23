@@ -533,3 +533,59 @@ fn clip_editor() {
         shell::frame(ui, s);
     });
 }
+
+// ---------------------------------------------------------------------------
+// Export jobs window (`ui/export_jobs.py`): the render script's two tasks.
+
+fn export_jobs_state(with_tasks: bool) -> (tempfile::TempDir, AppState) {
+    use fthrust_media::export::Quality;
+    use fthrust_ui::services::export::TaskView;
+    let (tmp, s) = state();
+    if with_tasks {
+        let row = |id, name: &str, quality, status: &str, progress, done| TaskView {
+            id,
+            source: tmp.path().join(name),
+            output: tmp.path().join("Exported").join(name),
+            quality,
+            status: status.into(),
+            progress,
+            detail: String::new(),
+            done,
+        };
+        s.export_queue.insert_for_tests(row(
+            1,
+            "Overwatch_clip.mp4",
+            Quality::Quality,
+            "Exporting · software",
+            42.0,
+            false,
+        ));
+        s.export_queue.insert_for_tests(row(
+            2,
+            "Valorant_clip.mp4",
+            Quality::Fast,
+            "Completed",
+            100.0,
+            true,
+        ));
+    }
+    (tmp, s)
+}
+
+#[test]
+fn export_jobs() {
+    let (_tmp, s) = export_jobs_state(true);
+    check("export-jobs", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::dialogs::export_jobs::SIZE);
+        fthrust_ui::dialogs::export_jobs::draw(ui, s, rect);
+    });
+}
+
+#[test]
+fn export_jobs_empty() {
+    let (_tmp, s) = export_jobs_state(false);
+    check("export-jobs-empty", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, fthrust_ui::dialogs::export_jobs::SIZE);
+        fthrust_ui::dialogs::export_jobs::draw(ui, s, rect);
+    });
+}

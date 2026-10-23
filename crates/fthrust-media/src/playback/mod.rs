@@ -31,3 +31,18 @@ pub fn best_audio_stream(path: &std::path::Path) -> Option<usize> {
     let stream = ictx.streams().best(ffmpeg_next::media::Type::Audio)?;
     Some(stream.index())
 }
+
+/// Container indexes of every audio stream, in order (`0:a:N` is the
+/// N-th of these).
+pub fn audio_stream_indexes(path: &std::path::Path) -> Vec<usize> {
+    if crate::init().is_err() {
+        return Vec::new();
+    }
+    let Ok(ictx) = ffmpeg_next::format::input(path) else {
+        return Vec::new();
+    };
+    ictx.streams()
+        .filter(|s| s.parameters().medium() == ffmpeg_next::media::Type::Audio)
+        .map(|s| s.index())
+        .collect()
+}
