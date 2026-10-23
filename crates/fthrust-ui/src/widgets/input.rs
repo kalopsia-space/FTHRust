@@ -23,6 +23,8 @@ pub struct LineEditOpts {
     pub placeholder: String,
     /// Read-only (BROWSE fields).
     pub read_only: bool,
+    /// Masked input.
+    pub password: bool,
 }
 
 impl Default for LineEditOpts {
@@ -32,6 +34,7 @@ impl Default for LineEditOpts {
             width: None,
             placeholder: String::new(),
             read_only: false,
+            password: false,
         }
     }
 }
@@ -75,6 +78,7 @@ pub fn line_edit_with(
         .margin(egui::Margin::ZERO)
         .align(egui::Align2::LEFT_CENTER)
         .interactive(opts.enabled && !opts.read_only)
+        .password(opts.password)
         .hint_text(
             egui::RichText::new(&opts.placeholder)
                 .font(fonts::id(size::BODY, Weight::W400))

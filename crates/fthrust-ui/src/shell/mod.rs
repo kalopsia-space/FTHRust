@@ -101,6 +101,7 @@ pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
     crate::editor::keys::handle(ui.ctx(), state);
     crate::editor::sessions::service(state);
     crate::services::browse::service(state);
+    crate::settings::upload::service(state, ui.ctx().input(|i| i.time));
     crate::editor::dialogs::service(state);
     if state.editor.is_some() {
         let out = crate::editor::layer::ui(ui, state);

@@ -421,6 +421,7 @@ impl SaveService {
                 if state.library.upsert(&path, false) {
                     state.library_dirty = true;
                 }
+                state.saved_clips.push(path.clone());
                 if let Some(saved) = saved
                     && let Some(err) = &saved.audio_error
                 {

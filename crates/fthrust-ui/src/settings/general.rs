@@ -259,26 +259,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         Vec2::new(w - 12.0, f32::INFINITY),
     )));
     up.spacing_mut().item_spacing = Vec2::ZERO;
-    section::flat_header(&mut up, &t, "Upload", "Upload");
-    space(&mut up, 12.0);
-    checkbox_setting(
-        &mut up,
-        state,
-        "upload_enabled",
-        false,
-        "Enable optional clip uploader",
-    );
-    space(&mut up, 16.0);
-    if support_button(
-        &mut up,
-        &t,
-        "Support Catbox hosting",
-        "QPushButton[Support Catbox hosting]",
-    )
-    .clicked()
-    {
-        crate::shell::open_url("https://catbox.moe/support.php");
-    }
+    super::upload::ui_with(&mut up, state, w - 12.0, &support_button);
     let upload_h = up.cursor().min.y - upload_top.y + 32.0;
     ui.allocate_exact_size(Vec2::new(w, upload_h), egui::Sense::hover());
     space(ui, 24.0);

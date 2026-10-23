@@ -35,6 +35,7 @@ fn data() -> CardData {
         uploaded: false,
         upload_link: None,
         upload_enabled: true,
+        uploading: false,
         ready: true,
         feedback: None,
         thumbnail: None,

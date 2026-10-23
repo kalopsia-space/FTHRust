@@ -19,6 +19,7 @@
 //! | `window_geometry` | `main_window_geometry` persistence and restore |
 //! | `capture_config` / `save_state` / `capture_health` / `recovery_tracker` | pure capture state machines |
 //! | `diagnostics` | `logs/fthr.log`, `logs/fthr-crash.log`, `diagnostics/` sessions |
+//! | `upload` | `uploader/settings.json`, `uploader/upload_history.json`, consent, validation |
 //! | `paths` / `atomic_json` | the `~/.fthr` path map and atomic JSON writes |
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -54,6 +55,7 @@ pub mod single_instance;
 pub mod theme;
 pub mod thumbnails;
 pub mod transactional_output;
+pub mod upload;
 pub mod window_geometry;
 
 pub use atomic_json::{read_json, write_json_atomic};

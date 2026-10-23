@@ -36,6 +36,8 @@ pub struct CardData {
     pub upload_link: Option<String>,
     /// The uploader is on.
     pub upload_enabled: bool,
+    /// Queued or uploading right now.
+    pub uploading: bool,
     /// Accessible (else `Finalizing`).
     pub ready: bool,
     /// Transient feedback text.
@@ -59,6 +61,111 @@ pub struct CardResponse {
     pub hovered: bool,
     /// Right-clicked (context menu).
     pub context_menu: bool,
+    /// A context-menu entry was chosen.
+    pub menu: Option<MenuItem>,
+}
+
+/// The share button's state (`_update_share_action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShareAction {
+    /// Accessible name.
+    pub label: &'static str,
+    /// Tooltip.
+    pub tooltip: &'static str,
+    /// Clickable.
+    pub enabled: bool,
+    /// Copies a link (else uploads).
+    pub link: bool,
+}
+
+/// The share button for `d`, or `None` when the card has none (a
+/// screenshot without a link).
+pub fn share_action(d: &CardData) -> Option<ShareAction> {
+    let link = d.upload_link.as_deref();
+    if !d.is_video && link.is_none() {
+        return None;
+    }
+    Some(match link {
+        Some(l) if l.starts_with("sftp://") => ShareAction {
+            label: "Copy SFTP location",
+            tooltip: "Copy SFTP location (requires an SFTP client and login)",
+            enabled: d.ready,
+            link: true,
+        },
+        Some(_) => ShareAction {
+            label: "Copy link",
+            tooltip: "Copy link",
+            enabled: d.ready,
+            link: true,
+        },
+        None if !d.upload_enabled => ShareAction {
+            label: "Upload clip",
+            tooltip: "Enable the uploader in Settings to upload this clip",
+            enabled: false,
+            link: false,
+        },
+        None => ShareAction {
+            label: "Upload clip",
+            tooltip: "Upload clip",
+            enabled: d.ready && !d.uploading,
+            link: false,
+        },
+    })
+}
+
+/// One entry of the card's context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    /// Open in the editor.
+    Open,
+    /// Inline rename.
+    Rename,
+    /// Reveal in the file manager.
+    ShowInFileManager,
+    /// Copy the file path.
+    CopyPath,
+    /// Upload (the settings label promises it; the reference never had it).
+    Upload,
+    /// Open the uploaded web link.
+    OpenLink,
+    /// Open the SFTP location.
+    OpenSftp,
+    /// Delete.
+    Delete,
+}
+
+impl MenuItem {
+    /// The menu text.
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuItem::Open => "Open in editor",
+            MenuItem::Rename => "Rename",
+            MenuItem::ShowInFileManager => "Show in file manager",
+            MenuItem::CopyPath => "Copy path",
+            MenuItem::Upload => "Upload",
+            MenuItem::OpenLink => "Open uploaded link",
+            MenuItem::OpenSftp => "Open SFTP location",
+            MenuItem::Delete => "Delete clip",
+        }
+    }
+}
+
+/// The context menu of `d` (`_show_context_menu`), in order.
+pub fn menu_items(d: &CardData) -> Vec<MenuItem> {
+    let mut v = vec![
+        MenuItem::Open,
+        MenuItem::Rename,
+        MenuItem::ShowInFileManager,
+        MenuItem::CopyPath,
+    ];
+    match d.upload_link.as_deref() {
+        Some(l) if l.starts_with("sftp://") => v.push(MenuItem::OpenSftp),
+        Some(_) => v.push(MenuItem::OpenLink),
+        None if d.is_video && d.upload_enabled && !d.uploading => v.push(MenuItem::Upload),
+        None => {}
+    }
+    v.push(MenuItem::Delete);
+    v
 }
 
 /// `m:ss` for the duration badge, `--:--` when unknown.
@@ -276,6 +383,19 @@ pub fn card(
     }
     if thumb_resp.secondary_clicked() && !busy {
         out.context_menu = true;
+    }
+    if !busy {
+        thumb_resp.context_menu(|ui| {
+            for item in menu_items(d) {
+                if item == MenuItem::Delete {
+                    ui.separator();
+                }
+                if ui.button(item.label()).clicked() {
+                    out.menu = Some(item);
+                    ui.close();
+                }
+            }
+        });
     }
     // Duration badge (videos): bottom-right, 10 from the right, 8 from the bottom.
     if d.is_video {
@@ -508,11 +628,12 @@ pub fn card(
         Pos2::new(share_rect.max.x + 8.0, btn_y),
         Vec2::new(48.0, 52.0),
     );
-    let has_link = d.upload_link.is_some();
-    let share_enabled = d.ready && (has_link || (d.is_video && d.upload_enabled));
-    let show_share = d.is_video || has_link;
-    if show_share {
-        let icon = if has_link { Icon::Link } else { Icon::Upload };
+    if let Some(action) = share_action(d) {
+        let icon = if action.link {
+            Icon::Link
+        } else {
+            Icon::Upload
+        };
         let r = icon_button(
             ui,
             t,
@@ -525,10 +646,14 @@ pub fn card(
             Color::Accent,
             Color::Bg,
             Color::Accent,
-            share_enabled,
+            action.enabled,
             "cardShareBtn",
             name,
         );
+        let r = r.on_hover_text(action.tooltip);
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, action.enabled, action.label)
+        });
         if r.clicked() {
             out.share_clicked = true;
         }

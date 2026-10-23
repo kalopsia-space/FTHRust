@@ -9,6 +9,7 @@ pub mod customize;
 pub mod general;
 pub mod performance;
 pub mod shortcuts;
+pub mod upload;
 pub mod visuals;
 
 use egui::{Align, Color32, CornerRadius, Pos2, Rect, Ui, Vec2};

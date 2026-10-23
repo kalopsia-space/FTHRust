@@ -14,6 +14,8 @@ thiserror = "2"
 regex = "1"
 md-5 = "0.11"
 sha2 = "0.11"
+idna = "1"
+base64 = "0.22"
 rusqlite = { version = "0.40", features = ["bundled"] }
 zip = "9"
 tempfile = "3"
@@ -24,7 +26,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 nix = { version = "0.31", features = ["fs", "user", "poll", "signal", "time"] }
-time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal", "process"] }
 wayland-client = { version = "0.31", features = ["dlopen"] }
@@ -41,6 +43,17 @@ notify = "8"
 crossbeam-channel = "0.5"
 libc = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-util = { version = "0.7", features = ["io"] }
+bytes = "1"
+russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
+keyring-core = "1"
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+getrandom = "0.3"
+hmac = "0.13"
+sha1 = "0.11"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }

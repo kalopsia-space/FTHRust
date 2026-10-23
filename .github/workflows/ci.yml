@@ -21,6 +21,7 @@ jobs:
           WGPU_BACKEND: vulkan
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
+      - run: tools/check-upload-isolation.sh
 
   uidrive:
     runs-on: ubuntu-latest
@@ -32,12 +33,13 @@ jobs:
       # Release: a debug UI rasterised by llvmpipe on the runner's few cores
       # takes seconds per frame on first page visits and misses the
       # scenarios' 5 s waits.
-      - run: cargo build --release -p fthrust-ui -p fthrust-engine
+      - run: cargo build --release -p fthrust-ui -p fthrust-engine -p fthrust-uploader
       - run: cd tools/uidrive && cargo build
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/save_clip.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/export.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/overlays.sh --release --renderer pixman --settings tools/uidrive/overlays-settings.json
+      - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/upload.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -126,9 +126,24 @@ pub fn ui(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     // Content height. When it does not fit, Qt first squeezes the combos
     // from their 38 px hint to their 36 px minimum, then scrolls.
     let panels = state.editor_panels;
+    // The Upload button only exists while uploads are on.
+    let upload_h = if crate::services::upload::uploader_enabled(state) {
+        38.0 + SPACING
+    } else {
+        0.0
+    };
     let natural = |quality: f32, speed: f32| -> (f32, [f32; 6]) {
-        let mut y =
-            MARGIN_Y + 42.0 + SPACING + quality + SPACING + 38.0 + SPACING + 19.0 + SPACING + 6.0;
+        let mut y = MARGIN_Y
+            + 42.0
+            + SPACING
+            + quality
+            + SPACING
+            + 38.0
+            + SPACING
+            + 19.0
+            + SPACING
+            + upload_h
+            + 6.0;
         let mut panel_y = [0.0f32; 6];
         for (i, py) in panel_y.iter_mut().enumerate() {
             *py = y;
@@ -310,6 +325,23 @@ fn label(
     }
 }
 
+/// The editor's Upload button (`upload_btn`): hidden while uploads are
+/// off, `Queued` and disabled for 2.5 s after a click. The reference fixed
+/// its visibility when the editor opened.
+pub fn upload_button(
+    enabled: bool,
+    queued_until: Option<f64>,
+    now: f64,
+) -> Option<(&'static str, bool)> {
+    if !enabled {
+        return None;
+    }
+    Some(match queued_until {
+        Some(t) if now < t => ("Queued", false),
+        _ => ("Upload", true),
+    })
+}
+
 fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
     let t = c.t;
     let r = c.rect(0.0, MARGIN_Y, c.w, 42.0);
@@ -397,6 +429,33 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
     fidelity::mark(ui, "QPushButton[Export jobs]", r).done();
     if jobs.clicked() {
         state.export_jobs_open = true;
+    }
+    let now = state.editor_now();
+    let enabled = crate::services::upload::uploader_enabled(state);
+    if let Some((text, active)) = upload_button(enabled, state.editor_upload_queued_until, now) {
+        let r = c.rect(
+            0.0,
+            MARGIN_Y + 42.0 + c.quality_h + 38.0 + 19.0 + 4.0 * SPACING,
+            c.w,
+            38.0,
+        );
+        let upload = button(
+            ui,
+            t,
+            r,
+            text,
+            "uploadBtn",
+            size::BODY_L,
+            (Some(Color::Surface3), Some(Color::Border), Color::Text),
+            (Some(Color::Border), Some(Color::BorderHi), None),
+            active,
+        );
+        if upload.clicked()
+            && let Some(e) = state.editor.as_ref()
+        {
+            state.upload_requested = Some(e.path.clone());
+            state.editor_upload_queued_until = Some(now + 2.5);
+        }
     }
     if let Some(e) = state.editor.as_mut() {
         if share.clicked() {

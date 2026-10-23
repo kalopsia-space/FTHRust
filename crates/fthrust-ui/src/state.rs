@@ -162,6 +162,14 @@ pub enum DialogKind {
         /// ZIP path.
         zip: std::path::PathBuf,
     },
+    /// The uploader's Terms and Privacy Policy (two checkboxes).
+    UploadConsent,
+    /// Catbox's policies; `context` says what asked (`enable`, `save`,
+    /// `test`, `provider:<previous id>`).
+    CatboxConsent {
+        /// What to continue or undo afterwards.
+        context: String,
+    },
 }
 
 /// A dialog outcome handed back to the shell.
@@ -185,6 +193,15 @@ pub enum DialogResult {
     ClipLength(Option<u32>),
     /// Export preset saved.
     ExportPreset(Option<fthrust_core::export_presets::ExportPreset>),
+    /// The uploader consent dialog closed (accepted or not).
+    UploadConsent(bool),
+    /// The Catbox consent dialog closed.
+    CatboxConsent {
+        /// Accepted.
+        accepted: bool,
+        /// The context it was opened with.
+        context: String,
+    },
 }
 
 /// Pending dialogs: one modal at a time, messages stack.
@@ -498,6 +515,28 @@ pub struct AppState {
     pub open_screenshot_requested: Option<std::path::PathBuf>,
     /// Upload a clip (plan 7 consumes).
     pub upload_requested: Option<std::path::PathBuf>,
+    /// `~/.fthr/uploader/settings.json`.
+    pub uploader_settings: fthrust_core::upload::settings::UploaderSettings,
+    /// `~/.fthr/uploader/upload_history.json` (reloaded when it changes).
+    pub upload_history: fthrust_core::upload::history::History,
+    /// Card overlays of clips being uploaded (`Uploading…`).
+    pub upload_status: std::collections::HashMap<std::path::PathBuf, String>,
+    /// Clips the engine committed since the last tick (immediate uploads).
+    pub saved_clips: Vec<std::path::PathBuf>,
+    /// The upload settings form (loaded from the uploader settings).
+    pub upload_form: Option<crate::settings::upload::UploadForm>,
+    /// The consent dialogs' checkboxes.
+    pub consent_checks: [bool; 2],
+    /// The uploader program (`None`: not installed).
+    pub uploader_exe: Option<std::path::PathBuf>,
+    /// Read the clipboard after this frame (VaultScope paste).
+    pub clipboard_read_requested: bool,
+    /// Clipboard text read for the request above.
+    pub clipboard_paste: Option<String>,
+    /// The editor's Upload button shows `Queued` until this time.
+    pub editor_upload_queued_until: Option<f64>,
+    /// Library path → the resolved path the upload history is keyed by.
+    pub upload_keys: std::collections::HashMap<std::path::PathBuf, std::path::PathBuf>,
     /// Show a file in the file manager (plan 5 services consume).
     pub show_in_file_manager_requested: Option<std::path::PathBuf>,
     /// Scrolling settled: the last wheel/drag time.
@@ -583,7 +622,18 @@ pub enum CaptureProfile {
 impl AppState {
     /// Loads settings and theme from `paths`.
     pub fn load(paths: FthrPaths) -> fthrust_core::Result<AppState> {
-        let settings = SettingsStore::load(paths.clone())?;
+        let mut settings = SettingsStore::load(paths.clone())?;
+        // Pre-extension upload keys move to the uploader's own file.
+        let _ = fthrust_core::upload::history::History::migrate_legacy(&paths);
+        let mut uploader_settings = fthrust_core::upload::settings::UploaderSettings::load(&paths);
+        if fthrust_core::upload::settings::migrate_legacy_core_keys(
+            &mut settings,
+            &mut uploader_settings,
+        ) {
+            let _ = uploader_settings.save(&paths);
+            let _ = settings.save();
+        }
+        let upload_history = fthrust_core::upload::history::History::load(&paths);
         let mut tokens = theme::load(&paths);
         tokens.reduce_motion = settings.get_bool("reduce_ui_animations").unwrap_or(false);
         let error_bar = crate::shell::error_bar::ErrorBarState::new(
@@ -715,6 +765,17 @@ impl AppState {
             editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,
             upload_requested: None,
+            uploader_settings,
+            upload_history,
+            upload_status: std::collections::HashMap::new(),
+            saved_clips: Vec::new(),
+            upload_keys: std::collections::HashMap::new(),
+            editor_upload_queued_until: None,
+            upload_form: None,
+            consent_checks: [false; 2],
+            uploader_exe: crate::services::upload::uploader_exe(),
+            clipboard_read_requested: false,
+            clipboard_paste: None,
             show_in_file_manager_requested: None,
             library_last_scroll: -10.0,
             diagnostics: None,

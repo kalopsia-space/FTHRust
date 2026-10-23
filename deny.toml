@@ -3,7 +3,10 @@ unmaintained = "all"
 # zbus 5.x sub-crates are marked unmaintained in favour of zbus 6, but
 # ashpd 0.13 (the only portal crate) pins zbus ^5. Revisit when ashpd 0.14
 # lands on zbus 6.
-ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
+# RUSTSEC-2023-0071 (rsa, Marvin timing attack) concerns private-key
+# operations; the uploader only verifies RSA host-key signatures and logs in
+# with a password, so it never decrypts or signs with an RSA key.
+ignore = ["RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372", "RUSTSEC-2023-0071"]
 
 [licenses]
 allow = [
@@ -23,6 +26,7 @@ allow = [
     "WTFPL",
     "Apache-2.0 WITH LLVM-exception",
     "OFL-1.1",
+    "CDLA-Permissive-2.0",
     "Ubuntu-font-1.0",
     "CC0-1.0",
 ]

@@ -8,7 +8,7 @@ use egui::{Align, Color32, CornerRadius, Pos2, Rect, Sense, Ui, Vec2};
 use fthrust_core::library_index::{Filter, MediaKind, Sort};
 use fthrust_core::library_ownership::{Ownership, classify_media_path};
 
-use super::card::{CardData, card};
+use super::card::{CardData, MenuItem, card};
 use super::layout::{GRID_SPACING, H_MARGIN, SECTION_SPACING, card_height, metrics};
 use super::thumbs::ThumbImage;
 use crate::fidelity;
@@ -172,7 +172,51 @@ fn imported_roots(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+const UPLOADING_BUSY: &str = "This clip is uploading. Try again when the upload finishes.";
+
+/// The upload history's key for a library path (the uploader records the
+/// resolved path), cached.
+fn upload_key(state: &mut AppState, path: &Path) -> PathBuf {
+    if let Some(k) = state.upload_keys.get(path) {
+        return k.clone();
+    }
+    let k = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    state.upload_keys.insert(path.to_path_buf(), k.clone());
+    k
+}
+
+/// The card's share button: copy the link, or ask for an upload.
+pub fn on_share(
+    state: &mut AppState,
+    ctx: &egui::Context,
+    path: &Path,
+    now: f64,
+    link: Option<&str>,
+) {
+    let feedback = match link {
+        Some(l) => {
+            ctx.copy_text(l.to_owned());
+            if l.starts_with("sftp://") {
+                "SFTP location copied"
+            } else {
+                "Link copied"
+            }
+        }
+        None => {
+            state.upload_requested = Some(path.to_path_buf());
+            "Upload requested"
+        }
+    };
+    state
+        .card_feedback
+        .insert(path.to_path_buf(), (feedback.into(), now + 2.0));
+}
+
 fn delete_clip(state: &mut AppState, path: &Path) {
+    if state.upload_status.contains_key(path) {
+        state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
+        return;
+    }
     let imports = imported_roots(state);
     let owned = state.library.clips_root.clone();
     let result = match classify_media_path(path, &owned, &imports) {
@@ -197,9 +241,30 @@ fn delete_clip(state: &mut AppState, path: &Path) {
 }
 
 fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
+    if state.upload_status.contains_key(path) {
+        state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
+        return;
+    }
+    let old_key = upload_key(state, path);
     match fthrust_core::audio_manifest::rename_clip(path, stem) {
         Ok(new_path) => {
             if new_path != path {
+                // Keep the returned link attached to the renamed clip.
+                state.upload_keys.remove(path);
+                let new_key = upload_key(state, &new_path);
+                let mut moved = false;
+                match fthrust_core::upload::history::History::update(&state.paths, |h| {
+                    moved = h.rename(&old_key, &new_key);
+                }) {
+                    Ok(h) if moved => state.upload_history = h,
+                    Ok(_) => {}
+                    Err(e) => state.dialogs.push_message(
+                        "Clip renamed",
+                        format!(
+                            "The file was renamed, but its saved metadata could not be updated: {e}"
+                        ),
+                    ),
+                }
                 state.library.rename(path, &new_path);
                 if let Some((m, d)) = state.thumb_meta.remove(path) {
                     state.thumb_meta.insert(new_path.clone(), (m, d));
@@ -412,7 +477,8 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let mut content_h = 0.0f32;
     let mut rename_commit: Option<(PathBuf, String)> = None;
     let mut delete_req: Option<PathBuf> = None;
-    let mut share_req: Option<PathBuf> = None;
+    let mut share_req: Option<(PathBuf, Option<String>)> = None;
+    let mut menu_req: Option<(PathBuf, MenuItem, String, Option<String>)> = None;
     let mut open_req: Option<PathBuf> = None;
     // Up/Down (keyboard navigation) queued a one-row step last frame.
     let kb_id = egui::Id::unique("library-kb-scroll");
@@ -566,6 +632,10 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             .iter()
                             .any(|r| r.path == *path && r.imported);
                         let ready = state.readiness.can_access(path);
+                        let key = upload_key(state, path);
+                        let link = state.upload_history.link(&key).map(|l| l.url);
+                        let uploaded = state.upload_history.is_uploaded(&key);
+                        let upload_status = state.upload_status.get(path).cloned();
                         let data = CardData {
                             path: path.clone(),
                             title: super::model::title_from_path(path),
@@ -577,11 +647,13 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             },
                             is_video,
                             imported,
-                            uploaded: false,
-                            upload_link: None,
-                            upload_enabled: state.flag("upload_enabled", false),
+                            uploaded,
+                            upload_link: link,
+                            upload_enabled: crate::services::upload::uploader_enabled(state),
+                            uploading: upload_status.is_some(),
                             ready,
-                            feedback: state.card_feedback.get(path).map(|(f, _)| f.clone()),
+                            feedback: upload_status
+                                .or_else(|| state.card_feedback.get(path).map(|(f, _)| f.clone())),
                             thumbnail,
                         };
                         let mut editing = match &state.rename_draft {
@@ -611,7 +683,15 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             delete_req = Some(path.clone());
                         }
                         if resp.share_clicked {
-                            share_req = Some(path.clone());
+                            share_req = Some((path.clone(), data.upload_link.clone()));
+                        }
+                        if let Some(item) = resp.menu {
+                            menu_req = Some((
+                                path.clone(),
+                                item,
+                                data.title.clone(),
+                                data.upload_link.clone(),
+                            ));
                         }
                         if resp.opened {
                             open_req = Some(path.clone());
@@ -637,6 +717,21 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         ui.ctx().request_repaint();
     }
     state.visible_cards = visible;
+    if let Some((path, item, title, link)) = menu_req {
+        match item {
+            MenuItem::Open => open_req = Some(path),
+            MenuItem::Rename => state.rename_draft = Some((path, title)),
+            MenuItem::ShowInFileManager => state.show_in_file_manager_requested = Some(path),
+            MenuItem::CopyPath => ui.ctx().copy_text(path.to_string_lossy().into_owned()),
+            MenuItem::Upload => on_share(state, ui.ctx(), &path, now, None),
+            MenuItem::OpenLink | MenuItem::OpenSftp => {
+                if let Some(l) = link {
+                    crate::shell::open_url(&l);
+                }
+            }
+            MenuItem::Delete => delete_req = Some(path),
+        }
+    }
     if let Some((path, stem)) = rename_commit {
         state.rename_draft = None;
         let imports = imported_roots(state);
@@ -683,11 +778,8 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             });
         }
     }
-    if let Some(path) = share_req {
-        state
-            .card_feedback
-            .insert(path.clone(), ("Upload requested".into(), now + 2.0));
-        state.upload_requested = Some(path);
+    if let Some((path, link)) = share_req {
+        on_share(state, ui.ctx(), &path, now, link.as_deref());
     }
     if let Some(path) = open_req {
         if fthrust_core::clip_files::is_completed_video_path(&path) {

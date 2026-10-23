@@ -41,6 +41,7 @@ pixman for CI with lavapipe).
 | `shot [name]` | grim → `shots/NNN-name.png`, prints the path |
 | `find QUERY [--nth N] [--all]` | `x y w h text` of a marker (exact name, then exact text, then name prefix) |
 | `click TARGET [--button right] [--double] [--nth N]`, `move`, `drag FROM TO [--steps N]` | virtual pointer; TARGET is a marker or `x,y` |
+| `scroll TARGET DY` | wheel over a marker or `x,y` (positive DY scrolls down) |
 | `key CHORD`, `type TEXT` | virtual keyboard (`Ctrl+Shift+S`, `F9`, `Escape`; US layout) |
 | `wait QUERY [--gone] [--timeout S]`, `wait-text TEXT`, `wait-status TEXT` | poll the dump for a frame newer than now |
 | `state [--json]`, `log [--engine] [-n N]`, `hotkey ACTION` | inspect; deliver a hotkey through the app's own client |

@@ -22,6 +22,7 @@ pub mod save;
 pub mod screenshot;
 pub mod sounds;
 pub mod status;
+pub mod upload;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -270,6 +271,7 @@ pub struct Services {
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
     finalizer: finalize::Finalizer,
+    upload: upload::UploadService,
     camera: camera::CameraService,
     mic_level: Option<mic_level::MicLevel>,
     mic_level_retry: f64,
@@ -343,6 +345,7 @@ impl Services {
             active_config: None,
             epoch: std::time::Instant::now(),
             finalizer: finalize::Finalizer::new(),
+            upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
             mic_level_retry: 0.0,
@@ -566,6 +569,7 @@ impl Services {
             active_config: None,
             epoch: std::time::Instant::now(),
             finalizer: finalize::Finalizer::new(),
+            upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
             mic_level_retry: 0.0,
@@ -959,6 +963,12 @@ impl Services {
             for outcome in self.finalizer.poll() {
                 finalize::apply(state, &outcome);
             }
+            self.upload.tick(state, now);
+            if self.upload.busy() {
+                self.outbox
+                    .ctx
+                    .request_repaint_after(std::time::Duration::from_millis(250));
+            }
             // Nothing else wakes the UI for these: the heartbeat ticks
             // services without painting.
             if self.finalizer.busy() {
@@ -1160,7 +1170,8 @@ impl Services {
         let transient = self
             .recording
             .transient_status(now)
-            .or_else(|| self.save.transient_status(now));
+            .or_else(|| self.save.transient_status(now))
+            .or_else(|| self.upload.transient_status(now));
         match transient {
             Some(t) => {
                 state.status = t;
@@ -1243,6 +1254,8 @@ impl Services {
                     }
                 }
             }
+            Request::ErrorAction(id) if self.upload.error_action(state, &id) => {}
+            Request::Upload(path) => self.upload.enqueue(state, path),
             Request::ErrorAction(id) => match id.as_str() {
                 "restart" | "restart-capture" => {
                     if let Some(d) = &self.engine
@@ -1424,6 +1437,7 @@ impl Services {
         // their exports), then cancel queued exports with a bounded wait.
         crate::editor::share::close_all(state);
         self.finalizer.shutdown(std::time::Duration::from_secs(5));
+        self.upload.shutdown();
         self.camera.shutdown();
         self.gary = None;
         self.mic_level = None;
