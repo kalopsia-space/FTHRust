@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use uidrive::dump::{self, Dump, Marker};
 
@@ -84,22 +84,18 @@ fn wait_ignores_frames_before_the_action() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("ui.json");
     std::fs::write(&path, serde_json::to_vec(&dump()).unwrap()).unwrap();
+    // A stale frame (5) that does not satisfy the predicate never counts.
     let err = dump::wait(
         &path,
-        |d| d.status == "CAPTURING",
-        Duration::from_millis(300),
+        |d| d.status == "SAVING",
+        Duration::from_millis(400),
         Some(5),
         "status",
     )
     .unwrap_err();
     assert!(err.contains("timed out"), "{err}");
-    let p2 = path.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
-        let mut d = dump();
-        d.frame = 6;
-        std::fs::write(&p2, serde_json::to_vec(&d).unwrap()).unwrap();
-    });
+    // A stale frame that satisfies it counts only after the grace period.
+    let t0 = Instant::now();
     let d = dump::wait(
         &path,
         |d| d.status == "CAPTURING",
@@ -108,5 +104,30 @@ fn wait_ignores_frames_before_the_action() {
         "status",
     )
     .unwrap();
+    assert_eq!(d.frame, 5);
+    assert!(
+        t0.elapsed() >= Duration::from_millis(240),
+        "{:?}",
+        t0.elapsed()
+    );
+    // A newer frame is taken at once.
+    let p2 = path.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        let mut d = dump();
+        d.frame = 6;
+        d.status = "SAVING".into();
+        std::fs::write(&p2, serde_json::to_vec(&d).unwrap()).unwrap();
+    });
+    let t0 = Instant::now();
+    let d = dump::wait(
+        &path,
+        |d| d.status == "SAVING",
+        Duration::from_secs(2),
+        Some(5),
+        "status",
+    )
+    .unwrap();
     assert_eq!(d.frame, 6);
+    assert!(t0.elapsed() < Duration::from_millis(700));
 }

@@ -97,7 +97,9 @@ pub fn find<'a>(d: &'a Dump, query: &str, nth: usize) -> Option<&'a Marker> {
 }
 
 /// Polls the dump every 50 ms until `pred` holds on a frame newer than
-/// `after_frame`, or `timeout` passes.
+/// `after_frame`, or `timeout` passes. An action that changes nothing on
+/// screen produces no new frame: after a 250 ms grace with no newer frame
+/// the current one is judged as it stands.
 pub fn wait(
     path: &Path,
     pred: impl Fn(&Dump) -> bool,
@@ -105,16 +107,20 @@ pub fn wait(
     after_frame: Option<u64>,
     what: &str,
 ) -> Result<Dump, String> {
-    let deadline = Instant::now() + timeout;
+    let start = Instant::now();
+    let deadline = start + timeout;
+    let grace = Duration::from_millis(250);
     let mut last: Option<Dump> = None;
     loop {
-        if let Ok(d) = read(path)
-            && after_frame.is_none_or(|f| d.frame > f)
-        {
-            if pred(&d) {
+        if let Ok(d) = read(path) {
+            let newer = after_frame.is_none_or(|f| d.frame > f);
+            let settled = !newer && start.elapsed() >= grace && after_frame == Some(d.frame);
+            if (newer || settled) && pred(&d) {
                 return Ok(d);
             }
-            last = Some(d);
+            if newer || settled {
+                last = Some(d);
+            }
         }
         if Instant::now() >= deadline {
             let seen = last
