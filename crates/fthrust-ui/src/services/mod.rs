@@ -5,6 +5,8 @@
 
 pub mod diagnostics;
 pub mod engine;
+pub mod focus;
+pub mod game;
 pub mod hotkey_client;
 pub mod hotkeys;
 pub mod instance;
@@ -124,6 +126,10 @@ pub enum Event {
     PortalShortcutsBound(Vec<(String, String)>),
     /// The GlobalShortcuts portal failed.
     PortalShortcutsFailed(String),
+    /// The compositor's toplevel list.
+    Toplevels(Vec<fthrust_wayland::toplevels::Toplevel>),
+    /// Whether the toplevel protocol is available.
+    GameDetectionAvailability(bool),
 }
 
 impl PartialEq for ScanEvent {
@@ -185,6 +191,10 @@ pub enum Request {
     HotkeysChanged,
     /// Restart with the recording quality profile.
     RestartForRecording(fthrust_ipc::EngineConfig),
+    /// Pause capture (focus lost).
+    PauseCapture,
+    /// Resume capture (focus regained).
+    ResumeCapture,
     /// Stop everything.
     Shutdown,
 }
@@ -224,6 +234,9 @@ pub struct Services {
     recording: recording::RecordingService,
     screenshot: screenshot::ScreenshotService,
     hotkey_server: Option<hotkeys::HotkeyServer>,
+    game: game::GameFlow,
+    focus: focus::FocusMonitor,
+    detector: Option<game::GameDetector>,
     portal: Option<portal_shortcuts::PortalShortcuts>,
     portal_active: bool,
     portal_requested: std::collections::BTreeMap<String, String>,
@@ -272,6 +285,9 @@ impl Services {
             recording: recording::RecordingService::new(),
             screenshot: screenshot::ScreenshotService::new(),
             hotkey_server: None,
+            game: game::GameFlow::default(),
+            focus: focus::FocusMonitor::default(),
+            detector: None,
             portal: None,
             portal_active: false,
             portal_requested: std::collections::BTreeMap::new(),
@@ -297,7 +313,45 @@ impl Services {
                 )));
         }
         services.start_hotkeys(state);
+        services.start_game_detection();
         services
+    }
+
+    /// Starts the toplevel reader (availability is reported as an event).
+    fn start_game_detection(&mut self) {
+        let outbox = self.outbox.clone();
+        match fthrust_wayland::toplevels::ToplevelWatcher::connect() {
+            Ok(w) => self.detector = Some(game::GameDetector::start(Box::new(w), outbox)),
+            Err(e) => {
+                tracing::info!(error = %e, "toplevel list unavailable");
+                outbox.send(Event::GameDetectionAvailability(false));
+            }
+        }
+    }
+
+    fn run_game_actions(&mut self, state: &mut AppState, actions: Vec<game::GameAction>) {
+        for a in actions {
+            match a {
+                game::GameAction::Card(c) => self.show_card(state, c),
+                game::GameAction::Restart => self.dispatch(Request::RestartEngine, state),
+            }
+        }
+    }
+
+    fn sync_focus_target(&mut self, state: &AppState) {
+        let enabled = state
+            .settings
+            .get_bool("anticheat_detection_enabled")
+            .unwrap_or(false)
+            && state.settings.get_str("capture_mode") == Some("window");
+        let target = enabled.then(|| {
+            state
+                .settings
+                .get_str("target_window_name")
+                .unwrap_or("")
+                .to_owned()
+        });
+        self.focus.set_target(target.as_deref());
     }
 
     /// Starts hotkey delivery: the private socket, the compositor binds
@@ -391,6 +445,9 @@ impl Services {
             recording: recording::RecordingService::new(),
             screenshot: screenshot::ScreenshotService::new(),
             hotkey_server: None,
+            game: game::GameFlow::default(),
+            focus: focus::FocusMonitor::default(),
+            detector: None,
             portal: None,
             portal_active: false,
             portal_requested: std::collections::BTreeMap::new(),
@@ -771,6 +828,50 @@ impl Services {
                         );
                     }
                 }
+                Event::Toplevels(snapshot) => {
+                    self.sync_focus_target(state);
+                    let was_paused = self.focus.paused();
+                    let change = self.focus.observe(&snapshot);
+                    let actions = self.game.on_snapshot(state, snapshot, now);
+                    self.run_game_actions(state, actions);
+                    // Switching sources changes the focus target.
+                    self.sync_focus_target(state);
+                    match change {
+                        Some(focus::FocusChange::Lost) => {
+                            self.dispatch(Request::PauseCapture, state);
+                            state.status = StatusText {
+                                text: status::FOCUS_PAUSED.into(),
+                                style: StatusStyle::Warning,
+                            };
+                        }
+                        Some(focus::FocusChange::Regained) => {
+                            self.dispatch(Request::ResumeCapture, state);
+                            state.status = StatusText {
+                                text: "STARTING CAPTURE".into(),
+                                style: StatusStyle::Idle,
+                            };
+                        }
+                        None => {
+                            if was_paused && !self.focus.paused() {
+                                self.dispatch(Request::ResumeCapture, state);
+                            }
+                        }
+                    }
+                }
+                Event::GameDetectionAvailability(available) => {
+                    state.game_detection_available = available;
+                    if !available {
+                        state.running_windows.clear();
+                        state.error_bar.push(
+                            "LIMITED FEATURE SUPPORT",
+                            "Game detection and focus pause need a compositor that exposes its window list (wlr-foreign-toplevel-management). Hotkeys and capture are unaffected.",
+                            Level::Warning,
+                            Vec::new(),
+                            None,
+                            true,
+                        );
+                    }
+                }
                 Event::PortalShortcutsFailed(reason) => {
                     tracing::info!(reason, "GlobalShortcuts portal");
                     if self.portal_active {
@@ -810,6 +911,14 @@ impl Services {
         for req in collect_requests(state) {
             self.dispatch(req, state);
         }
+        if std::mem::take(&mut state.game_confirm_requested) {
+            let actions = self.game.confirm(state);
+            self.run_game_actions(state, actions);
+        }
+        if std::mem::take(&mut state.game_dismiss_requested) {
+            self.game.dismiss();
+        }
+        self.game.on_tick(now);
         if std::mem::take(&mut state.screenshot_requested) {
             let wall = self.wall();
             let actions = self.screenshot.request(state, wall);
@@ -951,6 +1060,21 @@ impl Services {
                     p.rebind(&state.hotkeys, &self.portal_cleared);
                 }
             }
+            Request::RefreshWindows => {
+                if let Some(d) = &self.detector {
+                    d.refresh();
+                }
+            }
+            Request::PauseCapture => {
+                if let Some(d) = &self.engine {
+                    d.request(engine::Input::Pause);
+                }
+            }
+            Request::ResumeCapture => {
+                if let Some(d) = &self.engine {
+                    d.request(engine::Input::Resume);
+                }
+            }
             Request::OpenDesktopShortcuts => match &self.portal {
                 Some(p) => p.configure(),
                 None => state.error_bar.push(
@@ -976,6 +1100,9 @@ impl Services {
         }
         if let Some(s) = self.hotkey_server.take() {
             s.close();
+        }
+        if let Some(d) = self.detector.take() {
+            d.stop();
         }
         if let Some(scan) = self.scan.take() {
             scan.stop();
@@ -1053,7 +1180,9 @@ fn apply_event(state: &mut AppState, ev: Event) {
         | Event::Engine(_)
         | Event::ActiveConfig(_)
         | Event::PortalShortcutsBound(_)
-        | Event::PortalShortcutsFailed(_) => {}
+        | Event::PortalShortcutsFailed(_)
+        | Event::Toplevels(_)
+        | Event::GameDetectionAvailability(_) => {}
         Event::Card(card) => state.pending_cards.push(card),
         Event::Sound(key) => state.pending_sounds.push(key),
         Event::EngineConnected(on) => {

@@ -1585,6 +1585,7 @@ dependencies = [
  "fthrust-core",
  "fthrust-ipc",
  "fthrust-media",
+ "fthrust-wayland",
  "futures-util",
  "image",
  "nix",

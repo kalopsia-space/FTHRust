@@ -147,7 +147,10 @@ pub fn capture_summary(settings: &SettingsStore) -> String {
 }
 
 /// `GameDetectionPopup.get_summary`.
-pub fn game_summary(settings: &SettingsStore) -> String {
+pub fn game_summary(settings: &SettingsStore, available: bool) -> String {
+    if !available {
+        return "Game detection unavailable".into();
+    }
     if settings.get_bool("game_detection_enabled").unwrap_or(false) {
         "Game detection: On".into()
     } else {
@@ -259,7 +262,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> ToolbarResponse {
     let status_galley = galley(ui, &status_text, size::LABEL, Weight::W400, Color32::WHITE);
     let status_w = status_galley.size().x.ceil().max(110.0);
     let summary = capture_summary(&state.settings);
-    let game = game_summary(&state.settings);
+    let game = game_summary(&state.settings, state.game_detection_available);
     let labels = [
         state.source_label.clone(),
         game.clone(),

@@ -478,6 +478,8 @@ pub struct AppState {
     pub record_active: bool,
     /// The last Hyprland bind line copied from the hotkey popup.
     pub last_copied_bind_line: Option<String>,
+    /// The compositor exposes its toplevel list (game detection works).
+    pub game_detection_available: bool,
     /// Confirm the detected game.
     pub game_confirm_requested: bool,
     /// Dismiss the detected game.
@@ -657,6 +659,7 @@ impl AppState {
             record_label: "Record".into(),
             record_active: false,
             last_copied_bind_line: None,
+            game_detection_available: true,
             game_confirm_requested: false,
             game_dismiss_requested: false,
             input_draft: None,
