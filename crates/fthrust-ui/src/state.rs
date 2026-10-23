@@ -452,6 +452,8 @@ pub struct AppState {
     pub editor: Option<crate::editor::Editor>,
     /// The active editor's video frame texture.
     pub editor_video: Option<crate::video_texture::VideoTexture>,
+    /// The active editor's filmstrip frames.
+    pub editor_filmstrip: Vec<egui::TextureHandle>,
     /// Clip tags, descriptions and editor drafts (opened on first use).
     pub clip_metadata: Option<fthrust_core::clip_metadata::ClipMetadataStore>,
     /// Origin of the editor's clock (`editor_now`).
@@ -656,6 +658,7 @@ impl AppState {
             open_clip_requested: None,
             editor: None,
             editor_video: None,
+            editor_filmstrip: Vec::new(),
             clip_metadata: None,
             editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,

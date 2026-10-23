@@ -405,6 +405,25 @@ fn editor_state() -> (tempfile::TempDir, AppState) {
 }
 
 #[test]
+fn clip_editor_timeline() {
+    let (_tmp, mut s) = editor_state();
+    {
+        let e = s.editor.as_mut().unwrap();
+        e.timeline.split_at(0.3);
+        e.timeline.split_at(0.6);
+        e.timeline.selected = 1;
+        e.timeline.toggle_selected();
+        e.timeline.playhead = 0.45;
+        e.timeline.set_zoom(1.25, None);
+        e.segments_changed();
+    }
+    check("clip-editor-timeline", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(1160.0, 198.0));
+        fthrust_ui::editor::timeline_ui::ui(ui, rect, s);
+    });
+}
+
+#[test]
 fn clip_editor() {
     let (_tmp, s) = editor_state();
     check("clip-editor", s, |ui, s| {

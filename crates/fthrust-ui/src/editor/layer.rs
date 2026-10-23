@@ -97,6 +97,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
             Color::ShellDivider,
         )
         .done();
+    super::timeline_ui::ui(ui, l.trim, state);
     // Sidebar frame (the panels fill it).
     ui.painter()
         .rect_filled(l.sidebar, 0.0, t.color(Color::ShellBg));

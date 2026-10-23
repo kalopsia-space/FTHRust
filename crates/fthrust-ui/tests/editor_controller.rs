@@ -397,3 +397,62 @@ fn unopenable_clip_fails() {
         "play is ignored once failed"
     );
 }
+
+#[test]
+fn filmstrip_loads_after_idle_and_cancels_on_play() {
+    use fthrust_ui::editor::filmstrip::FilmstripState;
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 4, true) else {
+        return;
+    };
+    let mut e = r.open(&clip);
+    r.wait_loaded(&mut e);
+    r.run(&mut e, 200);
+    assert_eq!(
+        e.filmstrip.state(),
+        FilmstripState::Idle,
+        "not before 300 ms idle"
+    );
+    e.toggle_play(r.now());
+    r.run(&mut e, 500);
+    assert_eq!(
+        e.filmstrip.state(),
+        FilmstripState::Idle,
+        "never while playing"
+    );
+    e.toggle_play(r.now());
+    r.run(&mut e, 1490);
+    assert_eq!(
+        e.filmstrip.state(),
+        FilmstripState::Idle,
+        "1500 ms after a pause"
+    );
+    r.run(&mut e, 20);
+    assert_ne!(e.filmstrip.state(), FilmstripState::Idle);
+    for _ in 0..500 {
+        if e.filmstrip.state() == FilmstripState::Ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        let now = r.now();
+        e.tick(now, &mut r.settings, &mut r.store);
+    }
+    let frames = e.filmstrip.take_ready().expect("frames decoded");
+    assert_eq!(frames.len(), 24, "min(120, max(24, 24 + seconds / 60))");
+    assert_eq!(frames[0].size, [180, 100]);
+}
+
+#[test]
+fn filmstrip_off_when_disabled() {
+    use fthrust_ui::editor::filmstrip::FilmstripState;
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 2, true) else {
+        return;
+    };
+    r.settings
+        .set("timeline_preview_strip_enabled", serde_json::json!(false));
+    let mut e = r.open(&clip);
+    r.wait_loaded(&mut e);
+    r.run(&mut e, 600);
+    assert_eq!(e.filmstrip.state(), FilmstripState::Idle);
+}

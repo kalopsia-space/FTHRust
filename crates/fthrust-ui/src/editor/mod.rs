@@ -20,7 +20,9 @@ use serde_json::json;
 
 use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
+pub mod filmstrip;
 pub mod layer;
+pub mod timeline_ui;
 
 /// Builds the player for a clip (real: PipeWire output and the wall clock).
 pub type PlayerFactory = Arc<dyn Fn(&Path) -> Result<PlaybackService, String> + Send + Sync>;
@@ -43,6 +45,10 @@ const STALL_S: f64 = 15.0;
 const SPLIT_FEEDBACK_S: f64 = 1.2;
 /// "saved" feedback after saving the quick crop.
 const SAVED_FEEDBACK_S: f64 = 1.8;
+/// Filmstrip load after the player is ready / after a pause.
+const FILMSTRIP_IDLE_S: f64 = 0.3;
+/// Filmstrip load after a pause.
+const FILMSTRIP_PAUSE_S: f64 = 1.5;
 /// Source size assumed until the player reports it.
 const PLACEHOLDER_SIZE: (u32, u32) = (1920, 1080);
 
@@ -80,6 +86,15 @@ pub enum EditorRequest {
     Navigate(i32),
     /// Delete the clip file.
     DeleteClip,
+}
+
+/// What the timeline header label shows (the last change wins).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LabelMode {
+    /// `m:ss → m:ss` (trim moved, and initially).
+    Range,
+    /// `{kept} kept  ·  {n} cuts` (segments changed).
+    Kept,
 }
 
 /// What survives parking (`capture_session_state`).
@@ -135,6 +150,14 @@ pub struct Editor {
     pub requests: Vec<EditorRequest>,
     /// Master volume 0–100.
     pub master_volume: u8,
+    /// Timeline filmstrip.
+    pub filmstrip: filmstrip::Filmstrip,
+    /// Source position of an open timeline context menu.
+    pub context_pct: Option<f64>,
+    filmstrip_due: Option<f64>,
+    label_mode: LabelMode,
+    /// `None` until the first selection change (initial "Delete segment").
+    segment_button: Option<bool>,
     player: Option<PlaybackService>,
     loading: Option<Receiver<Result<PlaybackService, String>>>,
     status: String,
@@ -177,6 +200,9 @@ impl Editor {
             .get_i64("master_volume")
             .unwrap_or(80)
             .clamp(0, 100) as u8;
+        e.timeline.hide_deleted = settings
+            .get_bool("hide_deleted_timeline_segments")
+            .unwrap_or(false);
         let entry = store.get(path).map_err(|e| e.to_string())?;
         e.tag = entry.tag;
         e.description = entry.description;
@@ -220,6 +246,11 @@ impl Editor {
             saved_feedback_until: None,
             requests: Vec::new(),
             master_volume: 80,
+            filmstrip: filmstrip::Filmstrip::default(),
+            context_pct: None,
+            filmstrip_due: None,
+            label_mode: LabelMode::Range,
+            segment_button: None,
             player: None,
             loading: None,
             status: "Preparing clip…".into(),
@@ -317,7 +348,7 @@ impl Editor {
     pub fn tick(
         &mut self,
         now_s: f64,
-        _settings: &mut SettingsStore,
+        settings: &mut SettingsStore,
         store: &mut ClipMetadataStore,
     ) {
         self.last_now = now_s;
@@ -363,6 +394,15 @@ impl Editor {
         if self.draft_due.is_some_and(|t| now_s >= t) {
             self.flush_draft(store, now_s);
         }
+        if self.filmstrip_due.is_some_and(|t| now_s >= t) && self.lifecycle != Lifecycle::Playing {
+            self.filmstrip_due = None;
+            let enabled = settings_strip_enabled(settings);
+            if enabled && self.filmstrip.state() == filmstrip::FilmstripState::Idle {
+                let d = self.duration_ms;
+                self.filmstrip
+                    .request(&self.path, d, filmstrip::frame_count(d));
+            }
+        }
     }
 
     fn poll_loading(&mut self, now_s: f64) {
@@ -400,6 +440,7 @@ impl Editor {
             player.set_source(id, Some(*gain), Some(*muted));
         }
         self.player = Some(player);
+        self.filmstrip_due = Some(now_s + FILMSTRIP_IDLE_S);
         self.status = "Ready".into();
         self.status_clear_at = Some(now_s + READY_CLEAR_S);
         self.lifecycle = if self.restored {
@@ -470,6 +511,7 @@ impl Editor {
         }
         if matches!(self.lifecycle, Lifecycle::Playing) {
             self.lifecycle = Lifecycle::Paused;
+            self.filmstrip_due = Some(self.last_now + FILMSTRIP_PAUSE_S);
         }
         let first = self.first_kept_start_ms();
         self.seek_now(first);
@@ -498,6 +540,7 @@ impl Editor {
                     p.pause();
                 }
                 self.lifecycle = Lifecycle::Paused;
+                self.filmstrip_due = Some(self.last_now + FILMSTRIP_PAUSE_S);
             }
             Lifecycle::Ready | Lifecycle::Paused => self.start_playing(),
         }
@@ -521,6 +564,10 @@ impl Editor {
         }
         if let Some(p) = self.player.as_mut() {
             p.play();
+        }
+        self.filmstrip_due = None;
+        if self.filmstrip.state() == filmstrip::FilmstripState::Loading {
+            self.filmstrip.cancel();
         }
         self.lifecycle = Lifecycle::Playing;
         // The audio worker reports its new position a tick after a seek.
@@ -584,6 +631,7 @@ impl Editor {
 
     fn restore_edit(&mut self, s: Snapshot, now_s: f64) {
         self.apply_snapshot(&s);
+        self.segments_changed();
         let pos = self.position_ms();
         if self.timeline.kept_range_at_ms(pos, 0).is_none() {
             let first = self.first_kept_start_ms();
@@ -613,6 +661,7 @@ impl Editor {
         let before = self.snapshot();
         if self.timeline.split_at(self.timeline.playhead) {
             self.commit(before, now_s);
+            self.segments_changed();
             true
         } else {
             self.split_feedback_until = Some(now_s + SPLIT_FEEDBACK_S);
@@ -638,6 +687,7 @@ impl Editor {
             return false;
         }
         self.commit(before, now_s);
+        self.segments_changed();
         let pos = self.position_ms();
         if self.timeline.kept_range_at_ms(pos, 0).is_none() {
             let target = self
@@ -736,6 +786,133 @@ impl Editor {
         settings.set("quick_crop", qc.to_setting());
         self.saved_feedback_until = Some(now_s + SAVED_FEEDBACK_S);
         true
+    }
+
+    // ------------------------------------------------------------------
+    // Timeline header state
+
+    /// Segments changed (`_on_segments_changed`): the label shows the kept
+    /// summary and the segment button its selection state.
+    pub fn segments_changed(&mut self) {
+        self.label_mode = LabelMode::Kept;
+        self.selection_changed();
+    }
+
+    fn selection_changed(&mut self) {
+        let deleted = self
+            .timeline
+            .segments
+            .get(self.timeline.selected)
+            .is_some_and(|s| s.deleted);
+        self.segment_button = Some(deleted);
+    }
+
+    /// The timeline header's right label.
+    pub fn timeline_label(&self) -> String {
+        use fthrust_core::editor::format;
+        let d = self.duration_ms as f64;
+        match self.label_mode {
+            LabelMode::Range => format::range_label(
+                (self.timeline.trim_start * d) as u64,
+                (self.timeline.trim_end * d) as u64,
+            ),
+            LabelMode::Kept => {
+                let kept: u64 = self
+                    .timeline
+                    .kept_ranges_ms()
+                    .iter()
+                    .map(|(s, e)| e - s)
+                    .sum();
+                format::kept_label(kept, self.timeline.cut_count())
+            }
+        }
+    }
+
+    /// Segment button: text, enabled, restore styling.
+    pub fn segment_button(&self) -> (&'static str, bool, bool) {
+        match self.segment_button {
+            None => ("Delete segment", false, false),
+            Some(deleted) => (
+                if deleted {
+                    "RESTORE SEGMENT"
+                } else {
+                    "DELETE SEGMENT"
+                },
+                self.timeline.segments.len() > 1,
+                deleted,
+            ),
+        }
+    }
+
+    /// Split button text.
+    pub fn split_label(&self) -> &'static str {
+        if self.split_feedback_until.is_some() {
+            "Move playhead"
+        } else {
+            "Split"
+        }
+    }
+
+    /// Selects the segment `index`.
+    pub fn select(&mut self, index: usize) {
+        if index < self.timeline.segments.len() {
+            self.timeline.selected = index;
+            self.selection_changed();
+        }
+    }
+
+    /// Selects the segment under `pct` (a track click).
+    pub fn select_at(&mut self, pct: f64) {
+        if let Some(i) = self.timeline.segment_index_at(pct) {
+            self.select(i);
+        }
+    }
+
+    /// A trim handle moved (`_on_trim_changed`): the label shows the range
+    /// and a playhead outside it jumps to the first kept start.
+    pub fn on_trim_changed(&mut self, now_s: f64) {
+        self.label_mode = LabelMode::Range;
+        let d = self.duration_ms as f64;
+        let (s, e) = (
+            (self.timeline.trim_start * d) as u64,
+            (self.timeline.trim_end * d) as u64,
+        );
+        let pos = self.position_ms();
+        if pos < s || pos >= e {
+            let target = self
+                .timeline
+                .kept_ranges_ms()
+                .first()
+                .map_or(s, |&(k, _)| k);
+            let pct = target as f64 / d.max(1.0);
+            self.timeline.ensure_visible(pct, true);
+            self.scrub_to(pct, now_s);
+        }
+        self.schedule_draft(now_s);
+    }
+
+    /// "Split here" from the context menu.
+    pub fn split_at(&mut self, pct: f64, now_s: f64) -> bool {
+        self.timeline.playhead = pct;
+        self.split(now_s)
+    }
+
+    /// Context-menu Delete/Restore of segment `index`.
+    pub fn toggle_segment(&mut self, index: usize, now_s: f64) -> bool {
+        self.select(index);
+        self.toggle_selected(now_s)
+    }
+
+    /// "Hide deleted segments" (persisted as `hide_deleted_timeline_segments`).
+    pub fn set_hide_deleted(&mut self, on: bool, settings: &mut SettingsStore) {
+        if self.timeline.hide_deleted == on {
+            return;
+        }
+        self.timeline.hide_deleted = on;
+        self.timeline.view_start = 0.0;
+        let p = self.timeline.playhead;
+        self.timeline.ensure_visible(p, false);
+        settings.set("hide_deleted_timeline_segments", json!(on));
     }
 
     // ------------------------------------------------------------------
@@ -882,4 +1059,10 @@ impl Editor {
             p.close();
         }
     }
+}
+
+fn settings_strip_enabled(settings: &SettingsStore) -> bool {
+    settings
+        .get_bool("timeline_preview_strip_enabled")
+        .unwrap_or(true)
 }
