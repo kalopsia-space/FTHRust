@@ -20,6 +20,7 @@ pub mod shell;
 pub mod state;
 pub mod theme;
 pub mod tokens;
+pub mod ui_dump;
 pub mod widgets;
 
 /// The application: state, services and the per-frame UI.
@@ -30,6 +31,8 @@ pub struct App {
     pub services: Option<services::Services>,
     /// The first-frame monitor clamp has run.
     clamped: bool,
+    /// The bench's state dump (`FTHRUST_UI_DUMP`), if enabled.
+    dump: Option<ui_dump::Writer>,
 }
 
 impl App {
@@ -41,6 +44,7 @@ impl App {
             state,
             services: None,
             clamped: false,
+            dump: ui_dump::from_env(),
         }
     }
 
@@ -82,6 +86,15 @@ impl App {
         }
         self.tick();
         shell::ui(ui, &mut self.state);
+        if let Some(w) = self.dump.as_mut() {
+            let ctx = ui.ctx();
+            let markers = fidelity::take(ctx);
+            let (ppp, time) = ctx.input(|i| (i.pixels_per_point(), i.time));
+            let v = ui_dump::snapshot(&self.state, &markers, ppp, ctx.cumulative_pass_nr(), time);
+            if let Err(e) = w.write(&v) {
+                tracing::warn!(error = %e, "ui dump failed");
+            }
+        }
     }
 
     /// The reference's shutdown order, then the window geometry is saved.
