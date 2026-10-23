@@ -31,6 +31,17 @@ const CJK_CANDIDATES: [&str; 5] = [
     "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
     "/usr/share/fonts/droid/DroidSansFallbackFull.ttf",
 ];
+/// System symbol fallbacks (arrows, math): what fontconfig picks for the
+/// characters Oswald lacks, such as the trim label's `→`.
+const SYMBOL_CANDIDATES: [&str; 4] = [
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+];
+/// Named family for the symbol fallback face.
+const SYMBOL_FAMILY: &str = "system-symbols";
+
 /// Named family for the CJK fallback face.
 pub const CJK_FAMILY: &str = "system-cjk";
 
@@ -243,6 +254,16 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
                 .insert(CJK_FAMILY.to_owned(), Arc::new(FontData::from_owned(bytes)));
         })
         .is_some();
+    let symbols_loaded = SYMBOL_CANDIDATES
+        .iter()
+        .find_map(|p| std::fs::read(p).ok().filter(|b| is_font_file(b)))
+        .map(|bytes| {
+            defs.font_data.insert(
+                SYMBOL_FAMILY.to_owned(),
+                Arc::new(FontData::from_owned(bytes)),
+            );
+        })
+        .is_some();
     for (weight, file) in [
         (Weight::W400, "Oswald-Regular.ttf"),
         (Weight::W600, "Oswald-SemiBold.ttf"),
@@ -264,6 +285,9 @@ pub fn install(ctx: &Context, tokens: &Tokens) {
         chain.push(key);
         if cjk_loaded {
             chain.push(CJK_FAMILY.to_owned());
+        }
+        if symbols_loaded {
+            chain.push(SYMBOL_FAMILY.to_owned());
         }
         // Keep egui's defaults as glyph fallback (symbols, emoji).
         chain.extend(
