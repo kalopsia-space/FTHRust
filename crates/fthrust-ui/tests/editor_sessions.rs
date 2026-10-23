@@ -1,6 +1,7 @@
 //! Editor sessions: open, park, restore, close, clip navigation, delete
 //! (reference `main.py` editor sessions, notes section 7 and 9).
 
+mod common;
 #[path = "../../fthrust-media/tests/support/mod.rs"]
 mod support;
 
@@ -326,4 +327,211 @@ fn delete_of_linked_import_is_refused() {
         "This clip is linked from another folder. FTHR will not delete the original with the generic Delete action.".into()
     )));
     assert!(p.exists());
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts (notes section 8 "Keys").
+
+use egui::{Key, Modifiers, Vec2};
+
+/// A harness over the whole shell that also ticks the editor.
+fn keys_harness(s: &mut AppState) -> egui_kittest::Harness<'_> {
+    let tokens = s.tokens.clone();
+    common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, move |ui| {
+        s.tick_editor(None);
+        fthrust_ui::shell::frame(ui, s);
+    })
+}
+
+fn press(h: &mut egui_kittest::Harness<'_>, mods: Modifiers, key: Key) {
+    h.key_press_modifiers(mods, key);
+    h.run_steps(2);
+}
+
+/// winit turns Ctrl+C into a Copy event and no key event.
+fn copy(h: &mut egui_kittest::Harness<'_>) {
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+}
+
+/// Moves the playhead to the middle the way the app does (a debounced
+/// seek the next ticks apply).
+fn seek_half(r: &mut Rig) {
+    let now = r.s.editor_now();
+    r.s.editor.as_mut().unwrap().scrub_to(0.5, now);
+    std::thread::sleep(Duration::from_millis(80));
+    r.s.tick_editor(None);
+}
+
+fn opened(r: &mut Rig) -> Option<PathBuf> {
+    let a = r.clip("a.mp4")?;
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    seek_half(r);
+    Some(a)
+}
+
+#[test]
+fn default_bindings_drive_the_editor() {
+    use fthrust_ui::editor::Lifecycle;
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    drop(h);
+    assert_eq!(r.s.editor.as_ref().unwrap().lifecycle, Lifecycle::Playing);
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    drop(h);
+    assert_eq!(r.s.editor.as_ref().unwrap().lifecycle, Lifecycle::Paused);
+    seek_half(&mut r);
+    let mut h = keys_harness(&mut r.s);
+    copy(&mut h);
+    drop(h);
+    assert_eq!(
+        r.s.editor.as_ref().unwrap().timeline.segments.len(),
+        2,
+        "Ctrl+C splits"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::D);
+    drop(h);
+    assert!(
+        r.s.editor.as_ref().unwrap().timeline.segments[1].deleted,
+        "Ctrl+D deletes"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::W);
+    drop(h);
+    assert!(
+        !r.s.editor.as_ref().unwrap().timeline.segments[1].deleted,
+        "Ctrl+W restores"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::Z);
+    drop(h);
+    assert!(
+        r.s.editor.as_ref().unwrap().timeline.segments[1].deleted,
+        "Ctrl+Z undoes the restore"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::Y);
+    drop(h);
+    assert!(
+        !r.s.editor.as_ref().unwrap().timeline.segments[1].deleted,
+        "Ctrl+Y redoes"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::Z);
+    press(&mut h, Modifiers::CTRL | Modifiers::SHIFT, Key::Z);
+    drop(h);
+    assert!(
+        !r.s.editor.as_ref().unwrap().timeline.segments[1].deleted,
+        "Ctrl+Shift+Z redoes"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::SHIFT, Key::Escape);
+    drop(h);
+    assert!(r.s.editor.is_none(), "Shift+Escape parks");
+    assert_eq!(r.s.editor_sessions.len(), 1);
+    assert!(sessions::restore(&mut r.s, 1));
+    r.settle();
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.editor.is_none(), "Escape closes");
+    assert!(r.s.editor_sessions.is_empty());
+}
+
+#[test]
+fn escape_leaves_fullscreen_first() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::F11);
+    drop(h);
+    assert!(r.s.window.fullscreen, "F11 goes fullscreen");
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(
+        r.s.editor.is_some(),
+        "the first Escape only leaves fullscreen"
+    );
+    assert!(!r.s.window.fullscreen);
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.editor.is_none());
+}
+
+#[test]
+fn shortcuts_ignored_while_typing() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    {
+        let now = r.s.editor_now();
+        let e = r.s.editor.as_mut().unwrap();
+        e.split(now);
+    }
+    r.s.editor_panels = [false, false, false, false, true, false];
+    let tokens = r.s.tokens.clone();
+    let tag = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        fthrust_ui::shell::frame(ui, &mut r.s);
+    })
+    .marker("detailEdit[e.g. Gaming, Highlight …]")
+    .unwrap()
+    .rect
+    .center();
+    let mut h = keys_harness(&mut r.s);
+    h.drag_at(tag);
+    h.step();
+    h.drop_at(tag);
+    h.run_steps(2);
+    press(&mut h, Modifiers::CTRL, Key::D);
+    drop(h);
+    assert!(!r.s.editor.as_ref().unwrap().timeline.segments[1].deleted);
+}
+
+#[test]
+fn disabled_category_disables_keys() {
+    use fthrust_ui::editor::Lifecycle;
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    r.s.nav.set_category_enabled("Clip editor", false);
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    press(&mut h, Modifiers::NONE, Key::F11);
+    drop(h);
+    assert_ne!(r.s.editor.as_ref().unwrap().lifecycle, Lifecycle::Playing);
+    assert!(!r.s.window.fullscreen);
+}
+
+#[test]
+fn rebinding_is_respected() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    r.s.nav.set("editor_split", "Ctrl+K").unwrap();
+    let mut h = keys_harness(&mut r.s);
+    copy(&mut h);
+    drop(h);
+    assert_eq!(
+        r.s.editor.as_ref().unwrap().timeline.segments.len(),
+        1,
+        "Ctrl+C is free now"
+    );
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::CTRL, Key::K);
+    drop(h);
+    assert_eq!(r.s.editor.as_ref().unwrap().timeline.segments.len(), 2);
 }
