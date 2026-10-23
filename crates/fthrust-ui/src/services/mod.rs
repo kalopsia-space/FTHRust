@@ -5,6 +5,7 @@
 
 pub mod diagnostics;
 pub mod engine;
+pub mod export;
 pub mod focus;
 pub mod game;
 pub mod hotkey_client;
@@ -259,6 +260,7 @@ pub struct Services {
     portal_cleared: std::collections::BTreeSet<String>,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
+    export: export::ExportQueue,
     clock_offset: f64,
     wall_override: Option<time::OffsetDateTime>,
     test_commands: Option<Vec<Command>>,
@@ -325,6 +327,7 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            export: export::ExportQueue::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: None,
@@ -541,6 +544,7 @@ impl Services {
             portal_cleared: std::collections::BTreeSet::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
+            export: export::ExportQueue::new(),
             clock_offset: 0.0,
             wall_override: None,
             test_commands: Some(Vec::new()),
@@ -1227,9 +1231,17 @@ impl Services {
         }
     }
 
-    /// The reference's exit order, part one: a running manual recording is
-    /// stopped and finalised (bounded) before anything else goes away.
+    /// The export queue (editor exports and shares).
+    pub fn export_queue(&self) -> &export::ExportQueue {
+        &self.export
+    }
+
+    /// The reference's exit order, part one: exports are cancelled (12 s
+    /// bound) and a running manual recording is stopped and finalised
+    /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
+        // `_perform_full_shutdown`: cancel exports, bounded wait.
+        self.export.shutdown(std::time::Duration::from_secs(12));
         if self.recording.state() == recording::RecordState::Recording {
             self.toggle_recording(state);
         }

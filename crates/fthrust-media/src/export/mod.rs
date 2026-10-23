@@ -139,7 +139,8 @@ impl From<std::io::Error> for Stop {
     }
 }
 
-fn random_hex(n: usize) -> String {
+/// `n` random lowercase hex digits (output and staged names).
+pub fn random_hex(n: usize) -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut out = String::new();
     while out.len() < n {
