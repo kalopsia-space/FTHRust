@@ -44,6 +44,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         state.error_action_requested = Some(action);
     }
     if resp.close {
+        tracing::info!("close button pressed");
         state.window.close_requested = true;
     }
     if resp.minimise {
