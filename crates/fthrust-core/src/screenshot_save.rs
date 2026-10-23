@@ -121,9 +121,90 @@ pub fn reserve_screenshot_paths(
 
 /// Moves the staged PNG to its final name without overwriting a file that
 /// appeared in the meantime (`OUTPUT_COLLISION`; the staged file is kept).
+/// Tries a no-replace rename, then link-and-unlink, then a copy, so it works
+/// on filesystems without `RENAME_NOREPLACE` or hard links (exFAT, vFAT).
 pub fn publish_staged_png(staged: &Path, final_path: &Path) -> Result<(), ScreenshotError> {
+    let collision = || {
+        ScreenshotError::new(
+            "OUTPUT_COLLISION",
+            format!(
+                "Refusing to overwrite an existing file: {}",
+                final_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+        )
+    };
+    {
+        use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
+        match renameat2(
+            AT_FDCWD,
+            staged,
+            AT_FDCWD,
+            final_path,
+            RenameFlags::RENAME_NOREPLACE,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(nix::errno::Errno::EEXIST) => return Err(collision()),
+            Err(
+                nix::errno::Errno::EINVAL
+                | nix::errno::Errno::ENOSYS
+                | nix::errno::Errno::ENOTSUP
+                | nix::errno::Errno::EPERM
+                | nix::errno::Errno::EXDEV,
+            ) => {}
+            Err(e) => {
+                return Err(ScreenshotError::new(
+                    "WRITE_FAILED",
+                    format!("Could not publish the screenshot: {e}"),
+                ));
+            }
+        }
+    }
     match std::fs::hard_link(staged, final_path) {
         Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(collision()),
+        Err(e)
+            if matches!(
+                e.raw_os_error().map(nix::errno::Errno::from_raw),
+                Some(
+                    nix::errno::Errno::EPERM
+                        | nix::errno::Errno::ENOTSUP
+                        | nix::errno::Errno::EXDEV
+                )
+            ) =>
+        {
+            return publish_by_copy(staged, final_path);
+        }
+        Err(e) => {
+            return Err(ScreenshotError::new(
+                "WRITE_FAILED",
+                format!("Could not publish the screenshot: {e}"),
+            ));
+        }
+    }
+    if let Err(e) = std::fs::remove_file(staged) {
+        let _ = std::fs::remove_file(final_path);
+        return Err(ScreenshotError::new(
+            "WRITE_FAILED",
+            format!("Could not remove screenshot staging file: {e}"),
+        ));
+    }
+    Ok(())
+}
+
+/// The last resort: create the final file exclusively, copy the staged bytes
+/// in, flush, then remove the staged file. An existing final file is a
+/// collision and the staged file is kept.
+pub fn publish_by_copy(staged: &Path, final_path: &Path) -> Result<(), ScreenshotError> {
+    use std::io::Write;
+    let mut out = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(final_path)
+    {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(ScreenshotError::new(
                 "OUTPUT_COLLISION",
@@ -142,9 +223,18 @@ pub fn publish_staged_png(staged: &Path, final_path: &Path) -> Result<(), Screen
                 format!("Could not publish the screenshot: {e}"),
             ));
         }
+    };
+    let result = std::fs::read(staged)
+        .and_then(|bytes| out.write_all(&bytes))
+        .and_then(|()| out.sync_all());
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(final_path);
+        return Err(ScreenshotError::new(
+            "WRITE_FAILED",
+            format!("Could not publish the screenshot: {e}"),
+        ));
     }
     if let Err(e) = std::fs::remove_file(staged) {
-        let _ = std::fs::remove_file(final_path);
         return Err(ScreenshotError::new(
             "WRITE_FAILED",
             format!("Could not remove screenshot staging file: {e}"),

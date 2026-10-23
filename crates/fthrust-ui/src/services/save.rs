@@ -275,6 +275,25 @@ impl SaveService {
         out
     }
 
+    /// The engine is gone: an in-flight save cannot finish, so it fails now
+    /// instead of at the 60 s deadline (the supervisor defers restarts while
+    /// a save is busy).
+    pub fn on_engine_lost(&mut self, state: &mut AppState, now: f64) -> Vec<SaveAction> {
+        let mut out = Vec::new();
+        if !self.is_busy() {
+            return out;
+        }
+        self.paths.clear();
+        if let Some(o) = self.machine.on_event(
+            EngineEvent::ErrorOccurred,
+            "The capture engine stopped while saving.",
+            now,
+        ) {
+            self.outcome(state, o.kind, &o.detail, o.late, None, &mut out, now);
+        }
+        out
+    }
+
     /// Timeouts (1 s acknowledgement, 60 s completion).
     pub fn on_tick(&mut self, state: &mut AppState, now: f64) -> Vec<SaveAction> {
         let mut out = Vec::new();

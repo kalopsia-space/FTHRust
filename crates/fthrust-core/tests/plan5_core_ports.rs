@@ -231,3 +231,28 @@ fn instance_lock_fail_open_on_unwritable_dir() {
         LockResult::Unavailable
     ));
 }
+
+#[test]
+fn screenshot_publish_moves_the_staged_file() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("Screenshots");
+    let paths =
+        reserve_screenshot_paths(&dir, time::macros::datetime!(2026-10-23 12:00:00 UTC)).unwrap();
+    std::fs::write(&paths.staged, b"png").unwrap();
+    publish_staged_png(&paths.staged, &paths.final_path).unwrap();
+    assert!(paths.final_path.exists());
+    assert!(!paths.staged.exists(), "no .partial left behind");
+    // The copy fallback (filesystems without links or no-replace renames)
+    // behaves the same.
+    let paths2 =
+        reserve_screenshot_paths(&dir, time::macros::datetime!(2026-10-23 12:00:01 UTC)).unwrap();
+    std::fs::write(&paths2.staged, b"png2").unwrap();
+    fthrust_core::screenshot_save::publish_by_copy(&paths2.staged, &paths2.final_path).unwrap();
+    assert_eq!(std::fs::read(&paths2.final_path).unwrap(), b"png2");
+    assert!(!paths2.staged.exists());
+    std::fs::write(&paths2.staged, b"again").unwrap();
+    let err = fthrust_core::screenshot_save::publish_by_copy(&paths2.staged, &paths2.final_path)
+        .unwrap_err();
+    assert_eq!(err.code, "OUTPUT_COLLISION");
+    assert_eq!(std::fs::read(&paths2.final_path).unwrap(), b"png2");
+}

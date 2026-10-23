@@ -3,6 +3,7 @@
 mod common;
 
 use egui::{Pos2, Vec2};
+use fthrust_ui::overlay::capture_card::notification_body;
 use fthrust_ui::overlay::capture_card::{
     COMPACT_H, COMPACT_W, CardModel, FULL_H, FULL_W, HOLD_S, SLIDE_IN_S, SLIDE_OUT_S, content,
     paint,
@@ -282,4 +283,19 @@ fn overlay_live_shows_card() {
         overlay.frames_rendered()
     );
     overlay.shutdown();
+}
+
+#[test]
+fn notification_body_carries_the_card_stats() {
+    assert_eq!(
+        notification_body(&content(&clip())),
+        "30s · 60 FPS · 1920x1080"
+    );
+    assert_eq!(
+        notification_body(&content(&CardKind::Capturing {
+            source: "Hades".into()
+        })),
+        "Hades"
+    );
+    assert_eq!(notification_body(&content(&CardKind::Screenshot)), "");
 }

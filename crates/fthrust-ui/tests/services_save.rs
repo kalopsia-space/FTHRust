@@ -372,3 +372,28 @@ fn slow_notice_at_60s_then_late_success_accepted() {
             .contains("never reported")
     );
 }
+
+#[test]
+fn engine_loss_fails_the_in_flight_save() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.tokens.reduce_motion = true;
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.inject(Event::EngineConnected(true));
+    services.inject(Event::Health(healthy()));
+    services.tick(&mut s);
+    services.save_clip(&mut s, 30);
+    services.inject(Event::Engine(IpcEvent::SaveStarted { request_id: 1 }));
+    services.tick(&mut s);
+    assert!(services.save_busy(), "a save is in flight");
+    services.inject(Event::EngineConnected(false));
+    services.tick(&mut s);
+    assert!(
+        !services.save_busy(),
+        "the save is over the moment the engine is gone"
+    );
+    let e = s.error_bar.current().unwrap();
+    assert_eq!(e.title, "CLIP WAS NOT SAVED");
+    assert!(e.detail.contains("engine stopped"), "{}", e.detail);
+}

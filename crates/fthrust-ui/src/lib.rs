@@ -40,6 +40,9 @@ impl App {
     pub fn new(ctx: &egui::Context, state: state::AppState) -> App {
         fonts::install(ctx, &state.tokens);
         tokens::install_style(ctx, &state.tokens);
+        if let Some(pool) = &state.thumb_pool {
+            pool.set_repaint(ctx.clone());
+        }
         App {
             state,
             services: None,

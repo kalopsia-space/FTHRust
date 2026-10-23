@@ -291,3 +291,95 @@ fn rename_updates_card_and_manifest() {
     let _ = tmp;
     let _: PathBuf = renamed;
 }
+
+#[test]
+fn up_and_down_scroll_the_grid() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    for i in 0..18 {
+        let clip = root.join(format!("Desktop/clip_{i:02}.mp4"));
+        std::fs::write(&clip, b"video").unwrap();
+        s.library.upsert(&clip, false);
+    }
+    s.library_dirty = true;
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(3);
+    h.hover_at(Pos2::new(700.0, 500.0));
+    h.step();
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(4);
+    drop(h);
+    assert!(
+        s.library_scroll > 0.0,
+        "Down scrolls one row: {}",
+        s.library_scroll
+    );
+    let after_down = s.library_scroll;
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(3);
+    h.hover_at(Pos2::new(700.0, 500.0));
+    h.step();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(4);
+    drop(h);
+    assert!(
+        s.library_scroll < after_down,
+        "Up scrolls back: {}",
+        s.library_scroll
+    );
+}
+
+#[test]
+fn renaming_a_linked_import_asks_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let import_dir = tmp.path().join("imports");
+    std::fs::create_dir_all(&import_dir).unwrap();
+    let (_tmp2, mut s) =
+        state(serde_json::json!({"imported_clip_folders": [import_dir.to_string_lossy()]}));
+    let clip = import_dir.join("original.mp4");
+    std::fs::write(&clip, b"video").unwrap();
+    s.library.upsert(&clip, true);
+    s.library_dirty = true;
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    let m = markers_after(&mut h);
+    let title = m.iter().find(|m| m.name == "cardTitle").unwrap().rect;
+    h.hover_at(title.center());
+    h.step();
+    h.key_press(egui::Key::F2);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.step();
+    for c in "moved".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.step();
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    drop(h);
+    assert!(clip.exists(), "the original is untouched until confirmed");
+    let tag = match s.dialogs.modal.front() {
+        Some(DialogKind::Question { tag, title, .. }) if tag.starts_with("rename-clip:") => {
+            assert!(title.to_lowercase().contains("rename"), "{title}");
+            tag.clone()
+        }
+        other => panic!("expected a rename question, got {other:?}"),
+    };
+    s.dialogs.modal.pop_front();
+    s.dialogs
+        .results
+        .push(DialogResult::Answer { tag, yes: true });
+    fthrust_ui::library::page::consume_results(&mut s);
+    assert!(
+        import_dir.join("moved.mp4").exists() && !clip.exists(),
+        "renamed after yes"
+    );
+}

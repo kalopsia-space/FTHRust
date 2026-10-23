@@ -868,7 +868,8 @@ struct DriverCtx {
     log: PathBuf,
     child: Arc<Mutex<Option<tokio::process::Child>>>,
     pid: Arc<Mutex<Option<u32>>>,
-    client: Arc<tokio::sync::Mutex<Option<EngineClient>>>,
+    /// The connected client's command queue (ordered; `None` when not connected).
+    commands: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Command>>>>,
     inputs: Sender<Input>,
     start_epoch: Instant,
 }
@@ -896,7 +897,7 @@ impl EngineDriver {
             log,
             child: child.clone(),
             pid: pid.clone(),
-            client: Arc::new(tokio::sync::Mutex::new(None)),
+            commands: Arc::new(Mutex::new(None)),
             inputs: tx.clone(),
             start_epoch: Instant::now(),
         });
@@ -973,19 +974,10 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
         Effect::Spawn => spawn_engine(ctx),
         Effect::Connect => connect_engine(ctx),
         Effect::Send(cmd) => {
-            let c = ctx.clone();
             tracing::info!(command = ?std::mem::discriminant(&cmd), "engine command");
-            ctx.handle.spawn(async move {
-                let guard = c.client.lock().await;
-                match guard.as_ref() {
-                    Some(client) => {
-                        if let Err(e) = client.send(cmd).await {
-                            tracing::warn!(error = %e, "engine command failed");
-                        }
-                    }
-                    None => tracing::warn!("engine command dropped: not connected"),
-                }
-            });
+            if !queue_command(ctx, cmd) {
+                tracing::warn!("engine command dropped: not connected");
+            }
         }
         Effect::Kill { graceful } => kill_engine(ctx, graceful),
         Effect::StartAfter(_) => {}
@@ -1072,7 +1064,9 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                             if let Ok(mut p) = watcher.pid.lock() {
                                 *p = None;
                             }
-                            *watcher.client.lock().await = None;
+                            if let Ok(mut slot) = watcher.commands.lock() {
+                                *slot = None;
+                            }
                             let code = status.and_then(|s| s.code());
                             let _ = watcher.inputs.send(Input::ProcessExited { code });
                             break;
@@ -1101,70 +1095,64 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
             }
             tracing::info!(socket = %c.socket.display(), "connecting to the engine");
             match EngineClient::connect(&c.socket).await {
-                Ok(client) => {
+                Ok(mut client) => {
                     let hello = client.hello().clone();
                     tracing::info!(pid = hello.pid, version = %hello.version, "engine connected");
+                    // The command queue exists before anyone learns we are
+                    // connected, so the Configure that follows Hello is never
+                    // dropped; one task owns the client and keeps order.
+                    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
+                    if let Ok(mut slot) = c.commands.lock() {
+                        *slot = Some(cmd_tx);
+                    }
                     let _ = c.inputs.send(Input::Hello {
                         pid: hello.pid,
                         version: hello.version,
                     });
-                    let inputs = c.inputs.clone();
-                    let (tx, mut rx) = tokio::sync::mpsc::channel::<IpcEvent>(64);
-                    // Forward events from the client's receiver to inputs.
-                    let forward_inputs = inputs.clone();
+                    let forward_inputs = c.inputs.clone();
                     let outbox = c.outbox.clone();
+                    let commands = c.commands.clone();
                     c.handle.spawn(async move {
-                        while let Some(ev) = rx.recv().await {
-                            let input = match ev {
-                                IpcEvent::StartupWarning { code, detail } => {
-                                    Input::StartupWarning { code, detail }
-                                }
-                                IpcEvent::StartupError { code, detail } => {
-                                    Input::StartupError { code, detail }
-                                }
-                                IpcEvent::Configured { warnings } => Input::Configured { warnings },
-                                IpcEvent::Status(s) => Input::Status(*s),
-                                IpcEvent::Heartbeat => Input::Heartbeat,
-                                other => {
-                                    outbox.send(Event::Engine(other));
-                                    continue;
-                                }
-                            };
-                            let _ = forward_inputs.send(input);
+                        loop {
+                            tokio::select! {
+                                ev = client.events().recv() => match ev {
+                                    Some(ev) => {
+                                        let input = match ev {
+                                            IpcEvent::StartupWarning { code, detail } => {
+                                                Input::StartupWarning { code, detail }
+                                            }
+                                            IpcEvent::StartupError { code, detail } => {
+                                                Input::StartupError { code, detail }
+                                            }
+                                            IpcEvent::Configured { warnings } => Input::Configured { warnings },
+                                            IpcEvent::Status(s) => Input::Status(*s),
+                                            IpcEvent::Heartbeat => Input::Heartbeat,
+                                            other => {
+                                                outbox.send(Event::Engine(other));
+                                                continue;
+                                            }
+                                        };
+                                        let _ = forward_inputs.send(input);
+                                    }
+                                    None => break,
+                                },
+                                cmd = cmd_rx.recv() => match cmd {
+                                    Some(cmd) => {
+                                        if let Err(e) = client.send(cmd).await {
+                                            tracing::warn!(error = %e, "engine command failed");
+                                            break;
+                                        }
+                                    }
+                                    None => break,
+                                },
+                            }
+                        }
+                        if let Ok(mut slot) = commands.lock() {
+                            *slot = None;
                         }
                         tracing::warn!("engine event stream ended");
                         let _ = forward_inputs.send(Input::Disconnected);
                     });
-                    let events_tx = tx;
-                    let client_slot = c.client.clone();
-                    // Pump the client's event receiver.
-                    c.handle.spawn(async move {
-                        loop {
-                            let next = {
-                                let mut guard = client_slot.lock().await;
-                                match guard.as_mut() {
-                                    Some(cl) => {
-                                        tokio::time::timeout(
-                                            Duration::from_millis(250),
-                                            cl.events().recv(),
-                                        )
-                                        .await
-                                    }
-                                    None => break,
-                                }
-                            };
-                            match next {
-                                Ok(Some(ev)) => {
-                                    if events_tx.send(ev).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                Ok(None) => break,
-                                Err(_) => continue,
-                            }
-                        }
-                    });
-                    *c.client.lock().await = Some(client);
                     return;
                 }
                 Err(_) => continue,
@@ -1173,14 +1161,20 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
     });
 }
 
+/// Queues `cmd` for the connected client; `false` when not connected.
+fn queue_command(ctx: &Arc<DriverCtx>, cmd: Command) -> bool {
+    ctx.commands
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|tx| tx.send(cmd).is_ok()))
+        .unwrap_or(false)
+}
+
 fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
         if graceful {
-            let guard = c.client.lock().await;
-            if let Some(client) = guard.as_ref() {
-                let _ = client.send(Command::Shutdown).await;
-            }
+            let _ = queue_command(&c, Command::Shutdown);
         }
         let taken = c.child.lock().ok().and_then(|mut s| s.take());
         let Some(mut child) = taken else {
@@ -1216,7 +1210,9 @@ fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
         if let Ok(mut p) = c.pid.lock() {
             *p = None;
         }
-        *c.client.lock().await = None;
+        if let Ok(mut slot) = c.commands.lock() {
+            *slot = None;
+        }
         // The exit watcher no longer owns the child: report the exit here so
         // the supervisor leaves `Stopping` and relaunches when asked to.
         let _ = c.inputs.send(Input::ProcessExited { code });

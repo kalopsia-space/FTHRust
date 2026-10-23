@@ -249,3 +249,63 @@ fn scan_service_reports_batches_and_watches_the_root() {
     assert!(watched, "watcher scan after a new file");
     svc.stop();
 }
+
+#[test]
+fn scan_service_does_not_rescan_without_changes() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("clips");
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    std::fs::write(root.join("Desktop/a.mp4"), b"x").unwrap();
+    let svc = ScanService::start(root.clone(), vec![]);
+    let wait_done = |svc: &ScanService| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(ScanEvent::Done { .. }) =
+                svc.events().recv_timeout(Duration::from_millis(100))
+            {
+                return true;
+            }
+        }
+        false
+    };
+    svc.request(ScanKind::Foreground);
+    assert!(wait_done(&svc), "first scan");
+    // The first scan installed the watches; a second scan opens every watched
+    // directory, which must not count as a change.
+    svc.request(ScanKind::Foreground);
+    assert!(wait_done(&svc), "second scan");
+    let mut extra = 0;
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    while std::time::Instant::now() < deadline {
+        if let Ok(ScanEvent::Done { .. }) = svc.events().recv_timeout(Duration::from_millis(100)) {
+            extra += 1;
+        }
+    }
+    assert_eq!(extra, 0, "no scan without a change on disk");
+    svc.stop();
+}
+
+#[test]
+fn forwarder_replaces_the_direct_channel() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("clips");
+    std::fs::create_dir_all(&root).unwrap();
+    let svc = ScanService::start(root, vec![]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    svc.forward_to(tx);
+    svc.request(ScanKind::Foreground);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut done = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(ScanEvent::Done { .. }) = rx.recv_timeout(Duration::from_millis(100)) {
+            done = true;
+            break;
+        }
+    }
+    assert!(done, "the forwarder receives the scan");
+    assert!(
+        svc.events().try_recv().is_err(),
+        "nothing is queued on the unread direct channel"
+    );
+    svc.stop();
+}

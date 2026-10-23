@@ -316,3 +316,122 @@ fn exit_stops_an_active_recording_first() {
     assert!(services2.drain_commands_for_tests().is_empty());
     services.shutdown();
 }
+
+fn start_recording(services: &mut Services, s: &mut AppState) {
+    services.inject(Event::EngineConnected(true));
+    services.tick(s);
+    services.set_active_config_for_tests(Some(recording_config(s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(s);
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id: 1,
+        path: s.settings.recording_directory().unwrap().join("x.mp4"),
+    }));
+    services.tick(s);
+    assert_eq!(services.recording_state(), RecordState::Recording);
+}
+
+#[test]
+fn engine_loss_during_recording_fails_it_and_unblocks_restart() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    start_recording(&mut services, &mut s);
+    services.drain_commands_for_tests();
+    services.inject(Event::EngineConnected(false));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    let e = s.error_bar.current().unwrap();
+    assert_eq!(e.title, "MANUAL RECORDING FAILED");
+    assert!(e.detail.contains("engine stopped"), "{}", e.detail);
+    assert_eq!(s.record_label, "Record");
+    assert!(
+        services.drain_commands_for_tests().is_empty(),
+        "nothing is sent to a dead engine"
+    );
+}
+
+#[test]
+fn stop_times_out_and_keeps_fragments() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    start_recording(&mut services, &mut s);
+    let dir = s.settings.recording_directory().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("x.mp4"), b"frag").unwrap();
+    s.record_requested = true;
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Stopping);
+    services.advance_clock_for_tests(10.5);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    let e = s.error_bar.current().unwrap();
+    assert_eq!(e.title, "MANUAL RECORDING FAILED");
+    assert!(
+        e.detail.contains("stop request") && e.detail.contains("Recoverable"),
+        "{}",
+        e.detail
+    );
+    assert!(dir.join("x.mp4").exists(), "fragments are kept");
+}
+
+#[test]
+fn start_and_stop_hotkeys_are_gated_by_state() {
+    use fthrust_core::hotkeys::HotkeyAction;
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.inject(Event::EngineConnected(true));
+    services.tick(&mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    services.inject(Event::Hotkey(HotkeyAction::StopRecording));
+    services.tick(&mut s);
+    assert_eq!(
+        services.recording_state(),
+        RecordState::Idle,
+        "stop while idle does nothing"
+    );
+    assert!(services.drain_commands_for_tests().is_empty());
+    services.inject(Event::Hotkey(HotkeyAction::StartRecording));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Starting);
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id: 1,
+        path: s.settings.recording_directory().unwrap().join("x.mp4"),
+    }));
+    services.tick(&mut s);
+    services.drain_commands_for_tests();
+    services.inject(Event::Hotkey(HotkeyAction::StartRecording));
+    services.tick(&mut s);
+    assert_eq!(
+        services.recording_state(),
+        RecordState::Recording,
+        "start while recording does nothing"
+    );
+    assert!(services.drain_commands_for_tests().is_empty());
+    services.inject(Event::Hotkey(HotkeyAction::StopRecording));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Stopping);
+}
+
+#[test]
+fn low_disk_space_stops_the_recording() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    start_recording(&mut services, &mut s);
+    services.drain_commands_for_tests();
+    services.set_low_space_floor_for_tests(u64::MAX);
+    services.advance_clock_for_tests(1.2);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Stopping);
+    let cmds = services.drain_commands_for_tests();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::StopRecording { .. })),
+        "{cmds:?}"
+    );
+    let e = s.error_bar.current().unwrap();
+    assert_eq!(e.title, "RECORDING STOPPED — LOW DISK SPACE");
+}

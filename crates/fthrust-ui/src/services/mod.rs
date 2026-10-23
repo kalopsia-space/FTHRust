@@ -396,9 +396,6 @@ impl Services {
             for key in std::mem::take(&mut state.pending_sounds) {
                 p.play(&state.settings, &state.theme, &key);
             }
-            if let Some(key) = state.sound_preview_requested.take() {
-                p.preview(&state.settings, &state.theme, &key);
-            }
         }
     }
 
@@ -581,6 +578,21 @@ impl Services {
     /// The recording state.
     pub fn recording_state(&self) -> recording::RecordState {
         self.recording.state()
+    }
+
+    /// A replay save is in flight.
+    pub fn save_busy(&self) -> bool {
+        self.save.is_busy()
+    }
+
+    /// Raises the low-space floor a running recording stops at (tests).
+    pub fn set_low_space_floor_for_tests(&mut self, bytes: u64) {
+        self.recording.set_low_space_floor(bytes);
+    }
+
+    /// Installs a sound sink (tests of the cues and previews).
+    pub fn set_sound_sink_for_tests(&mut self, sink: std::sync::Arc<dyn sounds::Sink>) {
+        self.sounds = Some(sounds::SoundPlayer::with_sink(sink, crate::assets_dir()));
     }
 
     /// Pretends the engine applied `config` (tests).
@@ -779,8 +791,17 @@ impl Services {
             }
             HotkeyAction::SaveCustomClip(n) => self.save_clip(state, n),
             HotkeyAction::SaveScreenshot => state.screenshot_requested = true,
-            HotkeyAction::StartRecording | HotkeyAction::StopRecording => {
-                state.record_requested = true
+            // The reference gates each key: start only when idle, stop only
+            // while recording, so a stray press never ends a long recording.
+            HotkeyAction::StartRecording => {
+                if self.recording.state() == recording::RecordState::Idle {
+                    state.record_requested = true;
+                }
+            }
+            HotkeyAction::StopRecording => {
+                if self.recording.state() == recording::RecordState::Recording {
+                    state.record_requested = true;
+                }
             }
             HotkeyAction::ConfirmGameDetection => state.game_confirm_requested = true,
             HotkeyAction::DismissGameDetection => state.game_dismiss_requested = true,
@@ -987,6 +1008,11 @@ impl Services {
                     self.engine_connected = on;
                     if !on {
                         self.health = None;
+                        let actions = self.save.on_engine_lost(state, now);
+                        self.run_save_actions(state, actions);
+                        let actions = self.recording.on_engine_lost(now);
+                        self.run_rec_actions(state, actions);
+                        self.sync_recording_ui(state);
                     }
                     apply_event(state, Event::EngineConnected(on));
                 }
@@ -1070,6 +1096,12 @@ impl Services {
             self.toggle_recording(state);
             return;
         }
+        if let Request::PreviewSound(key) = &req {
+            if let Some(p) = &self.sounds {
+                p.preview(&state.settings, &state.theme, key);
+            }
+            return;
+        }
         if let Some(recorded) = self.test_requests.as_mut() {
             recorded.push(req);
             return;
@@ -1095,6 +1127,11 @@ impl Services {
                 state.diagnostic_export_requested = true;
             }
             Request::ToggleRecording => self.toggle_recording(state),
+            Request::PreviewSound(key) => {
+                if let Some(p) = &self.sounds {
+                    p.preview(&state.settings, &state.theme, &key);
+                }
+            }
             Request::RestartEngine => {
                 if let Some(d) = &self.engine {
                     match engine::engine_config(state) {

@@ -140,6 +140,12 @@ pub fn consume_results(state: &mut AppState) {
     let mut keep = Vec::new();
     for r in results {
         match &r {
+            DialogResult::Answer { tag, yes } if tag.starts_with("rename-clip:") => {
+                if *yes && let Some((path, stem)) = tag["rename-clip:".len()..].split_once('\u{1f}')
+                {
+                    rename_clip(state, &PathBuf::from(path), stem);
+                }
+            }
             DialogResult::Answer { tag, yes } if tag.starts_with("delete-clip:") => {
                 if *yes {
                     let path = PathBuf::from(&tag["delete-clip:".len()..]);
@@ -403,7 +409,14 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let mut delete_req: Option<PathBuf> = None;
     let mut share_req: Option<PathBuf> = None;
     let mut open_req: Option<PathBuf> = None;
-    let output = scroll::vertical(&area, &t, "library").show_viewport(&mut area, |ui, viewport| {
+    // Up/Down (keyboard navigation) queued a one-row step last frame.
+    let kb_id = egui::Id::unique("library-kb-scroll");
+    let kb_step: Option<f32> = ui.ctx().data_mut(|d| d.remove_temp(kb_id));
+    let mut scroll_area = scroll::vertical(&area, &t, "library");
+    if let Some(step) = kb_step {
+        scroll_area = scroll_area.vertical_scroll_offset((state.library_scroll + step).max(0.0));
+    }
+    let output = scroll_area.show_viewport(&mut area, |ui, viewport| {
         ui.set_width(area_rect.width());
         let origin = ui.cursor().min;
         let x0 = origin.x;
@@ -621,7 +634,28 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     state.visible_cards = visible;
     if let Some((path, stem)) = rename_commit {
         state.rename_draft = None;
-        rename_clip(state, &path, &stem);
+        let imports = imported_roots(state);
+        let owned = state.library.clips_root.clone();
+        if classify_media_path(&path, &owned, &imports) == Ownership::LinkedImported {
+            // The reference confirms before touching a linked original.
+            let name = path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            state.dialogs.push_modal(DialogKind::Question {
+                title: "Rename linked original".into(),
+                message: format!(
+                    "Rename {name} to {stem}?\nThe original file outside the library is renamed too."
+                ),
+                tag: format!("rename-clip:{}\u{1f}{stem}", path.display()),
+            });
+        } else {
+            rename_clip(state, &path, &stem);
+        }
+    }
+    if settling {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(SCROLL_SETTLE_S));
     }
     if let Some(path) = delete_req {
         let imports = imported_roots(state);

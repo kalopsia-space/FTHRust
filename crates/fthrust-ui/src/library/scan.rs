@@ -191,10 +191,13 @@ struct Emit {
 
 impl Emit {
     fn send(&self, ev: ScanEvent) {
+        // Once a forwarder is installed it is the only reader: the direct
+        // channel would otherwise fill with every scan's record list.
         if let Ok(f) = self.forward.lock()
             && let Some(tx) = f.as_ref()
         {
-            let _ = tx.send(ev.clone());
+            let _ = tx.send(ev);
+            return;
         }
         let _ = self.direct.send(ev);
     }
@@ -204,7 +207,16 @@ fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sen
     let watcher_flag = Arc::new(AtomicBool::new(false));
     let flag = watcher_flag.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
+        // inotify reports our own directory listings as `Access(Open)`;
+        // only real changes count, or every scan would trigger the next.
+        let Ok(ev) = res else { return };
+        let changed = matches!(
+            ev.kind,
+            notify::EventKind::Create(_)
+                | notify::EventKind::Remove(_)
+                | notify::EventKind::Modify(_)
+        );
+        if changed {
             flag.store(true, Ordering::Relaxed);
             let _ = watch_wake.send(());
         }

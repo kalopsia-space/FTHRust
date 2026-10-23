@@ -145,13 +145,14 @@ fn icon_button(
     hover_tint: Color,
     enabled: bool,
     name: &str,
+    card_name: &str,
 ) -> egui::Response {
     let sense = if enabled {
         Sense::click()
     } else {
         Sense::hover()
     };
-    let resp = ui.interact(rect, ui.scope_id().with(name), sense);
+    let resp = ui.interact(rect, ui.scope_id().with((card_name, name)), sense);
     let blend = motion::hover(
         ui.ctx(),
         resp.id.with("hover"),
@@ -416,8 +417,10 @@ pub fn card(
         Sense::click(),
     );
     let f2 = out.hovered && ui.ctx().input(|i| i.key_pressed(egui::Key::F2));
+    let focus_id = ui.scope_id().with((name, "rename-focus"));
     if editing.is_none() && !busy && (title_resp.double_clicked() || f2) {
         *editing = Some(d.title.clone());
+        ui.ctx().data_mut(|d| d.insert_temp(focus_id, true));
     }
     if let Some(draft) = editing.as_mut() {
         let edit_id = ui.scope_id().with((name, "rename"));
@@ -452,13 +455,19 @@ pub fn card(
             )
         });
         let resp = ui.put(text_rect, edit).accessible_name("Clip filename");
-        if !ui.ctx().memory(|m| m.has_focus(edit_id)) && !resp.lost_focus() {
+        // Focus once when the edit starts; afterwards losing it ends the
+        // edit like Qt's editingFinished.
+        if ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<bool>(focus_id))
+            .is_some()
+        {
             ui.ctx().memory_mut(|m| m.request_focus(edit_id));
         }
         fidelity::mark(ui, "cardRename", inner)
             .fill(Color::Surface1)
             .done();
-        if enter {
+        if enter || (resp.lost_focus() && !escape) {
             out.rename_committed = Some(draft.clone());
             *editing = None;
         } else if escape {
@@ -518,6 +527,7 @@ pub fn card(
             Color::Accent,
             share_enabled,
             "cardShareBtn",
+            name,
         );
         if r.clicked() {
             out.share_clicked = true;
@@ -537,6 +547,7 @@ pub fn card(
         Color::Text,
         d.ready,
         "cardDeleteBtn",
+        name,
     );
     if r.clicked() {
         out.delete_requested = true;

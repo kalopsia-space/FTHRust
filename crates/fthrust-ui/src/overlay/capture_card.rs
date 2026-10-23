@@ -100,6 +100,19 @@ pub fn content(kind: &CardKind) -> CardContent {
     }
 }
 
+/// The notification body when a card cannot be shown: the detail line, or
+/// a full card's stats joined (`30s · 60 FPS · 1920x1080`).
+pub fn notification_body(c: &CardContent) -> String {
+    if !c.detail.is_empty() {
+        return c.detail.clone();
+    }
+    c.stats
+        .iter()
+        .map(|(v, _)| v.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 /// Whether a kind has a visual card (the startup cue is sound only).
 pub fn visual(kind: &CardKind) -> bool {
     !matches!(kind, CardKind::Startup)

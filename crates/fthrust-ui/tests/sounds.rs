@@ -76,3 +76,27 @@ fn sounds_master_volume_and_gate() {
     assert_ne!(custom, bundled);
     assert!(custom.exists());
 }
+
+#[test]
+fn customize_preview_plays_through_the_services() {
+    use fthrust_ui::services::Services;
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(
+        tmp.path(),
+        serde_json::json!({"notification_sounds_enabled": false}),
+    );
+    let sink = Arc::new(FakeSink {
+        played: Mutex::new(Vec::new()),
+    });
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.set_sound_sink_for_tests(sink.clone());
+    s.sound_preview_requested = Some("error".into());
+    services.tick(&mut s);
+    assert_eq!(
+        sink.played.lock().unwrap().len(),
+        1,
+        "the preview plays even with sounds disabled"
+    );
+    assert!(s.sound_preview_requested.is_none());
+}

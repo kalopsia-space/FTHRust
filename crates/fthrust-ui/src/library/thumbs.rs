@@ -130,6 +130,7 @@ pub struct ThumbPool {
     generation: Mutex<u64>,
     stop: Arc<AtomicBool>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    repaint: Arc<Mutex<Option<egui::Context>>>,
 }
 
 impl ThumbPool {
@@ -144,15 +145,17 @@ impl ThumbPool {
         ));
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
+        let repaint: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
         let threads = (0..2)
             .map(|i| {
                 let queue = queue.clone();
                 let tx = tx.clone();
                 let stop = stop.clone();
                 let cache_dir = cache_dir.clone();
+                let repaint = repaint.clone();
                 std::thread::Builder::new()
                     .name(format!("fthrust-thumbs-{i}"))
-                    .spawn(move || worker(queue, tx, stop, cache_dir))
+                    .spawn(move || worker(queue, tx, stop, cache_dir, repaint))
                     .expect("spawn thumbnail worker")
             })
             .collect();
@@ -163,6 +166,14 @@ impl ThumbPool {
             generation: Mutex::new(0),
             stop,
             threads,
+            repaint,
+        }
+    }
+
+    /// Wakes `ctx` whenever a result is ready (the UI only repaints on events).
+    pub fn set_repaint(&self, ctx: egui::Context) {
+        if let Ok(mut r) = self.repaint.lock() {
+            *r = Some(ctx);
         }
     }
 
@@ -249,6 +260,7 @@ fn worker(
     tx: Sender<ThumbResult>,
     stop: Arc<AtomicBool>,
     cache_dir: PathBuf,
+    repaint: Arc<Mutex<Option<egui::Context>>>,
 ) {
     loop {
         let job = {
@@ -292,5 +304,10 @@ fn worker(
             image,
             elapsed_ms: started.elapsed().as_millis() as u64,
         });
+        if let Ok(r) = repaint.lock()
+            && let Some(ctx) = r.as_ref()
+        {
+            ctx.request_repaint();
+        }
     }
 }

@@ -34,9 +34,22 @@ fn bind_translation_matches_reference() {
         to_hyprland_bind("ctrl+shift+s"),
         ("CTRL SHIFT".to_string(), "S".to_string())
     );
+    // Named keys become xkb keysym names, which is what Hyprland parses.
     assert_eq!(
         to_hyprland_bind("Win+Page Up"),
-        ("WIN".to_string(), "Page Up".to_string())
+        ("WIN".to_string(), "Prior".to_string())
+    );
+    assert_eq!(
+        to_hyprland_bind("Esc"),
+        (String::new(), "Escape".to_string())
+    );
+    assert_eq!(
+        to_hyprland_bind("Ctrl+Enter"),
+        ("CTRL".to_string(), "Return".to_string())
+    );
+    assert_eq!(
+        to_hyprland_bind("Scroll Lock"),
+        (String::new(), "Scroll_Lock".to_string())
     );
     assert_eq!(to_hyprland_bind(""), (String::new(), String::new()));
     assert_eq!(
@@ -207,4 +220,31 @@ fn setup_instructions_use_the_client_command() {
             .starts_with("Bind your preferred keys to these commands:\n\n")
     );
     assert!(!s.contains("nc -U"));
+}
+
+#[test]
+fn source_line_is_added_next_to_reference_era_manual_binds() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".config/hypr");
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join("hyprland.conf");
+    std::fs::write(
+        &conf,
+        "bind = , F9, exec, echo save_clip | nc -U /run/user/1000/fthr/hotkey.sock\n",
+    )
+    .unwrap();
+    ensure_source_line(home.path()).unwrap();
+    let text = std::fs::read_to_string(&conf).unwrap();
+    assert!(
+        text.contains("fthr-hotkeys.conf"),
+        "the old socket bind does not count as ours: {text}"
+    );
+    ensure_source_line(home.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&conf)
+            .unwrap()
+            .matches("fthr-hotkeys.conf")
+            .count(),
+        1
+    );
 }

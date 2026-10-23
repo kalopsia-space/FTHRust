@@ -26,6 +26,10 @@ pub const MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 pub const SAVED_STATUS_S: f64 = 2.5;
 /// How long `RECORDING FAILED` shows.
 pub const FAILED_STATUS_S: f64 = 3.0;
+/// A running recording stops below this much free space (256 MiB).
+pub const LOW_SPACE_FLOOR: u64 = 256 * 1024 * 1024;
+/// How often the free space is checked while recording.
+pub const SPACE_CHECK_S: f64 = 1.0;
 
 /// The recording state machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +148,8 @@ pub struct RecordingService {
     finalize: Option<Receiver<Result<(), String>>>,
     transient: Option<(StatusText, Option<f64>)>,
     profile_is_recording: bool,
+    low_space_floor: u64,
+    last_space_check: f64,
     pub(crate) label: String,
     pub(crate) active_style: bool,
 }
@@ -169,6 +175,8 @@ impl RecordingService {
             finalize: None,
             transient: None,
             profile_is_recording: false,
+            low_space_floor: LOW_SPACE_FLOOR,
+            last_space_check: 0.0,
             label: "Record".into(),
             active_style: false,
         }
@@ -177,6 +185,28 @@ impl RecordingService {
     /// The state.
     pub fn state(&self) -> RecordState {
         self.state
+    }
+
+    /// The free-space floor a running recording stops at (tests raise it).
+    pub fn set_low_space_floor(&mut self, bytes: u64) {
+        self.low_space_floor = bytes;
+    }
+
+    /// The engine is gone: a recording in progress is over, its fragments
+    /// kept when the file exists.
+    pub fn on_engine_lost(&mut self, now: f64) -> Vec<RecAction> {
+        let mut out = Vec::new();
+        if self.state == RecordState::Idle {
+            return out;
+        }
+        let keep = self.path.as_ref().is_some_and(|p| p.exists());
+        self.fail(
+            "The capture engine stopped during the recording.",
+            keep,
+            &mut out,
+            now,
+        );
+        out
     }
 
     /// Not idle (blocks engine restarts).
@@ -509,9 +539,41 @@ impl RecordingService {
                     now,
                 );
             }
+            RecordState::Stopping if now - self.requested_at > START_ACK_S => {
+                let keep = self.path.as_ref().is_some_and(|p| p.exists());
+                self.fail(
+                    "The capture engine did not acknowledge the stop request.",
+                    keep,
+                    &mut out,
+                    now,
+                );
+            }
             RecordState::Recording => {
                 let label = format!("Stop  {}", format_elapsed(now - self.started_at));
                 self.set_label(&label, true);
+                if now - self.last_space_check >= SPACE_CHECK_S {
+                    self.last_space_check = now;
+                    let dir = self
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.parent().map(Path::to_path_buf));
+                    if let Some(dir) = dir
+                        && let Ok(free) = free_space_bytes(&dir)
+                        && free < self.low_space_floor
+                    {
+                        out.push(RecAction::Error {
+                            title: "RECORDING STOPPED — LOW DISK SPACE".into(),
+                            detail: "The recording was stopped because the recording folder dropped below 256 MB free.".into(),
+                            level: Level::Warning,
+                            actions: vec![Action {
+                                label: "OPEN RECORDINGS".into(),
+                                id: "open-recordings".into(),
+                            }],
+                        });
+                        let mut stop = self.stop(now);
+                        out.append(&mut stop);
+                    }
+                }
             }
             RecordState::Finalizing => {
                 let result = self.finalize.as_ref().and_then(|rx| rx.try_recv().ok());

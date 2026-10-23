@@ -122,14 +122,25 @@ fn run(
     let mut scale = 1.0f32;
     let epoch = Instant::now();
     let now = || epoch.elapsed().as_secs_f64();
-    let notify_rt = (!layer_ok)
-        .then(|| {
-            tokio::runtime::Builder::new_current_thread()
+    // The desktop-notification fallback: used when there is no layer-shell
+    // at all, and whenever a card's surface cannot be created or dies, so
+    // a clip confirmation is never dropped silently.
+    let mut notify_rt: Option<tokio::runtime::Runtime> = None;
+    let notify = |rt: &mut Option<tokio::runtime::Runtime>, c: &capture_card::CardContent| {
+        if rt.is_none() {
+            *rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .ok()
-        })
-        .flatten();
+                .ok();
+        }
+        if let Some(rt) = rt {
+            rt.block_on(send_notification(
+                &c.headline,
+                &capture_card::notification_body(c),
+            ));
+        }
+    };
+    let mut last_content: Option<capture_card::CardContent> = None;
     loop {
         let cmd = if model.is_live() {
             match rx.recv_timeout(FRAME) {
@@ -168,12 +179,10 @@ fn run(
                     continue;
                 }
                 if !layer_ok {
-                    let c = content(&kind);
-                    if let Some(rt) = &notify_rt {
-                        rt.block_on(send_notification(&c.headline, &c.detail));
-                    }
+                    notify(&mut notify_rt, &content(&kind));
                     continue;
                 }
+                last_content = Some(content(&kind));
                 let was_compact = model.size();
                 model.show(kind, hold_ms, now());
                 if model.size() != was_compact {
@@ -208,6 +217,9 @@ fn run(
                                 *err = Some(e.to_string());
                             }
                             model.hide();
+                            if let Some(c) = last_content.take() {
+                                notify(&mut notify_rt, &c);
+                            }
                         }
                     }
                 }
@@ -225,6 +237,9 @@ fn run(
                     if !s.pump() {
                         surface = None;
                         model.hide();
+                        if let Some(c) = last_content.take() {
+                            notify(&mut notify_rt, &c);
+                        }
                         continue;
                     }
                     let (w, h) = model.size();
@@ -245,6 +260,9 @@ fn run(
                         }
                         surface = None;
                         model.hide();
+                        if let Some(c) = last_content.take() {
+                            notify(&mut notify_rt, &c);
+                        }
                     } else {
                         stats.frames.fetch_add(1, Ordering::Relaxed);
                     }

@@ -30,7 +30,10 @@ pub enum Outcome {
 /// window, and queues their results.
 pub fn draw_all(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
-    if state.draft_generation != state.dialogs.generation {
+    // A dialog pushed this frame must not see the key press that opened it
+    // (Enter committing a rename would otherwise answer its own question).
+    let fresh = state.draft_generation != state.dialogs.generation;
+    if fresh {
         state.draft_generation = state.dialogs.generation;
         clear_drafts(state);
     }
@@ -39,7 +42,11 @@ pub fn draw_all(ui: &mut Ui, state: &mut AppState) {
     let keys = Keys::read(&ctx);
     let message_count = state.dialogs.messages.len();
     if let Some(kind) = state.dialogs.modal.front().cloned() {
-        let modal_keys = if message_count == 0 { keys } else { Keys::NONE };
+        let modal_keys = if message_count == 0 && !fresh {
+            keys
+        } else {
+            Keys::NONE
+        };
         let outcome = draw_centered(&ctx, state, &kind, true, modal_keys);
         if let Outcome::Done(result) = outcome {
             state.dialogs.modal.pop_front();

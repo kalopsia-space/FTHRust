@@ -34,7 +34,10 @@ pub fn managed_conf(home: &Path) -> PathBuf {
 pub fn to_hyprland_bind(combo: &str) -> (String, String) {
     let parts: Vec<&str> = combo.split('+').collect();
     if parts.len() == 1 {
-        return (String::new(), parts[0].to_owned());
+        if parts[0].is_empty() {
+            return (String::new(), String::new());
+        }
+        return (String::new(), hypr_key(parts[0]));
     }
     let mods = parts[..parts.len() - 1]
         .iter()
@@ -42,12 +45,18 @@ pub fn to_hyprland_bind(combo: &str) -> (String, String) {
         .collect::<Vec<_>>()
         .join(" ");
     let last = parts[parts.len() - 1];
-    let key = if last.chars().count() == 1 {
-        last.to_uppercase()
-    } else {
-        last.to_owned()
-    };
-    (mods, key)
+    (mods, hypr_key(last))
+}
+
+/// Hyprland parses xkb keysym names: single characters upper-cased as the
+/// reference did, named keys through the keysym table (`Page Up` → `Prior`).
+fn hypr_key(key: &str) -> String {
+    if key.chars().count() == 1 {
+        return key.to_uppercase();
+    }
+    super::portal_key(key)
+        .map(str::to_owned)
+        .unwrap_or_else(|| key.to_owned())
 }
 
 /// The command a compositor bind runs: `"<client_exe>" --hotkey <action>`.
@@ -119,10 +128,9 @@ pub fn ensure_source_line(home: &Path) -> std::io::Result<()> {
     let Ok(content) = std::fs::read_to_string(&conf) else {
         return Ok(());
     };
-    if content.contains("fthr-hotkeys.conf")
-        || content.contains("fthr_hotkey.sock")
-        || content.contains("hotkey.sock")
-    {
+    // Only our own managed file or a bind to our own socket counts; the
+    // reference's `nc -U …/fthr/hotkey.sock` binds point at nothing now.
+    if content.contains("fthr-hotkeys.conf") || content.contains("fthrust/hotkey.sock") {
         return Ok(());
     }
     let line = format!(

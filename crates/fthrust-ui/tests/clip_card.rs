@@ -265,3 +265,51 @@ fn thumb_pool_caps_live_textures_at_96() {
     assert!(textures.get(&PathBuf::from("/c/4.mp4")).is_some());
     assert!(textures.get(&PathBuf::from("/c/5.mp4")).is_none());
 }
+
+#[test]
+fn rename_commits_on_focus_loss() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let t = tokens();
+    let d = data();
+    let mut icons = fthrust_ui::icons::IconCache::default();
+    let editing: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let last: Rc<RefCell<CardResponse>> = Rc::new(RefCell::new(CardResponse::default()));
+    let (e2, l2) = (editing.clone(), last.clone());
+    let tc = t.clone();
+    let mut h = common::harness(Vec2::new(320.0, 268.0), 1.0, &t, move |ui| {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 268.0))),
+            |ui| {
+                let mut e = e2.borrow_mut();
+                let r = card(ui, &tc, &mut icons, 320.0, &d, &mut e, "card");
+                if r.rename_committed.is_some() {
+                    *l2.borrow_mut() = r;
+                }
+            },
+        );
+    });
+    h.run_steps(2);
+    h.hover_at(Pos2::new(100.0, 206.0));
+    h.step();
+    h.key_press(egui::Key::F2);
+    h.run_steps(2);
+    assert!(editing.borrow().is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.step();
+    for c in "blurred".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.step();
+    }
+    // Clicking elsewhere ends the edit like Qt's editingFinished.
+    h.hover_at(Pos2::new(160.0, 60.0));
+    h.step();
+    h.drag_at(Pos2::new(160.0, 60.0));
+    h.step();
+    h.drop_at(Pos2::new(160.0, 60.0));
+    h.run_steps(3);
+    assert_eq!(last.borrow().rename_committed.as_deref(), Some("blurred"));
+    assert!(editing.borrow().is_none());
+    drop(h);
+}
