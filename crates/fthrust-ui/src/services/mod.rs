@@ -9,6 +9,7 @@ pub mod hotkey_client;
 pub mod instance;
 pub mod recording;
 pub mod save;
+pub mod screenshot;
 pub mod status;
 
 use std::path::PathBuf;
@@ -210,6 +211,7 @@ pub struct Services {
     engine: Option<engine::EngineDriver>,
     save: save::SaveService,
     recording: recording::RecordingService,
+    screenshot: screenshot::ScreenshotService,
     active_config: Option<fthrust_core::capture_config::CaptureConfig>,
     epoch: std::time::Instant,
     clock_offset: f64,
@@ -252,6 +254,7 @@ impl Services {
             engine: None,
             save: save::SaveService::new(),
             recording: recording::RecordingService::new(),
+            screenshot: screenshot::ScreenshotService::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
@@ -265,6 +268,13 @@ impl Services {
             save_transient_ended: false,
         };
         services.attach_scan(scan);
+        if let Some(handle) = services.runtime() {
+            services
+                .screenshot
+                .set_portal(std::sync::Arc::new(screenshot::AshpdScreenshot::new(
+                    handle,
+                )));
+        }
         services
     }
 
@@ -305,6 +315,7 @@ impl Services {
             engine: None,
             save: save::SaveService::new(),
             recording: recording::RecordingService::new(),
+            screenshot: screenshot::ScreenshotService::new(),
             active_config: None,
             epoch: std::time::Instant::now(),
             clock_offset: 0.0,
@@ -317,6 +328,29 @@ impl Services {
             recording_transition: false,
             save_transient_ended: false,
         }
+    }
+
+    /// Installs a screenshot portal implementation (tests).
+    pub fn set_screenshot_portal_for_tests(
+        &mut self,
+        portal: std::sync::Arc<dyn screenshot::PortalScreenshot>,
+    ) {
+        self.screenshot.set_portal(portal);
+    }
+
+    /// Pauses portal calls (tests).
+    pub fn hold_screenshot_portal_for_tests(&self, hold: bool) {
+        self.screenshot.set_hold(hold);
+    }
+
+    /// A screenshot request is running.
+    pub fn screenshot_inflight(&self) -> bool {
+        self.screenshot.inflight()
+    }
+
+    /// Screenshot requests queued behind the running one.
+    pub fn screenshot_pending(&self) -> u8 {
+        self.screenshot.pending()
     }
 
     /// The recording state.
@@ -658,6 +692,16 @@ impl Services {
         // before the transient statuses are applied).
         for req in collect_requests(state) {
             self.dispatch(req, state);
+        }
+        if std::mem::take(&mut state.screenshot_requested) {
+            let wall = self.wall();
+            let actions = self.screenshot.request(state, wall);
+            screenshot::apply(state, actions, &mut self.test_cards);
+        }
+        {
+            let wall = self.wall();
+            let actions = self.screenshot.on_tick(state, wall);
+            screenshot::apply(state, actions, &mut self.test_cards);
         }
         let actions = self.save.on_tick(state, now);
         self.run_save_actions(state, actions);

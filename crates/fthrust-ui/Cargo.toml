@@ -23,6 +23,8 @@ time.workspace = true
 notify.workspace = true
 tokio.workspace = true
 nix.workspace = true
+ashpd.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true
