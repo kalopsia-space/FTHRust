@@ -504,9 +504,11 @@ pub fn ui(ctx: &egui::Context, state: &mut AppState) {
     }
     let mut closed = Vec::new();
     for i in 0..state.share_windows.len() {
+        // Stacked down the video area's right edge, clear of the sidebar.
+        let video = super::layer::layout(screen).video;
         let pos = Pos2::new(
-            screen.max.x - WINDOW_SIZE.x - 16.0,
-            screen.min.y + 56.0 + i as f32 * (WINDOW_SIZE.y + 12.0),
+            video.max.x - WINDOW_SIZE.x - 16.0,
+            video.min.y + 16.0 + i as f32 * (WINDOW_SIZE.y + 12.0),
         );
         let id = state.share_windows[i].id;
         Area::new(Id::unique(("share-window", id)))
