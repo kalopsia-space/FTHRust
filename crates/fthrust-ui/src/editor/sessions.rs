@@ -134,6 +134,12 @@ fn release_active(state: &mut AppState, keep: bool) {
     state.editor_filmstrip.clear();
 }
 
+/// App exit: the active editor flushes its details, gesture and draft
+/// (the reference's `closeEvent`) and releases its player.
+pub fn shutdown(state: &mut AppState) {
+    release_active(state, false);
+}
+
 /// Opens `path` (library double-click, `OpenClip`).
 pub fn open(state: &mut AppState, path: &Path) -> bool {
     if !path.is_file() {

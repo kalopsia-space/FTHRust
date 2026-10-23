@@ -189,6 +189,10 @@ pub struct Editor {
     pub master_volume: u8,
     /// Timeline filmstrip.
     pub filmstrip: filmstrip::Filmstrip,
+    /// The clip is a linked import (resolved once: it touches the disk).
+    pub linked_import: Option<bool>,
+    /// FILE DETAILS "Created" (local time) and size in MB, read once.
+    pub file_info: Option<(time::OffsetDateTime, f64)>,
     /// Source position of an open timeline context menu.
     pub context_pct: Option<f64>,
     filmstrip_due: Option<f64>,
@@ -211,6 +215,8 @@ pub struct Editor {
     seek_due: Option<f64>,
     next_playhead_check: f64,
     draft_due: Option<f64>,
+    /// An edit since the last draft write (`_draft_dirty`).
+    draft_dirty: bool,
     last_persisted: Option<Snapshot>,
     gesture: Option<Snapshot>,
     last_now: f64,
@@ -312,6 +318,8 @@ impl Editor {
             master_volume: 80,
             filmstrip: filmstrip::Filmstrip::default(),
             context_pct: None,
+            linked_import: None,
+            file_info: None,
             filmstrip_due: None,
             label_mode: LabelMode::Range,
             segment_button: None,
@@ -331,6 +339,7 @@ impl Editor {
             seek_due: None,
             next_playhead_check: 0.0,
             draft_due: None,
+            draft_dirty: false,
             last_persisted: None,
             gesture: None,
             last_now: 0.0,
@@ -440,6 +449,28 @@ impl Editor {
     /// FILE DETAILS metadata.
     pub fn meta(&self) -> &MetaState {
         &self.meta
+    }
+
+    /// Seconds until the earliest pending timer (`None`: nothing due), so
+    /// the layer can wake the loop for it instead of the 1 s heartbeat.
+    pub fn next_wake(&self, now_s: f64) -> Option<f64> {
+        if self.lifecycle == Lifecycle::Playing {
+            return Some(0.0);
+        }
+        let polling = (self.loading.is_some() || self.meta_rx.is_some()).then_some(now_s + 0.05);
+        [
+            self.seek_due,
+            self.draft_due,
+            self.status_clear_at,
+            self.split_feedback_until,
+            self.saved_feedback_until,
+            self.filmstrip_due,
+            polling,
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min)
+        .map(|t| (t - now_s).max(0.0))
     }
 
     /// The current edit.
@@ -552,6 +583,10 @@ impl Editor {
     fn loaded(&mut self, mut player: PlaybackService, now_s: f64) {
         let info = player.info().clone();
         self.src_size = (info.width, info.height);
+        // The reference clamps the crop into the probed source size.
+        self.crop = self
+            .crop
+            .and_then(|c| fthrust_core::editor::tools::clamp_crop(c, info.width, info.height));
         if player.duration_ms() != self.duration_ms {
             self.duration_ms = player.duration_ms().max(1);
             self.timeline.duration_ms = self.duration_ms;
@@ -721,6 +756,7 @@ impl Editor {
     }
 
     fn schedule_draft(&mut self, now_s: f64) {
+        self.draft_dirty = true;
         self.draft_due = Some(now_s + DRAFT_DEBOUNCE_S);
     }
 
@@ -880,6 +916,10 @@ impl Editor {
 
     /// "Quick": applies the saved quick crop scaled to this source.
     pub fn apply_quick_crop(&mut self, settings: &SettingsStore, now_s: f64) -> bool {
+        // The source size is a placeholder until the player reports it.
+        if self.player.is_none() {
+            return false;
+        }
         let Some(qc) = settings.get("quick_crop").and_then(QuickCrop::from_setting) else {
             return false;
         };
@@ -1088,6 +1128,10 @@ impl Editor {
     fn flush_draft(&mut self, store: &mut ClipMetadataStore, now_s: f64) {
         let _ = now_s;
         self.draft_due = None;
+        if !self.draft_dirty {
+            return;
+        }
+        self.draft_dirty = false;
         let snap = self.snapshot();
         if self.last_persisted.as_ref() == Some(&snap) {
             return;

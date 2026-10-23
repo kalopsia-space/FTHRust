@@ -682,3 +682,30 @@ fn stretch_ratio_clamps() {
     assert_eq!(e.stretch, 4.0);
     assert_eq!(e.undo.undo.len(), 1);
 }
+
+#[test]
+fn quitting_flushes_the_active_editor() {
+    let mut r = rig();
+    let Some(a) = opened(&mut r) else {
+        return;
+    };
+    {
+        let now = r.s.editor_now();
+        let e = r.s.editor.as_mut().unwrap();
+        assert!(e.split(now), "an edit still inside the 450 ms debounce");
+        e.tag = "Highlight".into();
+        e.details_dirty = true;
+    }
+    let paths = r.s.paths.clone();
+    let ctx = egui::Context::default();
+    let mut app = fthrust_ui::App::new(&ctx, r.s);
+    app.on_exit();
+    drop(app);
+    let store = fthrust_core::clip_metadata::ClipMetadataStore::open(&paths).unwrap();
+    let entry = store.get(&a).unwrap();
+    assert!(
+        entry.editor_draft.is_some(),
+        "the pending draft was written"
+    );
+    assert_eq!(entry.tag, "Highlight");
+}

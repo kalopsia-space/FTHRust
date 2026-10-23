@@ -112,6 +112,7 @@ impl App {
 
     /// The reference's shutdown order, then the window geometry is saved.
     pub fn on_exit(&mut self) {
+        editor::sessions::shutdown(&mut self.state);
         if let Some(mut services) = self.services.take() {
             services.prepare_exit(&mut self.state);
             services.shutdown();

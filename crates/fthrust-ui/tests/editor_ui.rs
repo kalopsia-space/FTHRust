@@ -311,3 +311,56 @@ fn linked_import_delete_is_protected() {
         Some("Linked original — protected")
     );
 }
+
+#[test]
+fn click_beside_a_handle_does_not_move_it() {
+    let (_tmp, mut s) = editor_state(Lifecycle::Paused);
+    let mut h = harness_for(&mut s);
+    let at = Pos2::new(track_x(0.0) + 6.0, TRACK_Y);
+    h.hover_at(at);
+    h.step();
+    h.drag_at(at);
+    h.run_steps(3);
+    h.drop_at(at);
+    h.run_steps(2);
+    drop(h);
+    let e = s.editor.as_ref().unwrap();
+    assert_eq!(e.timeline.trim_start, 0.0, "the handle stays where it was");
+    assert!(e.undo.undo.is_empty());
+    assert_eq!(e.timeline_label(), "0:00 → 0:10");
+}
+
+#[test]
+fn linked_import_is_resolved_once_per_editor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let imports = tmp.path().join("imports");
+    std::fs::create_dir_all(&imports).unwrap();
+    let mut s = AppState::for_tests(
+        tmp.path(),
+        serde_json::json!({"imported_clip_folders": [imports.to_string_lossy()]}),
+    );
+    s.tokens.reduce_motion = true;
+    s.editor = Some(Editor::for_tests(
+        &imports.join("linked.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    let tokens = s.tokens.clone();
+    let text = |s: &mut AppState| {
+        let r = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+            shell::frame(ui, s);
+        });
+        r.marker("deleteBtn")
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .content
+            .clone()
+    };
+    assert_eq!(text(&mut s), "Linked original — protected");
+    // Path resolution touches the file system: it runs once, not per frame.
+    s.settings
+        .set("imported_clip_folders", serde_json::json!([]));
+    assert_eq!(text(&mut s), "Linked original — protected");
+}

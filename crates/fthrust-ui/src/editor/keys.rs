@@ -37,6 +37,20 @@ pub fn handle(ctx: &egui::Context, state: &mut AppState) {
         let Some(e) = state.editor.as_mut() else {
             return;
         };
+        // Edits need the real duration and source size.
+        let edit = matches!(
+            action,
+            "editor_split"
+                | "editor_delete"
+                | "editor_restore"
+                | "editor_crop"
+                | "editor_undo"
+                | "editor_redo"
+                | "editor_redo_alt"
+        );
+        if edit && !e.player_loaded() {
+            continue;
+        }
         match action {
             "editor_split" => {
                 e.split(now);

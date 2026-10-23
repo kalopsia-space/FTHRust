@@ -113,12 +113,10 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
         .done();
     fidelity::mark(ui, "editorSidebarScroll", l.sidebar).done();
     super::sidebar::ui(ui, l.sidebar, state);
-    if state
-        .editor
-        .as_ref()
-        .is_some_and(|e| e.lifecycle == Lifecycle::Playing)
-    {
-        ctx.request_repaint();
+    // Wake for the editor's next timer (scrub seek, draft, labels, loading)
+    // rather than the 1 s heartbeat; continuously while playing.
+    if let Some(due) = state.editor.as_ref().and_then(|e| e.next_wake(now)) {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(due));
     }
     out
 }

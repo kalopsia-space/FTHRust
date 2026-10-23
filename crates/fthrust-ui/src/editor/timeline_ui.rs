@@ -392,7 +392,10 @@ fn input(ui: &mut Ui, resp: &egui::Response, w: Rect, state: &mut AppState, now:
             e.timeline.set_zoom(z, Some(anchor));
         }
     }
-    let mut drag: Option<Drag> = ui.data(|d| d.get_temp(drag_id));
+    // The drag and the pointer x it last acted on: handles and the playhead
+    // move only when the pointer does (`mouseMoveEvent`), never on a
+    // press-and-release in place.
+    let mut drag: Option<(Drag, f32)> = ui.data(|d| d.get_temp(drag_id));
     if pressed
         && resp.hovered()
         && let Some(p) = pos
@@ -414,18 +417,21 @@ fn input(ui: &mut Ui, resp: &egui::Response, w: Rect, state: &mut AppState, now:
             let ds = (dp - tl.source_to_display(tl.trim_start)).abs() * px_per;
             let de = (dp - tl.source_to_display(tl.trim_end)).abs() * px_per;
             if ds <= f64::from(HANDLE_GRAB_PX) {
-                drag = Some(Drag::Start);
+                drag = Some((Drag::Start, p.x));
                 e.begin_gesture();
             } else if de <= f64::from(HANDLE_GRAB_PX) {
-                drag = Some(Drag::End);
+                drag = Some((Drag::End, p.x));
                 e.begin_gesture();
             } else {
-                drag = Some(Drag::Playhead);
+                drag = Some((Drag::Playhead, p.x));
                 e.select_at(pct);
                 e.scrub_to(pct, now);
             }
         }
-    } else if down && let (Some(mode), Some(p)) = (drag, pos) {
+    } else if let (Some((mode, last_x)), Some(p)) = (drag, pos)
+        && (down || released)
+        && p.x != last_x
+    {
         let pct = view_pct(p.x, &e.timeline);
         match mode {
             Drag::Playhead => e.scrub_to(pct, now),
@@ -438,19 +444,10 @@ fn input(ui: &mut Ui, resp: &egui::Response, w: Rect, state: &mut AppState, now:
                 e.on_trim_changed(now);
             }
         }
+        drag = Some((mode, p.x));
     }
     if released || !down {
-        if matches!(drag, Some(Drag::Start | Drag::End)) {
-            if let Some(p) = pos
-                && released
-            {
-                let pct = view_pct(p.x, &e.timeline);
-                match drag {
-                    Some(Drag::Start) => e.timeline.set_trim_start(pct),
-                    _ => e.timeline.set_trim_end(pct),
-                }
-                e.on_trim_changed(now);
-            }
+        if matches!(drag, Some((Drag::Start | Drag::End, _))) {
             e.end_gesture(now);
         }
         drag = None;
@@ -459,7 +456,7 @@ fn input(ui: &mut Ui, resp: &egui::Response, w: Rect, state: &mut AppState, now:
         Some(m) => {
             d.insert_temp(drag_id, m);
         }
-        None => d.remove::<Drag>(drag_id),
+        None => d.remove::<(Drag, f32)>(drag_id),
     });
     // Context menu: targets the clicked position, not the stale selection.
     if resp.secondary_clicked()

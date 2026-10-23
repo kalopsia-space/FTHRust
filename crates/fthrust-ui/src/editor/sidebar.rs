@@ -978,16 +978,27 @@ fn file_body(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState, x: f32, y: f32,
     let Some(e) = state.editor.as_ref() else {
         return;
     };
-    let md = std::fs::metadata(&e.path).ok();
-    let created = md
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .map(time::OffsetDateTime::from)
-        .map(|d| {
-            d.to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
-        })
-        .unwrap_or_else(time::OffsetDateTime::now_utc);
-    let size_mb = md.map_or(0.0, |m| m.len() as f64 / (1024.0 * 1024.0));
+    if e.file_info.is_none() {
+        let md = std::fs::metadata(&e.path).ok();
+        let created = md
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .map(time::OffsetDateTime::from)
+            .map(|d| {
+                d.to_offset(time::UtcOffset::local_offset_at(d).unwrap_or(time::UtcOffset::UTC))
+            })
+            .unwrap_or_else(time::OffsetDateTime::now_utc);
+        let size_mb = md.map_or(0.0, |m| m.len() as f64 / (1024.0 * 1024.0));
+        if let Some(e) = state.editor.as_mut() {
+            e.file_info = Some((created, size_mb));
+        }
+    }
+    let Some(e) = state.editor.as_ref() else {
+        return;
+    };
+    let (created, size_mb) = e
+        .file_info
+        .unwrap_or((time::OffsetDateTime::UNIX_EPOCH, 0.0));
     let (quality, vbr, tbr) = match e.meta() {
         MetaState::Loading => (
             "Loading…".to_owned(),
@@ -1049,7 +1060,16 @@ fn delete_button(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState, y: f32) {
     let Some(e) = state.editor.as_ref() else {
         return;
     };
-    let linked = is_linked_import(state, &e.path);
+    let linked = match e.linked_import {
+        Some(v) => v,
+        None => {
+            let v = is_linked_import(state, &e.path);
+            if let Some(e) = state.editor.as_mut() {
+                e.linked_import = Some(v);
+            }
+            v
+        }
+    };
     let r = c.rect(0.0, y, c.w, DELETE_H);
     let text = if linked {
         "Linked original — protected"

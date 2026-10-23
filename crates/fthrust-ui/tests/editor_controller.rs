@@ -466,3 +466,76 @@ fn filmstrip_off_when_disabled() {
     r.run(&mut e, 600);
     assert_eq!(e.filmstrip.state(), FilmstripState::Idle);
 }
+
+#[test]
+fn untouched_clip_writes_no_draft() {
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 2, true) else {
+        return;
+    };
+    let mut e = r.open(&clip);
+    r.wait_loaded(&mut e);
+    r.run(&mut e, 600);
+    let _ = e.capture(&mut r.store);
+    e.close(&mut r.store);
+    assert!(
+        r.store.get(&clip).unwrap().editor_draft.is_none(),
+        "opening and closing an unedited clip must not use a draft slot"
+    );
+}
+
+#[test]
+fn quick_crop_waits_for_the_real_source_size() {
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 2, true) else {
+        return;
+    };
+    r.settings.set(
+        "quick_crop",
+        serde_json::json!({"x": 0, "y": 0, "w": 100, "h": 50, "src_w": 160, "src_h": 90}),
+    );
+    let mut e = r.open(&clip);
+    assert!(
+        !e.apply_quick_crop(&r.settings, r.now()),
+        "not before the player loads"
+    );
+    assert_eq!(e.crop, None);
+}
+
+#[test]
+fn oversized_draft_crop_is_clamped_on_load() {
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 2, true) else {
+        return;
+    };
+    let mut e = r.open(&clip);
+    r.wait_loaded(&mut e);
+    let now = r.now();
+    e.set_crop(Some((10, 10, 100_000, 100_000)), now);
+    let st = e.capture(&mut r.store);
+    e.close(&mut r.store);
+    let mut e = r.open(&clip);
+    e.restore(st);
+    r.wait_loaded(&mut e);
+    assert_eq!(
+        e.crop,
+        Some((10, 10, 150, 80)),
+        "clamped into the 160×90 source"
+    );
+}
+
+#[test]
+fn pending_timers_ask_for_a_wake() {
+    let mut r = Rig::new();
+    let Some(clip) = r.clip("a.mp4", 2, true) else {
+        return;
+    };
+    let mut e = r.open(&clip);
+    r.wait_loaded(&mut e);
+    r.run(&mut e, 2000);
+    let now = r.now();
+    assert_eq!(e.next_wake(now), None, "idle and paused: nothing due");
+    e.scrub_to(0.5, now);
+    let due = e.next_wake(now).expect("the scrub seek is due");
+    assert!(due <= 0.051, "{due}");
+}
