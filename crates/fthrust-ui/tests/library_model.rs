@@ -98,6 +98,12 @@ fn empty_state_texts_per_filter() {
             detail: None
         })
     );
+    assert_eq!(
+        lib.heading_text(),
+        "All clips",
+        "initial label until a scan ran"
+    );
+    lib.scanned = true;
     assert_eq!(lib.heading_text(), "ALL CLIPS");
     lib.filter = Filter::Screenshots;
     lib.rebuild("F12");

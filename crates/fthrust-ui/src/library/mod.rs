@@ -5,5 +5,6 @@
 pub mod card;
 pub mod layout;
 pub mod model;
+pub mod page;
 pub mod scan;
 pub mod thumbs;

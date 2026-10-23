@@ -428,6 +428,34 @@ pub struct AppState {
     pub selected_clip: Option<std::path::PathBuf>,
     /// Inline rename in progress: the clip and its draft name.
     pub rename_draft: Option<(std::path::PathBuf, String)>,
+    /// Records changed: rebuild the sections on the next frame.
+    pub library_dirty: bool,
+    /// Cards built last frame (visible rows plus overscan), in order.
+    pub visible_cards: Vec<std::path::PathBuf>,
+    /// Thumbnail jobs requested so far (tests).
+    pub thumb_requests_total: usize,
+    /// The thumbnail worker pool (started by the app; `None` in tests).
+    pub thumb_pool: Option<crate::library::thumbs::ThumbPool>,
+    /// Live thumbnail textures.
+    pub thumb_textures: crate::library::thumbs::ThumbTextures,
+    /// Metadata text and duration per clip once probed.
+    pub thumb_meta: std::collections::HashMap<std::path::PathBuf, (String, Option<f64>)>,
+    /// Clips whose thumbnail could not be made.
+    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
+    /// Clips whose thumbnail was requested this generation.
+    pub thumb_requested: std::collections::HashSet<std::path::PathBuf>,
+    /// Transient card feedback: text and the time it expires.
+    pub card_feedback: std::collections::HashMap<std::path::PathBuf, (String, f64)>,
+    /// Open a clip in the editor (plan 6 consumes).
+    pub open_clip_requested: Option<std::path::PathBuf>,
+    /// Open a screenshot (plan 6 consumes).
+    pub open_screenshot_requested: Option<std::path::PathBuf>,
+    /// Upload a clip (plan 7 consumes).
+    pub upload_requested: Option<std::path::PathBuf>,
+    /// Show a file in the file manager (plan 5 services consume).
+    pub show_in_file_manager_requested: Option<std::path::PathBuf>,
+    /// Scrolling settled: the last wheel/drag time.
+    pub library_last_scroll: f64,
     /// Text being edited in an input dialog.
     pub input_draft: Option<String>,
     /// Minutes being edited in the custom clip length dialog.
@@ -578,6 +606,20 @@ impl AppState {
             library_scroll: 0.0,
             selected_clip: None,
             rename_draft: None,
+            library_dirty: true,
+            visible_cards: Vec::new(),
+            thumb_requests_total: 0,
+            thumb_pool: None,
+            thumb_textures: crate::library::thumbs::ThumbTextures::default(),
+            thumb_meta: std::collections::HashMap::new(),
+            thumb_failed: std::collections::HashSet::new(),
+            thumb_requested: std::collections::HashSet::new(),
+            card_feedback: std::collections::HashMap::new(),
+            open_clip_requested: None,
+            open_screenshot_requested: None,
+            upload_requested: None,
+            show_in_file_manager_requested: None,
+            library_last_scroll: -10.0,
             input_draft: None,
             clip_length_draft: None,
             export_preset_draft: None,

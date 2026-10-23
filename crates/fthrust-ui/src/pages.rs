@@ -6,7 +6,7 @@ use egui::Ui;
 use crate::state::AppState;
 use crate::tokens::Color;
 
-/// Clips page placeholder (plan 5 replaces it with the library).
+/// Clips page placeholder (kept for tests that render an empty body).
 pub fn clips_placeholder(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()

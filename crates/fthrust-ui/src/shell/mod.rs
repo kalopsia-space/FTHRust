@@ -173,7 +173,7 @@ pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
     }
     let stack_rect = Rect::from_min_max(Pos2::new(rail_rect.max.x, row.min.y), row.max);
     page_stack::ui(ui, state, stack_rect, |ui, state, page| match page {
-        Page::Clips => crate::pages::clips_placeholder(ui, state),
+        Page::Clips => crate::library::page::ui(ui, state),
         Page::Settings => crate::pages::settings_page(ui, state),
     });
     crate::popups::draw_all(ui, state);

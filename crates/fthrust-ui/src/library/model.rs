@@ -96,6 +96,9 @@ pub struct Library {
     pub count: usize,
     /// Set when nothing is visible.
     pub empty: Option<EmptyState>,
+    /// A scan has completed (before that the heading is the reference's
+    /// initial `All clips`).
+    pub scanned: bool,
 }
 
 fn kind_of(path: &Path) -> MediaKind {
@@ -117,6 +120,7 @@ impl Library {
             sections: Vec::new(),
             count: 0,
             empty: None,
+            scanned: false,
         }
     }
 
@@ -156,6 +160,9 @@ impl Library {
 
     /// `ALL CLIPS  (12)`; the bare heading when empty.
     pub fn heading_text(&self) -> String {
+        if self.count == 0 && !self.scanned {
+            return "All clips".into();
+        }
         if self.count == 0 {
             heading(self.filter).to_owned()
         } else {
@@ -185,6 +192,7 @@ impl Library {
             size: meta.len(),
             mtime_ns,
         };
+        self.scanned = true;
         match self.records.iter_mut().find(|r| r.identity == identity) {
             Some(existing) if *existing == record => false,
             Some(existing) => {

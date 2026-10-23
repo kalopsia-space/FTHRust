@@ -210,7 +210,7 @@ pub fn card(
     let card_bg = t.color(Color::CardBg);
     ui.painter()
         .rect_filled(rect, CornerRadius::same(geom::RADIUS_CARD as u8), card_bg);
-    fidelity::mark(ui, format!("{name}/clipCard"), rect).done();
+    fidelity::mark(ui, name, rect).done();
     // Thumbnail.
     let thumb = Rect::from_min_size(rect.min, Vec2::new(width, thumb_h));
     let top_round = CornerRadius {
