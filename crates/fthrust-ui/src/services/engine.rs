@@ -367,6 +367,7 @@ impl Supervisor {
         self.tracker
             .deactivate("capture engine exited unexpectedly");
         self.finish_apply(out);
+        out.push(Effect::Ui(Event::ActiveConfig(None)));
         self.recovery.reset(None);
         self.snapshot = Some(self.health.observe(false, 0, 0, 0, now));
         self.status(out, "ENGINE STOPPED", StatusStyle::Warning);
@@ -595,6 +596,8 @@ impl Supervisor {
                 );
                 let state = snapshot.state;
                 self.snapshot = Some(snapshot.clone());
+                // Save admission and the recording guard read the latest snapshot.
+                out.push(Effect::Ui(Event::Health(snapshot.clone())));
                 // Activate or fail the pending launch.
                 if let Some((_, launch_gen)) = &self.pending_launch
                     && *launch_gen == self.generation
@@ -608,6 +611,9 @@ impl Supervisor {
                         let _ = self.tracker.succeed();
                         self.pending_launch = None;
                         self.finish_apply(&mut out);
+                        out.push(Effect::Ui(Event::ActiveConfig(
+                            self.tracker.active().cloned(),
+                        )));
                     } else if matches!(state, HealthState::Stalled | HealthState::Failed) {
                         self.tracker.fail(&snapshot.reason);
                         self.pending_launch = None;
@@ -968,10 +974,16 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
         Effect::Connect => connect_engine(ctx),
         Effect::Send(cmd) => {
             let c = ctx.clone();
+            tracing::info!(command = ?std::mem::discriminant(&cmd), "engine command");
             ctx.handle.spawn(async move {
                 let guard = c.client.lock().await;
-                if let Some(client) = guard.as_ref() {
-                    let _ = client.send(cmd).await;
+                match guard.as_ref() {
+                    Some(client) => {
+                        if let Err(e) = client.send(cmd).await {
+                            tracing::warn!(error = %e, "engine command failed");
+                        }
+                    }
+                    None => tracing::warn!("engine command dropped: not connected"),
                 }
             });
         }
@@ -1033,6 +1045,7 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                 if let Ok(mut slot) = c.child.lock() {
                     *slot = Some(child);
                 }
+                tracing::info!(pid, "engine spawned");
                 let _ = c.inputs.send(Input::Spawned { pid });
                 // Watch for exit.
                 let watcher = c.clone();
@@ -1086,9 +1099,11 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
             if c.child.lock().map(|s| s.is_none()).unwrap_or(true) {
                 return;
             }
+            tracing::info!(socket = %c.socket.display(), "connecting to the engine");
             match EngineClient::connect(&c.socket).await {
                 Ok(client) => {
                     let hello = client.hello().clone();
+                    tracing::info!(pid = hello.pid, version = %hello.version, "engine connected");
                     let _ = c.inputs.send(Input::Hello {
                         pid: hello.pid,
                         version: hello.version,
@@ -1117,6 +1132,7 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                             };
                             let _ = forward_inputs.send(input);
                         }
+                        tracing::warn!("engine event stream ended");
                         let _ = forward_inputs.send(Input::Disconnected);
                     });
                     let events_tx = tx;
@@ -1184,13 +1200,25 @@ fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
                 .await
                 .is_ok();
         }
+        let mut code = None;
         if !done {
             let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_millis(500), child.wait()).await;
+            if let Ok(Ok(status)) =
+                tokio::time::timeout(Duration::from_millis(500), child.wait()).await
+            {
+                code = status.code();
+            }
+        } else if let Ok(status) = child.try_wait()
+            && let Some(status) = status
+        {
+            code = status.code();
         }
         if let Ok(mut p) = c.pid.lock() {
             *p = None;
         }
         *c.client.lock().await = None;
+        // The exit watcher no longer owns the child: report the exit here so
+        // the supervisor leaves `Stopping` and relaunches when asked to.
+        let _ = c.inputs.send(Input::ProcessExited { code });
     });
 }

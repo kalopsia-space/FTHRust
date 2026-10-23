@@ -94,24 +94,7 @@ fn main() {
             fthrust_core::window_geometry::MIN_HEIGHT as f32,
         ))
         .with_maximized(placement.maximized);
-    let options = eframe::NativeOptions {
-        viewport,
-        renderer: eframe::Renderer::Wgpu,
-        ..Default::default()
-    };
-    if let Err(e) = eframe::run_native(
-        "FTHR Clips",
-        options,
-        Box::new(move |cc| {
-            let mut app = fthrust_ui::App::new(cc, state);
-            let mut services = fthrust_ui::services::Services::start(&app.state, &cc.egui_ctx);
-            if let Some(i) = instance {
-                services.attach_instance(i);
-            }
-            app.services = Some(services);
-            Ok(Box::new(app))
-        }),
-    ) {
+    if let Err(e) = fthrust_ui::runner::run(state, instance, viewport) {
         eprintln!("fthrust: {e}");
         std::process::exit(1);
     }

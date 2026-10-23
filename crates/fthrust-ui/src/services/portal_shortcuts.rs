@@ -147,6 +147,22 @@ async fn run(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<Msg>,
 ) {
     use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+    // Host apps need an app id (xdg-desktop-portal 1.18+ refuses GlobalShortcuts
+    // sessions without one); registration fails harmlessly until a desktop
+    // file for the id is installed.
+    match ashpd::AppID::try_from(super::APP_ID) {
+        Ok(id) => match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ashpd::register_host_app(id),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::info!(error = %e, "portal host-app registration unavailable"),
+            Err(_) => tracing::info!("portal host-app registration timed out"),
+        },
+        Err(e) => tracing::warn!(error = %e, "invalid portal app id"),
+    }
     let proxy =
         match tokio::time::timeout(std::time::Duration::from_secs(5), GlobalShortcuts::new()).await
         {

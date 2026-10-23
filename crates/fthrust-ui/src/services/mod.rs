@@ -200,22 +200,33 @@ pub enum Request {
     Shutdown,
 }
 
+/// The app id registered with the desktop portals.
+pub const APP_ID: &str = "space.kalopsia.fthrust";
+
 /// Sends events to the UI and wakes it.
 #[derive(Clone)]
 pub struct Outbox {
     tx: Sender<Event>,
     ctx: egui::Context,
+    waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Outbox {
     /// An outbox over `tx` that repaints `ctx`.
     pub fn new(tx: Sender<Event>, ctx: egui::Context) -> Self {
-        Outbox { tx, ctx }
+        Outbox {
+            tx,
+            ctx,
+            waker: None,
+        }
     }
 
-    /// Sends an event and requests a repaint.
+    /// Sends an event, wakes the event loop and requests a repaint.
     pub fn send(&self, event: Event) {
         let _ = self.tx.send(event);
+        if let Some(w) = &self.waker {
+            w();
+        }
         self.ctx.request_repaint();
     }
 }
@@ -261,10 +272,22 @@ pub struct Services {
 impl Services {
     /// Starts the runtime and the library scan service.
     pub fn start(state: &AppState, ctx: &egui::Context) -> Services {
+        Self::start_with_waker(state, ctx, None)
+    }
+
+    /// [`Services::start`] with a function the service threads call to wake
+    /// the event loop (the runner's user event), so events are handled even
+    /// when no frame can be painted.
+    pub fn start_with_waker(
+        state: &AppState,
+        ctx: &egui::Context,
+        waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    ) -> Services {
         let (tx, rx) = channel();
         let outbox = Outbox {
             tx,
             ctx: ctx.clone(),
+            waker,
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -495,6 +518,7 @@ impl Services {
             outbox: Outbox {
                 tx,
                 ctx: ctx.clone(),
+                waker: None,
             },
             scan: None,
             scan_forwarder: None,
@@ -721,6 +745,11 @@ impl Services {
 
     /// `_save_clip` for `seconds`.
     pub fn save_clip(&mut self, state: &mut AppState, seconds: u32) {
+        tracing::info!(
+            seconds,
+            connected = self.engine_connected,
+            "save clip requested"
+        );
         let now = self.now();
         let wall = self.wall();
         let health = self.health.clone();
@@ -742,6 +771,7 @@ impl Services {
     }
 
     fn on_hotkey(&mut self, state: &mut AppState, action: HotkeyAction) {
+        tracing::info!(action = %action.id(), "hotkey");
         match action {
             HotkeyAction::SaveClip => {
                 let seconds = state.settings.get_i64("clip_length").unwrap_or(30).max(1) as u32;
@@ -961,6 +991,9 @@ impl Services {
                     apply_event(state, Event::EngineConnected(on));
                 }
                 Event::Status { text, style } => {
+                    if self.engine_status.as_ref().is_none_or(|s| s.text != text) {
+                        tracing::info!(status = %text, "engine status");
+                    }
                     self.engine_status = Some(StatusText {
                         text: text.clone(),
                         style,
@@ -1156,10 +1189,41 @@ impl Services {
         }
     }
 
-    /// Stops every service (bounded).
+    /// The reference's exit order, part one: a running manual recording is
+    /// stopped and finalised (bounded) before anything else goes away.
+    pub fn prepare_exit(&mut self, state: &mut AppState) {
+        if self.recording.state() == recording::RecordState::Recording {
+            self.toggle_recording(state);
+        }
+        if self.test_commands.is_some() || self.engine.is_none() {
+            return;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while self.recording.busy() && std::time::Instant::now() < deadline {
+            match self
+                .events
+                .recv_timeout(std::time::Duration::from_millis(50))
+            {
+                Ok(Event::Engine(ipc)) => {
+                    let now = self.now();
+                    let actions = self.recording.on_engine_event(&ipc, now);
+                    self.run_rec_actions(state, actions);
+                }
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(_) => break,
+            }
+            let now = self.now();
+            let actions = self.recording.on_tick(now);
+            self.run_rec_actions(state, actions);
+        }
+    }
+
+    /// Stops every service (bounded), in the reference's order: input and
+    /// detection first, then feedback, then the engine, then the lock.
     pub fn shutdown(mut self) {
-        if let Some(engine) = self.engine.take() {
-            engine.shutdown();
+        if let Some(d) = self.detector.take() {
+            d.stop();
         }
         if let Some(p) = self.portal.take() {
             p.stop();
@@ -1167,15 +1231,15 @@ impl Services {
         if let Some(s) = self.hotkey_server.take() {
             s.close();
         }
-        if let Some(d) = self.detector.take() {
-            d.stop();
-        }
         if let Some(p) = self.sounds.take() {
             p.stop();
             drop(p);
         }
         if let Some(o) = self.overlay.take() {
             o.shutdown();
+        }
+        if let Some(engine) = self.engine.take() {
+            engine.shutdown();
         }
         if let Some(scan) = self.scan.take() {
             scan.stop();

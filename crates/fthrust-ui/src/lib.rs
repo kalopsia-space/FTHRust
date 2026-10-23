@@ -13,6 +13,7 @@ pub mod motion;
 pub mod overlay;
 pub mod pages;
 pub mod popups;
+pub mod runner;
 pub mod services;
 pub mod settings;
 pub mod shell;
@@ -21,7 +22,7 @@ pub mod theme;
 pub mod tokens;
 pub mod widgets;
 
-/// The eframe application.
+/// The application: state, services and the per-frame UI.
 pub struct App {
     /// Shared state.
     pub state: state::AppState,
@@ -33,19 +34,25 @@ pub struct App {
 
 impl App {
     /// Builds the app: fonts and style are installed on `ctx`.
-    pub fn new(cc: &eframe::CreationContext<'_>, state: state::AppState) -> App {
-        fonts::install(&cc.egui_ctx, &state.tokens);
-        tokens::install_style(&cc.egui_ctx, &state.tokens);
+    pub fn new(ctx: &egui::Context, state: state::AppState) -> App {
+        fonts::install(ctx, &state.tokens);
+        tokens::install_style(ctx, &state.tokens);
         App {
             state,
             services: None,
             clamped: false,
         }
     }
-}
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Runs the services without painting (loop wakes between frames).
+    pub fn tick(&mut self) {
+        if let Some(services) = self.services.as_mut() {
+            services.tick(&mut self.state);
+        }
+    }
+
+    /// One frame.
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
         if !self.clamped {
             // Review Focus 3: a geometry saved on a removed monitor is clamped
             // to the monitor the window actually opened on.
@@ -73,16 +80,17 @@ impl eframe::App for App {
                 self.clamped = true;
             }
         }
-        if let Some(services) = self.services.as_mut() {
-            services.tick(&mut self.state);
-        }
+        self.tick();
         shell::ui(ui, &mut self.state);
     }
 
-    fn on_exit(&mut self) {
-        if let Some(services) = self.services.take() {
+    /// The reference's shutdown order, then the window geometry is saved.
+    pub fn on_exit(&mut self) {
+        if let Some(mut services) = self.services.take() {
+            services.prepare_exit(&mut self.state);
             services.shutdown();
         }
+        services::diagnostics::emit(&self.state, "app", "exit", serde_json::json!({}));
         // winit on Wayland has no window position; keep size and state.
         let rect = self.state.window.last_inner;
         if rect.width > 0 && rect.height > 0 {
@@ -94,7 +102,8 @@ impl eframe::App for App {
         }
     }
 
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+    /// The window clear colour (the theme background).
+    pub fn clear_color(&self) -> [f32; 4] {
         let c = self.state.tokens.color(tokens::Color::Bg);
         [
             c.r() as f32 / 255.0,

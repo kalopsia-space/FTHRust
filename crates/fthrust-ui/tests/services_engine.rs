@@ -493,6 +493,29 @@ fn synthetic_engine_round_trip() {
         s.status.text
     );
     assert!(s.active_encoder.is_some());
+    // A restart (settings apply) relaunches the daemon and comes back healthy.
+    s.engine_restart_requested = true;
+    services.tick(&mut s);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut left = false;
+    let mut back = false;
+    while std::time::Instant::now() < deadline {
+        services.tick(&mut s);
+        if !left && s.status.text != "CAPTURING" {
+            left = true;
+        }
+        if left && s.status.text == "CAPTURING" {
+            back = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(left, "the restart changed the status");
+    assert!(
+        back,
+        "the engine relaunched after the restart (last: {})",
+        s.status.text
+    );
     services.kill_engine_for_tests();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut stopped = false;
@@ -511,4 +534,76 @@ fn synthetic_engine_round_trip() {
     );
     assert!(s.error_bar.visible());
     services.shutdown();
+}
+
+#[test]
+fn status_frames_forward_health_snapshots() {
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Spawned { pid: 1 }, 0.1);
+    sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        0.2,
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, 0.3);
+    let mut now = 0.4;
+    let mut last = Vec::new();
+    for frames in 1..40u64 {
+        now += 0.1;
+        last = sv.handle(Input::Status(status(frames * 6, flags::ACTIVE, 1)), now);
+    }
+    let health: Vec<_> = last
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Ui(fthrust_ui::services::Event::Health(h)) => Some(h.state),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        health,
+        vec![fthrust_core::capture_health::HealthState::Healthy],
+        "{last:?}"
+    );
+}
+
+#[test]
+fn launch_success_publishes_active_config() {
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Spawned { pid: 1 }, 0.1);
+    sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        0.2,
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, 0.3);
+    let mut now = 0.4;
+    let mut published = None;
+    for frames in 1..40u64 {
+        now += 0.1;
+        let fx = sv.handle(Input::Status(status(frames * 6, flags::ACTIVE, 1)), now);
+        for e in fx {
+            if let Effect::Ui(fthrust_ui::services::Event::ActiveConfig(c)) = e {
+                published = Some(c);
+            }
+        }
+    }
+    assert_eq!(
+        published,
+        Some(Some(config().capture)),
+        "the applied capture config is published once the launch is healthy"
+    );
+    let fx = sv.handle(Input::ProcessExited { code: Some(1) }, now + 1.0);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Ui(fthrust_ui::services::Event::ActiveConfig(None))
+        )),
+        "an exited engine clears the active config: {fx:?}"
+    );
 }

@@ -199,8 +199,15 @@ fn handle(mut stream: UnixStream, bindings: &Mutex<HotkeyBindings>, outbox: &Out
         Ok(b) => parse_message(&buf, &b),
         Err(_) => None,
     };
-    if let Some(a) = action {
-        outbox.send(Event::Hotkey(a));
+    match action {
+        Some(a) => {
+            tracing::info!(action = %a.id(), "hotkey socket");
+            outbox.send(Event::Hotkey(a));
+        }
+        None => tracing::info!(
+            message = %String::from_utf8_lossy(&buf[..buf.len().min(MAX_ACTION_LEN)]).trim(),
+            "hotkey socket: unknown command"
+        ),
     }
 }
 

@@ -20,6 +20,10 @@ FTHRUST_ASSETS=/path/to/assets cargo run -p fthrust-ui   # assets elsewhere than
 `fthrust --version` prints the version. The UI needs a Wayland session; the
 engine is started by the UI (plan 5) or by hand as below.
 
+The capture side of the UI (engine supervision, hotkeys, saves, screenshots,
+recordings, game detection, the capture card) is described in
+[docs/capture-and-library.md](docs/capture-and-library.md).
+
 ## Running the engine by hand
 
 The capture daemon is a separate binary. For debugging it can be driven

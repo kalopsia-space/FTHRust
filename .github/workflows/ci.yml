@@ -13,6 +13,7 @@ jobs:
           components: clippy, rustfmt
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build -p fthrust-engine
       - run: cargo test --workspace
         env:
           WGPU_BACKEND: vulkan

@@ -2,6 +2,12 @@
 
 ## Fixed
 
+- Screenshots go through the Screenshot portal, so the hotkey no longer produces black images on Wayland.
+- Game detection and focus pause work on Wayland through the compositor's toplevel list instead of `xdotool`.
+- Manual recording works on Linux (the reference disabled the button there).
+- Hyprland hotkey binds call the app's own `--hotkey` client instead of depending on `nc`.
+- The capture card is a layer-shell overlay instead of a Qt tool window that compositors could hide; without layer-shell it falls back to a desktop notification.
+
 - Settings pages keep their real width when a scrollbar appears instead of reflowing wrapped labels under it; the Audio page hides the scrollbar when it fits.
 - A navigation chord that conflicts with another binding is reported next to the bindings and the old binding is kept, instead of silently overwriting it.
 - Theme edits are a draft until Apply theme; Reset all restores every default in one step.
@@ -45,6 +51,9 @@
 - Clip saves carry one AAC track per captured source, labelled `Default Mix` and `Microphone`, and report which tracks were written.
 
 ## Added
+
+- Clips page: the virtualised card grid with thumbnails, filters and sorting, rename and delete, keyboard navigation chords, and the file watcher that keeps it current.
+- Engine supervision, replay saves, screenshots, manual recording, hotkey delivery (socket, Hyprland config, GlobalShortcuts portal), game detection, focus pause, the capture card and sounds, single instance and diagnostics export (`docs/capture-and-library.md`).
 
 - `fthrust-ui` crate: the egui shell. Theme tokens, fonts and icons from the same assets, a frameless Wayland window with the title strip, toolbar, navigation rail, error bar, all seven Settings tabs, the four toolbar popups and the dialogs, each held to the PySide6 reference by a marker-for-marker fidelity gate (`docs/ui-fidelity.md`). Visuals change on Apply theme; performance presets and keyboard navigation chords are recorded and validated through the core crate.
 

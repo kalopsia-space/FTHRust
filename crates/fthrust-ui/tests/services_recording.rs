@@ -284,3 +284,35 @@ fn recording_error_from_engine_fails_cleanly() {
             .all(|c| !matches!(c, CardKind::RecordingSaved { .. }))
     );
 }
+
+#[test]
+fn exit_stops_an_active_recording_first() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.inject(Event::EngineConnected(true));
+    services.tick(&mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(&mut s);
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id: 1,
+        path: s.settings.recording_directory().unwrap().join("x.mp4"),
+    }));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Recording);
+    services.drain_commands_for_tests();
+    services.prepare_exit(&mut s);
+    let cmds = services.drain_commands_for_tests();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::StopRecording { .. })),
+        "{cmds:?}"
+    );
+    assert_eq!(services.recording_state(), RecordState::Stopping);
+    // Idle: nothing is sent.
+    let mut services2 = Services::start_for_tests(&ctx);
+    services2.prepare_exit(&mut s);
+    assert!(services2.drain_commands_for_tests().is_empty());
+    services.shutdown();
+}

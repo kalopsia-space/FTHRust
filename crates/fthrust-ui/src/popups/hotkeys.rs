@@ -38,11 +38,14 @@ pub fn detect_compositor() -> String {
         return "none".into();
     }
     if wayland {
-        if !env("HYPRLAND_INSTANCE_SIGNATURE").is_empty() {
-            return "hyprland".into();
-        }
         let desktop = env("XDG_CURRENT_DESKTOP").to_lowercase();
         let session = env("XDG_SESSION_DESKTOP").to_lowercase();
+        if !env("HYPRLAND_INSTANCE_SIGNATURE").is_empty()
+            || desktop.contains("hyprland")
+            || session.contains("hyprland")
+        {
+            return "hyprland".into();
+        }
         if desktop.contains("kde") || session.contains("plasma") || session.contains("kde") {
             return "kwin".into();
         }

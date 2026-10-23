@@ -10,7 +10,8 @@ fthrust-core = { path = "../fthrust-core" }
 fthrust-media = { path = "../fthrust-media" }
 fthrust-ipc = { path = "../fthrust-ipc" }
 fthrust-wayland = { path = "../fthrust-wayland" }
-eframe.workspace = true
+winit.workspace = true
+egui-winit.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
 resvg.workspace = true
