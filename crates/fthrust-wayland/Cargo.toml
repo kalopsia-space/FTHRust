@@ -11,6 +11,7 @@ wayland-backend.workspace = true
 wayland-protocols.workspace = true
 wayland-protocols-wlr.workspace = true
 memmap2.workspace = true
+raw-window-handle.workspace = true
 nix.workspace = true
 libc.workspace = true
 thiserror.workspace = true

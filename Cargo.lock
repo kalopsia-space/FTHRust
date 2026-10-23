@@ -1594,6 +1594,7 @@ dependencies = [
  "libc",
  "memmap2",
  "nix",
+ "raw-window-handle",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
