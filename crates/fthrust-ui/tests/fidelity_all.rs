@@ -307,6 +307,7 @@ fn card_data(feedback: Option<&str>) -> fthrust_ui::library::card::CardData {
         uploaded: false,
         upload_link: None,
         upload_enabled: true,
+        uploading: false,
         ready: true,
         feedback: feedback.map(str::to_owned),
         thumbnail: None,

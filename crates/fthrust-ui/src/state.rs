@@ -506,6 +506,10 @@ pub struct AppState {
     pub upload_status: std::collections::HashMap<std::path::PathBuf, String>,
     /// Clips the engine committed since the last tick (immediate uploads).
     pub saved_clips: Vec<std::path::PathBuf>,
+    /// The editor's Upload button shows `Queued` until this time.
+    pub editor_upload_queued_until: Option<f64>,
+    /// Library path → the resolved path the upload history is keyed by.
+    pub upload_keys: std::collections::HashMap<std::path::PathBuf, std::path::PathBuf>,
     /// Show a file in the file manager (plan 5 services consume).
     pub show_in_file_manager_requested: Option<std::path::PathBuf>,
     /// Scrolling settled: the last wheel/drag time.
@@ -738,6 +742,8 @@ impl AppState {
             upload_history,
             upload_status: std::collections::HashMap::new(),
             saved_clips: Vec::new(),
+            upload_keys: std::collections::HashMap::new(),
+            editor_upload_queued_until: None,
             show_in_file_manager_requested: None,
             library_last_scroll: -10.0,
             diagnostics: None,
