@@ -1,0 +1,417 @@
+{
+ "schema": 1,
+ "screen": "share-picker",
+ "size": [
+  330,
+  350
+ ],
+ "pixels_per_point": 1,
+ "widgets": [
+  {
+   "name": "QLabel[Share as]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    14,
+    29,
+    22
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      30,
+      25
+     ],
+     "rgb": "#282d2b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      25
+     ],
+     "rgb": "#0b0f0e",
+     "token": null
+    },
+    {
+     "role": "top",
+     "at": [
+      30,
+      14
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 8,
+    "content": "Share as",
+    "px": 8,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 10,
+    "descent": 2,
+    "height": 12,
+    "leading": 0,
+    "line_spacing": 12,
+    "avg_char_width": 4,
+    "bounding_height": 12,
+    "bounding_width": 28,
+    "advance": 27
+   }
+  },
+  {
+   "name": "WheelSafeComboBox[High quality]",
+   "class": "WheelSafeComboBox",
+   "rect": [
+    16,
+    46,
+    298,
+    38
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      165,
+      65
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      65
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      165,
+      46
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "High quality",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 65,
+    "advance": 65
+   }
+  },
+  {
+   "name": "QLabel[Lossless uses MKV and may not preview in]",
+   "class": "QLabel",
+   "rect": [
+    16,
+    94,
+    298,
+    94
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      165,
+      141
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      141
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "top",
+     "at": [
+      165,
+      94
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 500,
+    "matched_px": 11,
+    "content": "Lossless uses MKV and may not preview in chat apps. Size presets require Very fast or High quality.",
+    "px": 11,
+    "weight": 500,
+    "family": "Oswald",
+    "ascent": 13,
+    "descent": 3,
+    "height": 16,
+    "leading": 0,
+    "line_spacing": 16,
+    "avg_char_width": 5,
+    "bounding_height": 16,
+    "bounding_width": 392,
+    "advance": 392
+   }
+  },
+  {
+   "name": "QPushButton[Share clip]",
+   "class": "QPushButton",
+   "rect": [
+    16,
+    198,
+    298,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      165,
+      218
+     ],
+     "rgb": "#9b9d9b",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      218
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    },
+    {
+     "role": "top",
+     "at": [
+      165,
+      198
+     ],
+     "rgb": "#f3f6f4",
+     "token": "TEXT"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 10,
+    "content": "Share clip",
+    "px": 10,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 12,
+    "descent": 3,
+    "height": 15,
+    "leading": 0,
+    "line_spacing": 15,
+    "avg_char_width": 5,
+    "bounding_height": 15,
+    "bounding_width": 40,
+    "advance": 40
+   }
+  },
+  {
+   "name": "QPushButton[10 MB  ·  Discord]",
+   "class": "QPushButton",
+   "rect": [
+    16,
+    248,
+    298,
+    40
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      165,
+      268
+     ],
+     "rgb": "#070a09",
+     "token": "BG"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      268
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      165,
+      248
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 10,
+    "content": "10 MB  ·  Discord",
+    "px": 10,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 12,
+    "descent": 3,
+    "height": 15,
+    "leading": 0,
+    "line_spacing": 15,
+    "avg_char_width": 5,
+    "bounding_height": 15,
+    "bounding_width": 67,
+    "advance": 67
+   }
+  },
+  {
+   "name": "WheelSafeComboBox[Clip 25 MB]",
+   "class": "WheelSafeComboBox",
+   "rect": [
+    16,
+    299,
+    200,
+    36
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      116,
+      317
+     ],
+     "rgb": "#141b17",
+     "token": "CARD_BG_HI"
+    },
+    {
+     "role": "edge",
+     "at": [
+      16,
+      317
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    },
+    {
+     "role": "top",
+     "at": [
+      116,
+      299
+     ],
+     "rgb": "#242c27",
+     "token": "BORDER"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 400,
+    "matched_px": 15,
+    "content": "Clip 25 MB",
+    "px": 15,
+    "weight": 400,
+    "family": "Oswald",
+    "ascent": 18,
+    "descent": 4,
+    "height": 22,
+    "leading": 0,
+    "line_spacing": 22,
+    "avg_char_width": 7,
+    "bounding_height": 22,
+    "bounding_width": 59,
+    "advance": 59
+   }
+  },
+  {
+   "name": "QPushButton[Use]",
+   "class": "QPushButton",
+   "rect": [
+    226,
+    299,
+    88,
+    34
+   ],
+   "enabled": true,
+   "samples": [
+    {
+     "role": "fill",
+     "at": [
+      270,
+      316
+     ],
+     "rgb": "#147d59",
+     "token": null
+    },
+    {
+     "role": "edge",
+     "at": [
+      226,
+      316
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    },
+    {
+     "role": "top",
+     "at": [
+      270,
+      299
+     ],
+     "rgb": "#20e3a0",
+     "token": "SUCCESS"
+    }
+   ],
+   "text": {
+    "matched_family": "Oswald",
+    "matched_weight": 600,
+    "matched_px": 14,
+    "content": "Use",
+    "px": 14,
+    "weight": 600,
+    "family": "Oswald",
+    "ascent": 17,
+    "descent": 4,
+    "height": 21,
+    "leading": 0,
+    "line_spacing": 21,
+    "avg_char_width": 7,
+    "bounding_height": 21,
+    "bounding_width": 20,
+    "advance": 20
+   }
+  }
+ ]
+}

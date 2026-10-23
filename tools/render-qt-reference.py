@@ -228,6 +228,66 @@ def _dump_editor_rail(window, profile: Path, output: Path, palette: dict) -> Non
     dump_screen(window, 'clip-editor-rail', output, palette)
 
 
+def _dump_export_screens(window, profile: Path, output: Path, palette: dict) -> None:
+    """Export jobs, the share picker and the share window (plan 6c)."""
+    from core import export_queue
+    from core.export_profiles import ExportPreset, ExportPresetManager
+    from ui.clip_viewer import ShareModeDialog, ShareWindow
+    from ui.export_jobs import ExportJobsDialog
+    export_queue._records.clear()
+    jobs = ExportJobsDialog()
+    jobs.show()
+    QTest.qWait(280)
+    dump_screen(jobs, 'export-jobs-empty', output, palette)
+    exported = profile / 'Exported'
+    export_queue._records[:] = [
+        export_queue.ExportTask(str(profile / 'Overwatch_clip.mp4'),
+                                str(exported / 'Overwatch_clip_export_0123456789ab.mp4'),
+                                'quality', status='Exporting · software', progress=42.0),
+        export_queue.ExportTask(str(profile / 'Valorant_clip.mp4'),
+                                str(exported / 'Valorant_clip_export_ba9876543210.mp4'),
+                                'fast', status='Completed', progress=100.0, done=True),
+    ]
+    jobs.refresh()
+    QTest.qWait(280)
+    dump_screen(jobs, 'export-jobs', output, palette)
+    jobs.close()
+    export_queue._records.clear()
+    ExportPresetManager().save(ExportPreset('clip-25', 'Clip 25 MB', 25.0))
+    picker = ShareModeDialog(window.settings_manager)
+    picker.show()
+    QTest.qWait(280)
+    dump_screen(picker, 'share-picker', output, palette)
+    picker.close()
+    with patch.object(ShareWindow, '_export_worker', lambda self: None):
+        share = ShareWindow(str(profile / 'Overwatch_clip.mp4'), 0.0, 10.0, None,
+                            {'export_quality': 'quality',
+                             'clips_directory': str(profile / 'clips'),
+                             'watermark_enabled': False},
+                            segments=[(0.0, 10.0)])
+        share.show()
+        QTest.qWait(280)
+        dump_screen(share, 'share-window-exporting', output, palette)
+        share._on_export_done(True, str(profile / 'clips' / 'Shared'
+                                        / 'Overwatch_clip_share_12-00-00_0123abcd.mp4'))
+        QTest.qWait(120)
+        dump_screen(share, 'share-window-ready', output, palette)
+        share._cancelled = True
+        share.close()
+        failed = ShareWindow(str(profile / 'Overwatch_clip.mp4'), 0.0, 10.0, None,
+                             {'export_quality': 'quality',
+                              'clips_directory': str(profile / 'clips'),
+                              'watermark_enabled': False},
+                             segments=[(0.0, 10.0)])
+        failed.show()
+        QTest.qWait(280)
+        failed._on_export_done(False, 'FFmpeg exited with code 1')
+        QTest.qWait(120)
+        dump_screen(failed, 'share-window-failed', output, palette)
+        failed._cancelled = True
+        failed.close()
+
+
 def dump_screen(root: QWidget, name: str, output: Path, palette: dict,
                 crop: QRect | None = None) -> dict:
     image = QWidget.grab(root).toImage()
@@ -409,6 +469,7 @@ def main(argv=None) -> Path:
             _dump_editor_variants(editor, profile, output, palette)
             editor.close()
         _dump_editor_rail(window, profile, output, palette)
+        _dump_export_screens(window, profile, output, palette)
         window._shutdown_requested = True
         window._perform_full_shutdown()
         window.close()
