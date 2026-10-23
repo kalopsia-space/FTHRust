@@ -22,10 +22,14 @@ use crate::services::playback::{PlaybackEvent, PlaybackService, SourceState};
 
 pub mod filmstrip;
 pub mod layer;
+pub mod sidebar;
 pub mod timeline_ui;
 
 /// Builds the player for a clip (real: PipeWire output and the wall clock).
 pub type PlayerFactory = Arc<dyn Fn(&Path) -> Result<PlaybackService, String> + Send + Sync>;
+
+/// The loader thread's result: the player and the manifest's source labels.
+type Loaded = (Result<PlaybackService, String>, Vec<(String, String)>);
 
 /// Scrub debounce.
 const SEEK_DEBOUNCE_S: f64 = 0.050;
@@ -86,6 +90,10 @@ pub enum EditorRequest {
     Navigate(i32),
     /// Delete the clip file.
     DeleteClip,
+    /// Open the crop dialog.
+    OpenCrop,
+    /// Open the stretch dialog.
+    OpenStretch,
 }
 
 /// What the timeline header label shows (the last change wins).
@@ -95,6 +103,32 @@ enum LabelMode {
     Range,
     /// `{kept} kept  ·  {n} cuts` (segments changed).
     Kept,
+}
+
+/// One AUDIO MIX source row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceRow {
+    /// Source id (manifest uuid).
+    pub id: String,
+    /// Display name.
+    pub label: String,
+    /// Gain 0–100.
+    pub gain: u8,
+    /// Muted.
+    pub muted: bool,
+    /// The track decodes.
+    pub available: bool,
+}
+
+/// FILE DETAILS metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MetaState {
+    /// Probing.
+    Loading,
+    /// Probed.
+    Ready(fthrust_media::probe::VideoMetadata),
+    /// The probe failed.
+    Unavailable,
 }
 
 /// What survives parking (`capture_session_state`).
@@ -159,7 +193,12 @@ pub struct Editor {
     /// `None` until the first selection change (initial "Delete segment").
     segment_button: Option<bool>,
     player: Option<PlaybackService>,
-    loading: Option<Receiver<Result<PlaybackService, String>>>,
+    loading: Option<Receiver<Loaded>>,
+    meta: MetaState,
+    meta_rx: Option<Receiver<Option<fthrust_media::probe::VideoMetadata>>>,
+    source_labels: Vec<(String, String)>,
+    failed_sources: Vec<String>,
+    test_rows: Option<Vec<SourceRow>>,
     status: String,
     status_clear_at: Option<f64>,
     opened_at: Option<f64>,
@@ -191,11 +230,30 @@ impl Editor {
         std::thread::Builder::new()
             .name("editor-open".into())
             .spawn(move || {
-                let _ = tx.send(factory(&p));
+                let labels = fthrust_core::audio_manifest::read_verified(&p)
+                    .ok()
+                    .flatten()
+                    .map(|m| {
+                        m.sources
+                            .iter()
+                            .map(|s| (s.source_uuid.clone(), s.display_name.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = tx.send((factory(&p), labels));
+            })
+            .map_err(|e| e.to_string())?;
+        let (mtx, mrx) = channel();
+        let p = path.to_path_buf();
+        std::thread::Builder::new()
+            .name("editor-probe".into())
+            .spawn(move || {
+                let _ = mtx.send(fthrust_media::probe::probe_video_metadata(&p));
             })
             .map_err(|e| e.to_string())?;
         let mut e = Editor::blank(path, 1);
         e.loading = Some(rx);
+        e.meta_rx = Some(mrx);
         e.master_volume = settings
             .get_i64("master_volume")
             .unwrap_or(80)
@@ -253,6 +311,11 @@ impl Editor {
             segment_button: None,
             player: None,
             loading: None,
+            meta: MetaState::Loading,
+            meta_rx: None,
+            source_labels: Vec::new(),
+            failed_sources: Vec::new(),
+            test_rows: None,
             status: "Preparing clip…".into(),
             status_clear_at: None,
             opened_at: None,
@@ -329,6 +392,50 @@ impl Editor {
             .unwrap_or_default()
     }
 
+    /// AUDIO MIX source rows (manifest names, else "Track n").
+    pub fn source_rows(&self) -> Vec<SourceRow> {
+        if let Some(rows) = &self.test_rows {
+            return rows.clone();
+        }
+        self.sources()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (id, st))| SourceRow {
+                label: self
+                    .source_labels
+                    .iter()
+                    .find(|(sid, _)| *sid == id)
+                    .map(|(_, l)| l.clone())
+                    .filter(|l| !l.trim().is_empty())
+                    .unwrap_or_else(|| format!("Track {}", i + 1)),
+                available: !self.failed_sources.contains(&id),
+                gain: st.gain_percent,
+                muted: st.muted,
+                id,
+            })
+            .collect()
+    }
+
+    /// Replaces the source rows (UI tests without a player).
+    pub fn set_source_rows_for_tests(&mut self, rows: Vec<(String, String)>) {
+        self.test_rows = Some(
+            rows.into_iter()
+                .map(|(id, label)| SourceRow {
+                    id,
+                    label,
+                    gain: 100,
+                    muted: false,
+                    available: true,
+                })
+                .collect(),
+        );
+    }
+
+    /// FILE DETAILS metadata.
+    pub fn meta(&self) -> &MetaState {
+        &self.meta
+    }
+
     /// The current edit.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot::from_timeline(
@@ -352,6 +459,12 @@ impl Editor {
         store: &mut ClipMetadataStore,
     ) {
         self.last_now = now_s;
+        if let Some(rx) = &self.meta_rx
+            && let Ok(m) = rx.try_recv()
+        {
+            self.meta = m.map_or(MetaState::Unavailable, MetaState::Ready);
+            self.meta_rx = None;
+        }
         let opened_at = *self.opened_at.get_or_insert(now_s);
         self.poll_loading(now_s);
         if self.loading.is_some() && now_s - opened_at >= STALL_S {
@@ -376,8 +489,10 @@ impl Editor {
         if let Some(p) = self.player.as_mut() {
             p.tick();
             for ev in p.events() {
-                if ev == PlaybackEvent::Eof {
-                    self.end_of_edit();
+                match ev {
+                    PlaybackEvent::Eof => self.end_of_edit(),
+                    PlaybackEvent::SourceFailed(id) => self.failed_sources.push(id),
+                    _ => {}
                 }
             }
         }
@@ -415,13 +530,14 @@ impl Editor {
                 self.loading = None;
                 self.fail("CLIP UNAVAILABLE");
             }
-            Ok(Err(e)) => {
+            Ok((Err(e), _)) => {
                 tracing::warn!(error = %e, path = %self.path.display(), "editor could not open the clip");
                 self.loading = None;
                 self.fail("CLIP UNAVAILABLE");
             }
-            Ok(Ok(player)) => {
+            Ok((Ok(player), labels)) => {
                 self.loading = None;
+                self.source_labels = labels;
                 self.loaded(player, now_s);
             }
         }

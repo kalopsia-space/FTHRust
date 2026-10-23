@@ -405,6 +405,41 @@ fn editor_state() -> (tempfile::TempDir, AppState) {
 }
 
 #[test]
+fn clip_editor_covers_every_widget() {
+    let (_tmp, mut s) = editor_state();
+    let tokens = s.tokens.clone();
+    let r = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    let qt = fthrust_ui::fidelity::QtScreen::load("clip-editor").unwrap();
+    let missing: Vec<&str> = qt
+        .widgets
+        .iter()
+        .map(|w| w.name.as_str())
+        .filter(|n| !n.starts_with("qt_scrollarea"))
+        .filter(|n| r.marker(n).is_none())
+        .collect();
+    assert!(missing.is_empty(), "no marker for {missing:?}");
+}
+
+#[test]
+fn clip_editor_sidebar() {
+    let (_tmp, mut s) = editor_state();
+    {
+        let e = s.editor.as_mut().unwrap();
+        e.set_source_rows_for_tests(vec![
+            ("desktop".into(), "Desktop".into()),
+            ("mic".into(), "Mic".into()),
+        ]);
+    }
+    s.editor_panels = [true; 6];
+    check("clip-editor-sidebar", s, |ui, s| {
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(280.0, 2160.0));
+        fthrust_ui::editor::sidebar::ui(ui, rect, s);
+    });
+}
+
+#[test]
 fn clip_editor_timeline() {
     let (_tmp, mut s) = editor_state();
     {

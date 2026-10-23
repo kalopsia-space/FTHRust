@@ -212,3 +212,101 @@ fn minimap_press_centers_view() {
     );
     assert_eq!(e.position_ms(), 8000);
 }
+
+// ---------------------------------------------------------------------------
+// Sidebar (x 1160..1440; content 14 px in, 244 px wide while it scrolls).
+
+fn marker_center(s: &mut AppState, name: &str) -> Pos2 {
+    let tokens = s.tokens.clone();
+    let r = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, s);
+    });
+    r.marker(name)
+        .unwrap_or_else(|| panic!("no marker {name}"))
+        .rect
+        .center()
+}
+
+#[test]
+fn speed_change_is_one_undo_step_and_applies_rate() {
+    let (_tmp, mut s) = editor_state(Lifecycle::Paused);
+    let combo = marker_center(&mut s, "speedCombo");
+    let mut h = harness_for(&mut s);
+    click(&mut h, combo);
+    h.run_steps(2);
+    let item = common::render_harness(&mut h)
+        .marker("speedCombo/item[0.5×  SLOW]")
+        .expect("open list")
+        .rect
+        .center();
+    click(&mut h, item);
+    h.run_steps(3);
+    drop(h);
+    let e = s.editor.as_ref().unwrap();
+    assert_eq!(e.speed, 0.5);
+    assert_eq!(e.undo.undo.len(), 1);
+}
+
+#[test]
+fn quality_combo_persists() {
+    let (_tmp, mut s) = editor_state(Lifecycle::Paused);
+    let combo = marker_center(&mut s, "WheelSafeComboBox[High quality]");
+    let mut h = harness_for(&mut s);
+    click(&mut h, combo);
+    h.run_steps(2);
+    let item = common::render_harness(&mut h)
+        .marker("WheelSafeComboBox[High quality]/item[Lossless · MKV]")
+        .expect("open list")
+        .rect
+        .center();
+    click(&mut h, item);
+    h.run_steps(3);
+    drop(h);
+    assert_eq!(s.settings.get_str("export_quality"), Some("lossless"));
+}
+
+#[test]
+fn details_flush_on_focus_loss() {
+    let (tmp, mut s) = editor_state(Lifecycle::Paused);
+    // Only CLIP DETAILS open, so its fields are on screen.
+    s.editor_panels = [false, false, false, false, true, false];
+    let edit = marker_center(&mut s, "detailEdit[e.g. Gaming, Highlight …]");
+    let mut h = harness_for(&mut s);
+    click(&mut h, edit);
+    h.event(egui::Event::Text("Highlight".into()));
+    h.run_steps(2);
+    click(&mut h, Pos2::new(600.0, 300.0));
+    h.run_steps(2);
+    drop(h);
+    s.tick_editor(None);
+    let store = fthrust_core::clip_metadata::ClipMetadataStore::open(&s.paths).unwrap();
+    let entry = store.get(&tmp.path().join("Overwatch_clip.mp4")).unwrap();
+    assert_eq!(entry.tag, "Highlight");
+    assert_eq!(entry.description, "");
+}
+
+#[test]
+fn linked_import_delete_is_protected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let imports = tmp.path().join("imports");
+    std::fs::create_dir_all(&imports).unwrap();
+    let mut s = AppState::for_tests(
+        tmp.path(),
+        serde_json::json!({"imported_clip_folders": [imports.to_string_lossy()]}),
+    );
+    s.tokens.reduce_motion = true;
+    s.editor = Some(Editor::for_tests(
+        &imports.join("linked.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    let tokens = s.tokens.clone();
+    let r = common::render(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    let m = r.marker("deleteBtn").expect("delete button");
+    assert_eq!(
+        m.text.as_ref().map(|t| t.content.as_str()),
+        Some("Linked original — protected")
+    );
+}

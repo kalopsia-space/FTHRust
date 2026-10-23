@@ -47,6 +47,8 @@ pub struct Combo {
     pub background: Color,
     /// Height (Qt gives 36 to combos sharing a row with a 26 px icon button).
     pub height: f32,
+    /// Text weight of the current item.
+    pub weight: Weight,
 }
 
 impl Combo {
@@ -59,6 +61,7 @@ impl Combo {
             width: None,
             background: Color::Surface3,
             height: HEIGHT,
+            weight: Weight::W400,
         }
     }
 
@@ -71,6 +74,12 @@ impl Combo {
     /// Fixed height.
     pub fn with_height(mut self, h: f32) -> Combo {
         self.height = h;
+        self
+    }
+
+    /// Text weight (`speedCombo` is 600).
+    pub fn with_weight(mut self, weight: Weight) -> Combo {
+        self.weight = weight;
         self
     }
 
@@ -128,7 +137,7 @@ impl Combo {
             t.color(Color::TextMuted)
         };
         let label = self.current().to_owned();
-        let g = galley(ui, &label, size::BODY, Weight::W400, text_color);
+        let g = galley(ui, &label, size::BODY, self.weight, text_color);
         let text_rect = Rect::from_min_max(
             rect.min + Vec2::new(1.0, 0.0),
             Pos2::new(rect.max.x - 22.0 - 8.0, rect.max.y),
@@ -145,7 +154,7 @@ impl Combo {
                 self.background,
             )
             .edge(Color::Border)
-            .text(&label, size::BODY, Weight::W400)
+            .text(&label, size::BODY, self.weight)
             .icon(crate::icons::Icon::Dropdown.asset(), 14.0)
             .done();
         if open {

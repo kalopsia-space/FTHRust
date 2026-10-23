@@ -98,12 +98,21 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
         )
         .done();
     super::timeline_ui::ui(ui, l.trim, state);
-    // Sidebar frame (the panels fill it).
-    ui.painter()
-        .rect_filled(l.sidebar, 0.0, t.color(Color::ShellBg));
+    // Sidebar.
+    ui.painter().vline(
+        l.sidebar.min.x + 0.5,
+        l.sidebar.y_range(),
+        Stroke::new(1.0, t.color(Color::ShellDivider)),
+    );
     fidelity::mark(ui, "editorSidebar", l.sidebar)
-        .sample("fill", l.sidebar.center(), Color::ShellBg)
+        .sample(
+            "fill",
+            Pos2::new(l.sidebar.center().x, l.sidebar.max.y - 2.0),
+            Color::ShellBg,
+        )
         .done();
+    fidelity::mark(ui, "editorSidebarScroll", l.sidebar).done();
+    super::sidebar::ui(ui, l.sidebar, state);
     if state
         .editor
         .as_ref()

@@ -452,6 +452,11 @@ pub struct AppState {
     pub editor: Option<crate::editor::Editor>,
     /// The active editor's video frame texture.
     pub editor_video: Option<crate::video_texture::VideoTexture>,
+    /// Editor sidebar panels open (speed, edit tools, audio mix, colour,
+    /// clip details, file details).
+    pub editor_panels: [bool; 6],
+    /// Editor sidebar scroll offset.
+    pub editor_sidebar_scroll: f32,
     /// The active editor's filmstrip frames.
     pub editor_filmstrip: Vec<egui::TextureHandle>,
     /// Clip tags, descriptions and editor drafts (opened on first use).
@@ -658,6 +663,8 @@ impl AppState {
             open_clip_requested: None,
             editor: None,
             editor_video: None,
+            editor_panels: [true, true, true, false, false, false],
+            editor_sidebar_scroll: 0.0,
             editor_filmstrip: Vec::new(),
             clip_metadata: None,
             editor_clock: std::time::Instant::now(),
