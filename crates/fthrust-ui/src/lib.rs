@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 
 pub mod dialogs;
+pub mod editor;
 pub mod fidelity;
 pub mod fonts;
 pub mod icons;
