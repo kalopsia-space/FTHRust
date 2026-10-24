@@ -84,6 +84,66 @@ group_fetch() {
     rejects_size_mismatch
 }
 
+# A minimal AppDir that passes the gate: the pinned FFmpeg libs and three
+# copies of a tiny program linked against libavutil.
+fixture() {
+    local d="$WORK/appdir-$1" ff="$ROOT/packaging/.cache/ffmpeg" m="$ROOT/packaging/ffmpeg_manifest_linux.json"
+    mkdir -p "$d/usr/bin/assets/fonts" "$d/usr/lib" "$d/licenses"
+    printf 'int av_version_info(void);\nint main(void){return av_version_info()==0;}\n' > "$WORK/t.c"
+    cc -o "$WORK/t" "$WORK/t.c" -L"$ff/lib" -l:libavutil.so.60 || return 1
+    for b in fthrust fthrust-engine fthrust-uploader; do
+        cp "$WORK/t" "$d/usr/bin/$b"
+        patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$d/usr/bin/$b"
+    done
+    while read -r file soname; do
+        cp "$ff/lib/$file" "$d/usr/lib/"
+        ln -s "$file" "$d/usr/lib/$soname"
+    done < <(jq -r '.soname_map | to_entries[] | "\(.key) \(.value)"' "$m")
+    printf '#!/bin/sh\n' > "$d/AppRun"; chmod +x "$d/AppRun"
+    cp "$ROOT/packaging/space.kalopsia.fthrust.desktop" "$ROOT/packaging/space.kalopsia.fthrust.png" "$d/"
+    ln -s space.kalopsia.fthrust.png "$d/.DirIcon"
+    cp "$ROOT/LICENSE" "$d/"; echo notices > "$d/THIRD_PARTY_NOTICES.md"
+    cp "$ROOT/assets/fonts/Oswald-Regular.ttf" "$d/usr/bin/assets/fonts/"
+    echo "$d"
+}
+
+gate_expect() { # name expected-exit expected-line dir [env...]
+    local name="$1" want="$2" line="$3" dir="$4" out rc
+    shift 4
+    out="$(env "$@" "$GATE" "$dir" 2>&1)"; rc=$?
+    if [ $rc -ne "$want" ]; then fail "$name" "exit $rc: $(tail -3 <<<"$out")"; return; fi
+    if ! grep -q -- "$line" <<<"$out"; then fail "$name" "missing '$line' in: $out"; return; fi
+    pass "$name"
+}
+
+group_gate() {
+    local d
+    d="$(fixture pass)" || { fail fixture "could not build the fixture"; return; }
+    gate_expect gate_passes_fixture 0 "RESULT: PASS" "$d"
+
+    d="$(fixture lib)"; printf x >> "$d/usr/lib/libavutil.so.60.26.102"
+    gate_expect gate_fails_tampered_lib 1 "FAIL ffmpeg-libs" "$d"
+
+    d="$(fixture runpath)"; patchelf --set-rpath '$ORIGIN/../lib' "$d/usr/bin/fthrust-engine"
+    gate_expect gate_fails_runpath 1 "FAIL linkage" "$d"
+
+    d="$(fixture flag)"; printf -- '--enable-gpl' >> "$d/usr/bin/fthrust-uploader"
+    gate_expect gate_fails_forbidden_flag 1 "FAIL forbidden-flags" "$d"
+
+    d="$(fixture pw)"; touch "$d/usr/lib/libpipewire-0.3.so.0"
+    gate_expect gate_fails_bundled_pipewire 1 "FAIL linkage" "$d"
+
+    d="$(fixture missing)"; rm "$d/THIRD_PARTY_NOTICES.md"
+    gate_expect gate_fails_missing_notices 1 "FAIL files" "$d"
+
+    d="$(fixture glibc)"
+    gate_expect gate_fails_glibc 1 "FAIL glibc" "$d" MAX_GLIBC_OVERRIDE=2.0
+
+    gate_expect gate_rejects_file_input 1 "is not a directory" "$d/AppRun"
+    mkdir -p "$WORK/empty"
+    gate_expect gate_fails_empty_dir 1 "no ELF files found" "$WORK/empty"
+}
+
 groups=("$@")
 [ ${#groups[@]} -eq 0 ] && groups=(fetch gate)
 for g in "${groups[@]}"; do
