@@ -26,6 +26,12 @@ recordings, game detection, the capture card) is described in
 The editor's playback pipeline (decoders, mixer, audio clock, sync, the
 seek proxy) is described in [docs/playback.md](docs/playback.md).
 
+## Packaging
+
+`packaging/docker-build.sh` builds `dist/FTHRust-<version>-x86_64.AppImage`
+against the pinned LGPL FFmpeg on a glibc 2.35 baseline; see
+[docs/packaging.md](docs/packaging.md).
+
 ## Running the engine by hand
 
 The capture daemon is a separate binary. For debugging it can be driven

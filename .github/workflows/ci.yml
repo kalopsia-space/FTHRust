@@ -2,6 +2,8 @@ name: ci
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-24.04
@@ -22,6 +24,11 @@ jobs:
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
       - run: tools/check-upload-isolation.sh
+      - run: tools/check-assets.sh
+      - run: tools/check-version.sh
+      - run: cargo install cargo-about --locked --features cli --version "$(sed -n 's/^CARGO_ABOUT_VERSION=//p' tools/gen-notices.sh)"
+      - run: tools/gen-notices.sh --check
+      - run: sudo apt-get install -y patchelf jq && tools/test-packaging.sh
 
   uidrive:
     runs-on: ubuntu-latest

@@ -118,6 +118,7 @@ gate_expect() { # name expected-exit expected-line dir [env...]
 
 group_gate() {
     local d
+    "$FETCH" --ffmpeg >/dev/null || { fail fixture "could not fetch FFmpeg"; return; }
     d="$(fixture pass)" || { fail fixture "could not build the fixture"; return; }
     gate_expect gate_passes_fixture 0 "RESULT: PASS" "$d"
 

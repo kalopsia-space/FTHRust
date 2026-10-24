@@ -1,0 +1,29 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  appimage:
+    # The release baseline: glibc 2.35 (packaging/linux_release_baseline.json).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      # Keep in step with packaging/Dockerfile.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config clang libclang-dev meson ninja-build libwayland-dev libxkbcommon-dev patchelf file jq xz-utils desktop-file-utils squashfs-tools
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - run: cargo install cargo-about --locked --features cli --version "$(sed -n 's/^CARGO_ABOUT_VERSION=//p' tools/gen-notices.sh)"
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: tools/check-version.sh --tag "$GITHUB_REF"
+      - run: packaging/build-appimage.sh
+      - run: cd dist && sha256sum -c FTHRust-*.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fthrust-appimage-${{ github.sha }}
+          path: |
+            dist/FTHRust-*.AppImage
+            dist/FTHRust-*.AppImage.sha256
+          retention-days: 7
