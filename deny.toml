@@ -30,3 +30,10 @@ allow = [
     "Ubuntu-font-1.0",
     "CC0-1.0",
 ]
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,8 @@
+{
+  "component": "PipeWire headers and link library (build only, never shipped)",
+  "version": "1.0.5",
+  "license": "MIT",
+  "url": "https://gitlab.freedesktop.org/pipewire/pipewire/-/archive/1.0.5/pipewire-1.0.5.tar.gz",
+  "size": 2278062,
+  "sha256": "c5a5de26d684a1a84060ad7b6131654fb2835e03fccad85059be92f8e3ffe993"
+}

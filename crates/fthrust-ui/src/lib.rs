@@ -144,18 +144,41 @@ impl App {
 /// Crate version, printed by `fthrust --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Where the bundled assets live, relative to the repository (development)
-/// or next to the executable (packaged).
+/// Where the bundled assets live: `$FTHRUST_ASSETS`, else next to the
+/// executable (packaged), else the repository (development).
 pub fn assets_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("FTHRUST_ASSETS") {
         return std::path::PathBuf::from(dir);
     }
     let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
-    if dev.is_dir() {
-        return dev.canonicalize().unwrap_or(dev);
+    assets_dir_for(std::env::current_exe().ok().as_deref(), &dev)
+}
+
+/// The executable compositor hotkey binds run. Inside an AppImage
+/// `current_exe()` is under a mount point that changes every launch, so the
+/// image file itself (`$APPIMAGE`, set by the AppImage runtime) is used.
+pub fn hotkey_client_exe(
+    appimage: Option<&std::ffi::OsStr>,
+    current: Option<&std::path::Path>,
+) -> String {
+    match (appimage.filter(|a| !a.is_empty()), current) {
+        (Some(image), _) => std::path::Path::new(image).display().to_string(),
+        (None, Some(exe)) => exe.display().to_string(),
+        (None, None) => "fthrust".into(),
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("assets")))
-        .unwrap_or_else(|| std::path::PathBuf::from("assets"))
+}
+
+/// [`assets_dir`] without the environment: `<exe dir>/assets` wins over the
+/// repository tree, so a packaged build on the build machine never reads the
+/// compile-time path.
+pub fn assets_dir_for(exe: Option<&std::path::Path>, dev: &std::path::Path) -> std::path::PathBuf {
+    if let Some(adjacent) = exe.and_then(|p| p.parent()).map(|d| d.join("assets"))
+        && adjacent.is_dir()
+    {
+        return adjacent;
+    }
+    if dev.is_dir() {
+        return dev.canonicalize().unwrap_or_else(|_| dev.to_path_buf());
+    }
+    std::path::PathBuf::from("assets")
 }

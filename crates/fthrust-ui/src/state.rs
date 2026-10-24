@@ -651,9 +651,10 @@ impl AppState {
             .unwrap_or_else(|_| paths.default_clips_directory());
         let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
         let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
-        let client_exe = std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "fthrust".into());
+        let client_exe = crate::hotkey_client_exe(
+            std::env::var_os("APPIMAGE").as_deref(),
+            std::env::current_exe().ok().as_deref(),
+        );
         Ok(AppState {
             paths,
             settings,
