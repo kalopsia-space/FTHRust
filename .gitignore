@@ -3,3 +3,5 @@
 /.venv-reference
 /.superpowers/
 *.tmp
+/packaging/.cache
+/dist
