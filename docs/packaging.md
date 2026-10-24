@@ -52,7 +52,7 @@ The build:
 
 ## Host runtime dependencies
 
-Not bundled: glibc ≥ 2.35, `libpipewire-0.3.so.0` (PipeWire ≥ 0.3.49), libva
+Not bundled: glibc ≥ 2.35, `libpipewire-0.3.so.0` (PipeWire ≥ 0.3.48, the Ubuntu 22.04 version: every imported symbol binds against it with `LD_BIND_NOW=1`; capture on 0.3.48 itself is untested), libva
 and the VA-API driver, NVIDIA drivers for NVENC, Vulkan/GL drivers, libwayland,
 libxkbcommon, and an xdg-desktop-portal backend with ScreenCast, Screenshot and
 GlobalShortcuts.

@@ -24,6 +24,8 @@ cd "$ROOT"
 VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "fthrust-ui") | .version')"
 [ -n "$VERSION" ] || die "could not read the workspace version"
 NAME="FTHRust-$VERSION-x86_64.AppImage"
+# An earlier build of this version must not look like this build's output.
+rm -f "$DIST/$NAME" "$DIST/$NAME.sha256"
 
 step "fetching pinned inputs"
 "$PKG/fetch-third-party.sh" --cache "$CACHE"

@@ -24,8 +24,12 @@ if [ -z "$DIR" ] || [ ! -d "$DIR" ]; then
     exit 1
 fi
 
+# Resolve the root and follow symlinked directories, so a linked tree is
+# scanned rather than passed vacuously.
+DIR="$(readlink -f "$DIR")"
+
 is_elf() { [ "$(head -c4 "$1" 2>/dev/null | od -An -c | tr -d ' ')" = '177ELF' ]; }
-mapfile -t ELVES < <(find "$DIR" -type f | while read -r f; do is_elf "$f" && echo "$f"; done)
+mapfile -t ELVES < <(find -L "$DIR" -type f | while read -r f; do is_elf "$f" && echo "$f"; done)
 
 # 1. files
 missing=()
@@ -39,11 +43,12 @@ for b in "${BINARIES[@]}"; do [ -x "$DIR/usr/bin/$b" ] || missing+=("usr/bin/$b"
 # 2. ffmpeg-libs: every bundled FFmpeg file is a pinned, unmodified one.
 problems=()
 while IFS= read -r -d '' f; do
+    [ -L "$f" ] && continue  # soname links, checked below
     name="$(basename "$f")"
     want="$(jq -r --arg n "$name" '.shipped_files_sha256[$n] // empty' "$FFM")"
     if [ -z "$want" ]; then problems+=("unpinned $name"); continue; fi
     [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$want" ] || problems+=("hash $name")
-done < <(find "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' -o -name 'libpostproc*' \) -print0)
+done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' -o -name 'libpostproc*' \) -print0)
 while read -r file soname; do
     [ -f "$DIR/usr/lib/$file" ] || problems+=("missing $file")
     [ "$(readlink "$DIR/usr/lib/$soname" 2>/dev/null)" = "$file" ] || problems+=("soname link $soname")
@@ -76,7 +81,7 @@ for b in "${BINARIES[@]}"; do
         printf '%s\n' "${SONAMES[@]}" | grep -qxF "$need" || problems+=("$b needs $need")
     done < <(sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' <<<"$dyn")
 done
-pw="$(find "$DIR" -name 'libpipewire*' | head -1)"
+pw="$(find -L "$DIR" -name 'libpipewire*' | head -1)"
 [ -z "$pw" ] || problems+=("bundled ${pw#"$DIR"/}")
 [ ${#problems[@]} -eq 0 ] && pass linkage || fail linkage "${problems[*]}"
 

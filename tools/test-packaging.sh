@@ -140,6 +140,13 @@ group_gate() {
     d="$(fixture glibc)"
     gate_expect gate_fails_glibc 1 "FAIL glibc" "$d" MAX_GLIBC_OVERRIDE=2.0
 
+    d="$(fixture symroot)"; printf x >> "$d/usr/lib/libavutil.so.60.26.102"; ln -s "$d" "$WORK/symroot"
+    gate_expect gate_follows_symlinked_root 1 "FAIL ffmpeg-libs" "$WORK/symroot"
+
+    d="$(fixture symlib)"; mv "$d/usr/lib" "$WORK/reallib"; ln -s "$WORK/reallib" "$d/usr/lib"
+    printf -- '--enable-nonfree' >> "$WORK/reallib/libswscale.so.9.5.102"
+    gate_expect gate_follows_symlinked_dir 1 "FAIL forbidden-flags" "$d"
+
     gate_expect gate_rejects_file_input 1 "is not a directory" "$d/AppRun"
     mkdir -p "$WORK/empty"
     gate_expect gate_fails_empty_dir 1 "no ELF files found" "$WORK/empty"

@@ -154,6 +154,20 @@ pub fn assets_dir() -> std::path::PathBuf {
     assets_dir_for(std::env::current_exe().ok().as_deref(), &dev)
 }
 
+/// The executable compositor hotkey binds run. Inside an AppImage
+/// `current_exe()` is under a mount point that changes every launch, so the
+/// image file itself (`$APPIMAGE`, set by the AppImage runtime) is used.
+pub fn hotkey_client_exe(
+    appimage: Option<&std::ffi::OsStr>,
+    current: Option<&std::path::Path>,
+) -> String {
+    match (appimage.filter(|a| !a.is_empty()), current) {
+        (Some(image), _) => std::path::Path::new(image).display().to_string(),
+        (None, Some(exe)) => exe.display().to_string(),
+        (None, None) => "fthrust".into(),
+    }
+}
+
 /// [`assets_dir`] without the environment: `<exe dir>/assets` wins over the
 /// repository tree, so a packaged build on the build machine never reads the
 /// compile-time path.
