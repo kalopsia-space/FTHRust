@@ -250,6 +250,24 @@ fn queue_dedups_and_waits_for_readiness() {
 }
 
 #[test]
+fn settings_problem_offers_the_settings() {
+    let mut r = rig(
+        r#"cat >/dev/null; echo '{"ok":false,"message":"Your server rejected the authorization header (HTTP 401).","upload_info":{},"settings_problem":true}'; exit 1"#,
+        json!({}),
+    );
+    let clip = r.clip("f.mp4");
+    r.svc.enqueue(&mut r.state, clip);
+    r.settle();
+    let e = r.state.error_bar.current().unwrap().clone();
+    assert_eq!(e.title, "[Error 020] UPLOAD FAILED");
+    let labels: Vec<&str> = e.actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, vec!["OPEN UPLOAD SETTINGS", "RETRY NOW"]);
+    r.state.page = fthrust_ui::state::Page::Clips;
+    assert!(r.svc.error_action(&mut r.state, &e.actions[0].id));
+    assert_eq!(r.state.page, fthrust_ui::state::Page::Settings);
+}
+
+#[test]
 fn failure_toast_with_retry() {
     let mut r = rig(
         r#"read -r line; echo "$line" >> "$(dirname "$0")/requests.jsonl"; echo '{"ok":false,"message":"Server said no"}'; exit 1"#,

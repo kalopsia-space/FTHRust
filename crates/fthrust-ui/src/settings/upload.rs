@@ -392,10 +392,7 @@ fn spawn(state: &mut AppState, job: Job, action: &str, config: Map<String, Value
     std::thread::spawn(move || {
         let reply = match exe {
             Some(exe) => run_request(&exe, &request, timeout, &ChildSlot::default()),
-            None => Reply {
-                ok: false,
-                message: "The uploader component is missing from this installation.".into(),
-            },
+            None => Reply::fail("The uploader component is missing from this installation."),
         };
         let _ = tx.send(reply);
     });
@@ -544,10 +541,7 @@ pub fn service(state: &mut AppState, now: f64) {
         Some((_, rx)) => match rx.try_recv() {
             Ok(r) => Some(r),
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(_) => Some(Reply {
-                ok: false,
-                message: String::new(),
-            }),
+            Err(_) => Some(Reply::fail("")),
         },
         None => None,
     };
@@ -929,14 +923,14 @@ pub fn ui_with(ui: &mut Ui, state: &mut AppState, w: f32, support: SupportButton
             StatusKind::Ok => Color::Success,
             StatusKind::Error => Color::Error,
         };
-        section::label(
+        section::label_fit(
             ui,
             &t,
             &f.status,
             size::LABEL,
             Weight::W400,
             color,
-            Some("uploadStatus"),
+            "uploadStatus",
         );
     });
     // Auto upload.

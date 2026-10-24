@@ -36,13 +36,28 @@ built for the "Your server" provider and needs no extra setup in the app:
 | Field | Value |
 |---|---|
 | URL | `https://clips.example.com/upload` |
-| Authorization | `Bearer <UPLOAD_TOKEN or a token from Admin → Tokens>` |
+| Auth header | `Bearer <UPLOAD_TOKEN or a token from Admin → Tokens>` |
 
 Test connection sends `HEAD /upload` (200 with a good token, 401 without).
 An upload returns `{"url": "…/w/<slug>", …}`; the same file uploaded
-twice returns the same link. Checked end to end against a local server
-(main, 2026-10-24): test connection, upload, re-upload, the share page's
-`og:video` tags, the history entry, and a wrong token (HTTP 401).
+twice returns the same link.
+
+What the app says when something is off:
+
+| Problem | Message |
+|---|---|
+| URL without `/upload` | Your server answered (HTTP 200), but the URL has no path. FTHR Clips Server takes uploads at /upload. |
+| No token | Your server needs an upload token (HTTP 401). Set the Auth header to "Bearer <your upload token>". |
+| Token without `Bearer ` | … The Auth header usually looks like "Bearer <your upload token>". |
+| Wrong token | Your server rejected the authorization header (HTTP 401). |
+| `http://` behind an https redirect | Your server redirects to https://…/upload. Use that address as the server URL. |
+| `https://` to a plain-HTTP port | Could not reach your server: it did not answer with HTTPS. Check whether the URL should start with http://. |
+| Clip over `MAX_UPLOAD_BYTES` | The clip is too large for your server (HTTP 413). This clip is … MB. |
+| 30 uploads a minute | Your server is limiting uploads right now (HTTP 429). Try again in a minute. (retried) |
+
+URL and token problems are not retried and put OPEN UPLOAD SETTINGS on the
+UPLOAD FAILED bar. `tools/uidrive/scenarios/clips_server.sh` drives all of
+this against a real server when `FTHR_CLIPS_SERVER` points at its binary.
 
 ## Files
 

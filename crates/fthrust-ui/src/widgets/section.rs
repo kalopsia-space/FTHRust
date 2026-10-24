@@ -101,6 +101,44 @@ pub fn label_wrapped_fit(
     color: Color,
     width: f32,
 ) -> Rect {
+    let name = format!("QLabel[{}]", crate::fidelity::marker_label(text));
+    wrapped_fit(ui, t, text, px, weight, color, width, name)
+}
+
+/// A one-line `label` while the text fits the space left in the row, else
+/// word-wrapped to that space (status lines that can grow long).
+pub fn label_fit(
+    ui: &mut Ui,
+    t: &Tokens,
+    text: &str,
+    px: f32,
+    weight: Weight,
+    color: Color,
+    name: &str,
+) -> Rect {
+    let width = ui.available_width();
+    if galley(ui, text, px, weight, t.color(color))
+        .size()
+        .x
+        .round()
+        <= width
+    {
+        return label(ui, t, text, px, weight, color, Some(name)).rect;
+    }
+    wrapped_fit(ui, t, text, px, weight, color, width, name.to_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrapped_fit(
+    ui: &mut Ui,
+    t: &Tokens,
+    text: &str,
+    px: f32,
+    weight: Weight,
+    color: Color,
+    width: f32,
+    name: String,
+) -> Rect {
     let line = fonts::qt_wrapped_line_height(px, weight);
     let g = ui.painter().layout(
         text.to_owned(),
@@ -114,13 +152,7 @@ pub fn label_wrapped_fit(
     let y = rect.min.y + ((h - g.size().y) / 2.0).floor().max(0.0);
     ui.painter()
         .galley(Pos2::new(rect.min.x, y), g, t.color(color));
-    fidelity::mark(
-        ui,
-        format!("QLabel[{}]", crate::fidelity::marker_label(text)),
-        rect,
-    )
-    .text(text, px, weight)
-    .done();
+    fidelity::mark(ui, name, rect).text(text, px, weight).done();
     rect
 }
 

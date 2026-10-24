@@ -57,6 +57,8 @@ Widget names come from the app's `FTHRUST_UI_DUMP` file (`$BENCH/ui.json`):
 
 `scenarios/selftest.sh`, `smoke.sh`, `save_clip.sh`, `record.sh`. Each prints
 `PASS` or `FAIL <step>`, takes a screenshot on failure and tails the app log.
+`clips_server.sh` needs `FTHR_CLIPS_SERVER` (a fthr-clips-server binary) and
+prints `SKIP` without it.
 `scenarios/lib.sh` has `step`, `run`, `fail`, `names`, `wait_file`.
 
 ## Reading a failure

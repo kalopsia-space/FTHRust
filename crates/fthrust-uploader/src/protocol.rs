@@ -82,6 +82,7 @@ async fn perform(env: &Env, request: &Value) -> Result<Response, String> {
             ok,
             message,
             upload_info: None,
+            settings_problem: false,
         });
     }
     let path = validated_clip_path(request)?;
