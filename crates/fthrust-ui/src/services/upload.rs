@@ -68,13 +68,17 @@ pub struct Reply {
     pub ok: bool,
     /// Message (the link on success).
     pub message: String,
+    /// The upload settings are wrong (URL, token); retrying cannot help.
+    pub settings_problem: bool,
 }
 
 impl Reply {
-    fn fail(message: impl Into<String>) -> Reply {
+    /// A failure with `message`.
+    pub fn fail(message: impl Into<String>) -> Reply {
         Reply {
             ok: false,
             message: message.into(),
+            settings_problem: false,
         }
     }
 }
@@ -187,6 +191,7 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned(),
+            settings_problem: m.get("settings_problem").and_then(Value::as_bool) == Some(true),
         },
         _ => Reply::fail("Uploader returned an invalid response."),
     }
@@ -576,14 +581,22 @@ impl UploadService {
             state.pending_cards.push(CardKind::UploadFailed {
                 detail: detail.clone(),
             });
+            let mut actions = Vec::new();
+            if done.reply.settings_problem {
+                actions.push(Action {
+                    label: "OPEN UPLOAD SETTINGS".into(),
+                    id: OPEN_SETTINGS_ACTION.into(),
+                });
+            }
+            actions.push(Action {
+                label: "RETRY NOW".into(),
+                id: format!("{RETRY_ACTION}{}", done.path.display()),
+            });
             state.error_bar.push_error(
                 "UPLOAD FAILED",
                 &detail,
                 Level::Warning,
-                vec![Action {
-                    label: "RETRY NOW".into(),
-                    id: format!("{RETRY_ACTION}{}", done.path.display()),
-                }],
+                actions,
                 Some(format!("upload:{}", done.path.display())),
                 true,
             );

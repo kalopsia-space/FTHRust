@@ -37,13 +37,18 @@ struct Server {
 }
 
 fn server(replies: Vec<(u16, &str)>) -> Server {
+    server_with(replies.into_iter().map(|(s, b)| (s, b, "")).collect())
+}
+
+/// Like `server`, with extra raw header lines (`"Location: …\r\n"`) per reply.
+fn server_with(replies: Vec<(u16, &str, &str)>) -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/upload?k=1", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
-    let mut replies: VecDeque<(u16, String)> = replies
+    let mut replies: VecDeque<(u16, String, String)> = replies
         .into_iter()
-        .map(|(s, b)| (s, b.to_owned()))
+        .map(|(s, b, h)| (s, b.to_owned(), h.to_owned()))
         .collect();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -78,10 +83,13 @@ fn server(replies: Vec<(u16, &str)>) -> Server {
                 headers,
                 body,
             });
-            let (status, text) = replies.pop_front().unwrap_or((500, "no reply".into()));
+            let (status, text, extra) =
+                replies
+                    .pop_front()
+                    .unwrap_or((500, "no reply".into(), String::new()));
             let _ = write!(
                 stream,
-                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{text}",
                 text.len()
             );
         }
@@ -293,8 +301,8 @@ async fn custom_field_header_and_json_url() {
             "http://bare.example/x",
             "http://bare.example/x",
         ),
-        ("stored!", "", "Upload complete."),
-        ("[1,2]", "", "Upload complete."),
+        ("stored!", "", NO_LINK),
+        ("[1,2]", "", NO_LINK),
     ] {
         let srv = server(vec![(200, body)]);
         let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
@@ -307,19 +315,266 @@ async fn custom_field_header_and_json_url() {
     }
 }
 
+const NO_LINK: &str = "Uploaded, but your server didn't reply with a link.";
+const AT_UPLOAD: &str = "Check the server URL; FTHR Clips Server takes uploads at /upload.";
+
+/// One upload to a custom server answering `replies`, with `auth` as the
+/// Authorization setting. Returns the message and how many requests came.
+async fn custom_upload(replies: Vec<(u16, &str)>, auth: &str) -> (bool, String, usize) {
+    let srv = server(replies);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url,
+        "upload_auth_header": auth
+    }));
+    let (ok, msg, _) = h.upload(&h.env("x")).await;
+    (ok, msg, srv.seen().len())
+}
+
 #[tokio::test]
 async fn custom_error_statuses() {
-    let srv = server(vec![(403, "forbidden")]);
+    let token_hint = "Set the Auth header to \"Bearer <your upload token>\".";
+    for (status, body, auth, want) in [
+        (
+            401,
+            "authentication failed",
+            "Bearer t",
+            "Your server rejected the authorization header (HTTP 401).".to_owned(),
+        ),
+        (
+            403,
+            "forbidden",
+            "Bearer t",
+            "Your server rejected the authorization header (HTTP 403).".to_owned(),
+        ),
+        (
+            401,
+            "",
+            "",
+            format!("Your server needs an upload token (HTTP 401). {token_hint}"),
+        ),
+        (
+            401,
+            "",
+            "abc123",
+            "Your server rejected the authorization header (HTTP 401). \
+          The Auth header usually looks like \"Bearer <your upload token>\"."
+                .to_owned(),
+        ),
+        (
+            404,
+            "",
+            "",
+            format!("Your server has nothing at this URL (HTTP 404). {AT_UPLOAD}"),
+        ),
+        (
+            405,
+            "",
+            "",
+            format!("This URL doesn't take uploads (HTTP 405). {AT_UPLOAD}"),
+        ),
+        (
+            413,
+            "upload too large",
+            "",
+            "The clip is too large for your server (HTTP 413). This clip is 11 bytes.".to_owned(),
+        ),
+        (
+            415,
+            "unsupported media type",
+            "",
+            "Your server doesn't accept this file type (HTTP 415).".to_owned(),
+        ),
+        (
+            400,
+            "malformed multipart body",
+            "",
+            "Your server refused the upload (HTTP 400): malformed multipart body".to_owned(),
+        ),
+        (
+            400,
+            r#"{"error": "bad field"}"#,
+            "",
+            "Your server refused the upload (HTTP 400): bad field".to_owned(),
+        ),
+        (
+            422,
+            r#"{"message": "nope"}"#,
+            "",
+            "Your server refused the upload (HTTP 422): nope".to_owned(),
+        ),
+        (
+            400,
+            "<html><body>nginx</body></html>",
+            "",
+            "Your server refused the upload (HTTP 400).".to_owned(),
+        ),
+        (
+            418,
+            "",
+            "",
+            "Your server refused the upload (HTTP 418).".to_owned(),
+        ),
+    ] {
+        let (ok, msg, n) = custom_upload(vec![(status, body)], auth).await;
+        assert_eq!(
+            (ok, msg.as_str()),
+            (false, want.as_str()),
+            "{status} {body}"
+        );
+        assert_eq!(n, 1, "{status} is not retried");
+    }
+}
+
+#[tokio::test]
+async fn custom_transient_statuses_after_retries() {
+    for (status, body, want) in [
+        (
+            429,
+            "rate limited",
+            "Your server is limiting uploads right now (HTTP 429). Try again in a minute.",
+        ),
+        (
+            500,
+            r#"{"error": "internal error"}"#,
+            "Your server hit an error (HTTP 500): internal error",
+        ),
+        (500, "", "Your server hit an error (HTTP 500)."),
+        (
+            502,
+            "<html>Bad Gateway</html>",
+            "Your server is unavailable right now (HTTP 502).",
+        ),
+        (
+            503,
+            "busy",
+            "Your server is unavailable right now (HTTP 503): busy",
+        ),
+    ] {
+        let replies = vec![(status, body); 4];
+        let (ok, msg, n) = custom_upload(replies, "").await;
+        assert_eq!((ok, msg.as_str()), (false, want), "{status}");
+        assert_eq!(n, 4, "{status} is retried");
+    }
+}
+
+#[tokio::test]
+async fn custom_redirects_name_the_new_address() {
+    let srv = server_with(vec![(
+        301,
+        "",
+        "Location: https://clips.example.com/upload\r\n",
+    )]);
     let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
     let (ok, msg, _) = h.upload(&h.env("x")).await;
-    assert_eq!((ok, msg.as_str()), (false, "forbidden"));
-    assert_eq!(srv.seen().len(), 1, "4xx is not retried");
-    let srv = server(vec![(404, "")]);
+    assert_eq!(
+        (ok, msg.as_str()),
+        (
+            false,
+            "Your server redirected the upload to https://clips.example.com/upload. \
+                 Use that address as the server URL."
+        )
+    );
+    assert_eq!(srv.seen().len(), 1);
+
+    let srv = server_with(vec![(308, "", "Location: /v2/upload\r\n")]);
+    let base = srv.url.split("/upload").next().unwrap().to_owned();
     let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
     assert_eq!(
         h.upload(&h.env("x")).await.1,
-        "Your server returned HTTP 404."
+        format!(
+            "Your server redirected the upload to {base}/v2/upload. Use that address as the server URL."
+        )
     );
+
+    let srv = server_with(vec![(302, "", "")]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    assert_eq!(
+        h.upload(&h.env("x")).await.1,
+        "Your server redirected the upload (HTTP 302). Check the server URL."
+    );
+
+    // The test does not follow redirects either: it would pass while uploads fail.
+    let srv = server_with(vec![
+        (301, "", "Location: https://clips.example.com/upload\r\n"),
+        (200, "", ""),
+    ]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    assert_eq!(
+        h.test(&h.env("x")).await,
+        (
+            false,
+            "Your server redirects to https://clips.example.com/upload. \
+                 Use that address as the server URL."
+                .into()
+        )
+    );
+    assert_eq!(srv.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn custom_test_warns_about_a_bare_address() {
+    let srv = server(vec![(200, ""), (200, "")]);
+    let root = srv.url.split("/upload").next().unwrap().to_owned();
+    for url in [root.clone(), format!("{root}/")] {
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
+        assert_eq!(
+            h.test(&h.env("x")).await,
+            (
+                false,
+                "Your server answered (HTTP 200), but the URL has no path. \
+                    FTHR Clips Server takes uploads at /upload."
+                    .into()
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn network_errors_say_what_went_wrong() {
+    let dead = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/upload", dead.local_addr().unwrap());
+    drop(dead);
+    let refused = "the connection was refused. Check that it is running and the port is right.";
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
+    assert_eq!(
+        h.test(&h.env("x")).await.1,
+        format!("Could not reach your server: {refused}")
+    );
+    assert_eq!(
+        h.upload(&h.env("x")).await.1,
+        format!("Could not reach your server: {refused}")
+    );
+
+    let h = home(json!({"upload_provider": "custom",
+                        "upload_server_url": "http://fthr-clips.invalid/upload"}));
+    assert_eq!(
+        h.test(&h.env("x")).await.1,
+        "Could not reach your server: the name fthr-clips.invalid could not be found."
+    );
+
+    // https:// to a server that speaks plain HTTP: it answers the TLS hello
+    // with an HTTP error, or just hangs up.
+    for reply in [
+        &b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"[..],
+        b"",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tls = format!("https://{}/upload", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut hello = [0u8; 512];
+                let _ = stream.read(&mut hello);
+                let _ = stream.write_all(reply);
+            }
+        });
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": tls}));
+        assert_eq!(
+            h.test(&h.env("x")).await.1,
+            "Could not reach your server: it did not answer with HTTPS. \
+             Check whether the URL should start with http://.",
+            "{reply:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -339,7 +594,10 @@ async fn retry_transient_only() {
     ]);
     let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
     let (ok, msg, _) = h.upload(&h.env("x")).await;
-    assert_eq!((ok, msg.as_str()), (false, "d"));
+    assert_eq!(
+        (ok, msg.as_str()),
+        (false, "Your server is unavailable right now (HTTP 504): d")
+    );
     assert_eq!(srv.seen().len(), 4, "four attempts at most");
 
     // Nobody listening: a connection error, retried, then reported.
@@ -349,7 +607,7 @@ async fn retry_transient_only() {
     let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
     let (ok, msg, _) = h.upload(&h.env("x")).await;
     assert!(!ok);
-    assert!(msg.starts_with("Could not connect"), "{msg}");
+    assert!(msg.starts_with("Could not reach your server: "), "{msg}");
 }
 
 #[tokio::test]
@@ -361,7 +619,13 @@ async fn retry_never_past_deadline() {
     env.deadline = Duration::from_secs(2);
     let started = std::time::Instant::now();
     let (ok, msg, _) = h.upload(&env).await;
-    assert_eq!((ok, msg.as_str()), (false, "busy"));
+    assert_eq!(
+        (ok, msg.as_str()),
+        (
+            false,
+            "Your server is unavailable right now (HTTP 503): busy"
+        )
+    );
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(srv.seen().len(), 1);
 }
@@ -437,11 +701,32 @@ async fn test_connection_statuses() {
     );
     assert_eq!(
         custom(404).await,
-        (false, "Your server returned HTTP 404.".into())
+        (
+            false,
+            format!("Your server has nothing at this URL (HTTP 404). {AT_UPLOAD}")
+        )
     );
     assert_eq!(
         custom(500).await,
-        (false, "Your server returned HTTP 500.".into())
+        (false, "Your server hit an error (HTTP 500).".into())
+    );
+    assert_eq!(
+        custom(503).await,
+        (
+            false,
+            "Your server is unavailable right now (HTTP 503).".into()
+        )
+    );
+    assert_eq!(
+        custom(429).await,
+        (
+            false,
+            "Your server is limiting requests right now (HTTP 429). Try again in a minute.".into()
+        )
+    );
+    assert_eq!(
+        custom(418).await,
+        (false, "Your server returned HTTP 418.".into())
     );
 
     let catbox = |status: u16| async move {
@@ -487,7 +772,7 @@ async fn no_link_means_no_auto_delete() {
     }));
     let real = h.real_clip();
     let (ok, msg, _) = h.upload(&h.env("x")).await;
-    assert_eq!((ok, msg.as_str()), (true, "Upload complete."));
+    assert_eq!((ok, msg.as_str()), (true, NO_LINK));
     assert!(real.exists(), "the only copy was deleted without a link");
 }
 
@@ -512,4 +797,46 @@ async fn url_credentials_stay_out_of_messages() {
     let (ok, msg, _) = h.upload(&h.env("x")).await;
     assert!(!ok);
     assert!(!msg.contains("hunter2"), "{msg}");
+}
+
+#[tokio::test]
+async fn settings_problems_are_flagged() {
+    async fn flagged(status: u16, extra: &str, auth: &str) -> (bool, String) {
+        let srv = server_with(vec![(status, "", extra)]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url,
+            "upload_auth_header": auth
+        }));
+        let req = json!({
+            "action": "upload", "path": h.clip,
+            "allowed_roots": [h.dir.path().join("clips")],
+        });
+        let r = handle(&h.env("x"), &req).await;
+        assert!(!r.ok);
+        (r.settings_problem, r.to_line())
+    }
+    for (status, extra) in [
+        (401, ""),
+        (403, ""),
+        (404, ""),
+        (405, ""),
+        (301, "Location: https://e.example/upload\r\n"),
+    ] {
+        let (flag, line) = flagged(status, extra, "Bearer t").await;
+        assert!(flag, "{status}");
+        assert!(line.contains(r#""settings_problem":true"#), "{line}");
+    }
+    for status in [400, 413, 415] {
+        let (flag, line) = flagged(status, "", "Bearer t").await;
+        assert!(!flag, "{status}");
+        assert!(!line.contains("settings_problem"), "{line}");
+    }
+    // No server URL at all.
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": ""}));
+    let req = json!({
+        "action": "upload", "path": h.clip,
+        "allowed_roots": [h.dir.path().join("clips")],
+    });
+    let r = handle(&h.env("x"), &req).await;
+    assert!(!r.ok && r.settings_problem, "{}", r.message);
 }

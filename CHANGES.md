@@ -11,6 +11,9 @@
 - Interval uploads also scan imported folders, which were already allowed upload roots.
 - Quitting stops a running upload instead of leaving the uploader process behind.
 - The editor's Upload button appears and disappears as uploads are switched on or off, instead of being fixed when the editor opened.
+- Your server's failures say what to fix instead of echoing the reply body: a missing or malformed token, a URL with no path or nothing behind it, a redirect (with the address to use), a clip too large, an unsupported type, rate limiting, server errors, a refused connection, an unknown host name, and http/https mixed up. Settings problems put OPEN UPLOAD SETTINGS on the UPLOAD FAILED bar.
+- Test connection to your server no longer follows redirects: uploads do not follow them, so a test that passed through one promised uploads that then failed. A bare address (no `/upload`) no longer passes either.
+- A long Test connection result wraps under the settings panel instead of running off its edge.
 
 - Image layers and the webcam are burned into a saved clip in one re-encode (the reference re-encoded the whole clip once per overlay), with every audio track, its title and the audio manifest kept.
 - Webcam frames are placed at their capture times; the reference wrote them at a fixed 30 fps, so a 15 fps camera played at double speed and drifted.

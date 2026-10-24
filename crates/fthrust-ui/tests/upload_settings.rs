@@ -548,3 +548,37 @@ fn widget_body_only_while_enabled() {
         assert!(on.iter().any(|n| n == name), "{name} missing: {on:?}");
     }
 }
+
+#[test]
+fn long_test_status_wraps_inside_the_panel() {
+    let draw = |state: &mut AppState| -> egui::Rect {
+        let ctx = egui::Context::default();
+        fthrust_ui::fonts::install(&ctx, &state.tokens);
+        let mut rect = None;
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(700.0);
+                up::ui(ui, state, 700.0);
+            });
+            out.textures_delta.clear();
+            rect = fthrust_ui::fidelity::take(&ctx)
+                .into_iter()
+                .find(|m| m.name == "uploadStatus")
+                .map(|m| m.rect);
+        }
+        rect.expect("uploadStatus marker")
+    };
+    let mut r = enabled_rig(json!({"upload_provider": "custom"}), &[]);
+    up::form(&mut r.state).status = "Your server reachable (HTTP 200).".into();
+    let short = draw(&mut r.state);
+    up::form(&mut r.state).status = "Your server has nothing at this URL (HTTP 404). Check the \
+        server URL; FTHR Clips Server takes uploads at /upload."
+        .into();
+    up::form(&mut r.state).status_kind = StatusKind::Error;
+    let long = draw(&mut r.state);
+    assert!(long.max.x <= 700.5, "runs off the panel: {long:?}");
+    assert!(
+        long.height() > short.height() * 1.5,
+        "not wrapped: {long:?} vs {short:?}"
+    );
+}

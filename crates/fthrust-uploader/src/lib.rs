@@ -91,6 +91,9 @@ pub struct Response {
     pub message: String,
     /// The history entry of an upload (`{}` when it failed).
     pub upload_info: Option<Map<String, Value>>,
+    /// The failure is in the upload settings (URL, token): retrying the
+    /// same request cannot help. Written only when true.
+    pub settings_problem: bool,
 }
 
 impl Response {
@@ -100,6 +103,7 @@ impl Response {
             ok: false,
             message: message.into(),
             upload_info: None,
+            settings_problem: false,
         }
     }
 
@@ -109,6 +113,7 @@ impl Response {
             ok: true,
             message: message.into(),
             upload_info: None,
+            settings_problem: false,
         }
     }
 
@@ -119,6 +124,9 @@ impl Response {
         m.insert("message".into(), Value::String(self.message.clone()));
         if let Some(info) = &self.upload_info {
             m.insert("upload_info".into(), Value::Object(info.clone()));
+        }
+        if self.settings_problem {
+            m.insert("settings_problem".into(), Value::Bool(true));
         }
         Value::Object(m).to_string()
     }
