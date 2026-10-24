@@ -28,6 +28,22 @@ SFTP passwords are kept in the desktop keyring (Secret Service), never in
 `~/.fthr/uploader/settings.json`. Keys verified through a pin are
 remembered in `~/.fthr/uploader/known_hosts`.
 
+### FTHR Clips Server
+
+[fthr-clips-server](https://github.com/kalopsia-space/fthr-clips-server) is
+built for the "Your server" provider and needs no extra setup in the app:
+
+| Field | Value |
+|---|---|
+| URL | `https://clips.example.com/upload` |
+| Authorization | `Bearer <UPLOAD_TOKEN or a token from Admin → Tokens>` |
+
+Test connection sends `HEAD /upload` (200 with a good token, 401 without).
+An upload returns `{"url": "…/w/<slug>", …}`; the same file uploaded
+twice returns the same link. Checked end to end against a local server
+(main, 2026-10-24): test connection, upload, re-upload, the share page's
+`og:video` tags, the history entry, and a wrong token (HTTP 401).
+
 ## Files
 
 - `~/.fthr/uploader/settings.json`: provider, fields, auto-upload mode,
