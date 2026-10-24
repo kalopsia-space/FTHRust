@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc.
@@ -144,8 +144,22 @@ group_gate() {
     gate_expect gate_fails_empty_dir 1 "no ELF files found" "$WORK/empty"
 }
 
+group_version() {
+    local cv="$ROOT/tools/check-version.sh" v out
+    v="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+    if out="$("$cv" 2>&1)"; then pass version_tree_consistent; else fail version_tree_consistent "$out"; fi
+    if out="$("$cv" --tag "refs/tags/v$v" 2>&1)"; then pass version_tag_matches; else fail version_tag_matches "$out"; fi
+    if out="$("$cv" --tag refs/tags/v0.0.1 2>&1)"; then fail version_tag_mismatch "exit 0"
+    elif grep -q "version mismatch: tag has 0.0.1, Cargo.toml has $v" <<<"$out"; then pass version_tag_mismatch
+    else fail version_tag_mismatch "$out"; fi
+    printf '#!/bin/sh\necho "fthrust 9.9.9"\n' > "$WORK/fake"; chmod +x "$WORK/fake"
+    if out="$("$cv" --binary "$WORK/fake" 2>&1)"; then fail version_binary_mismatch "exit 0"
+    elif grep -q "version mismatch: .*fake has 9.9.9, Cargo.toml has $v" <<<"$out"; then pass version_binary_mismatch
+    else fail version_binary_mismatch "$out"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

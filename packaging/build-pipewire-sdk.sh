@@ -17,7 +17,9 @@ while [ $# -gt 0 ]; do
 done
 VERSION="$(jq -r .version "$HERE/pipewire_sdk_manifest.json")"
 SDK="$CACHE/pipewire-sdk"
-if [ "$(cat "$SDK/.version" 2>/dev/null)" = "$VERSION" ]; then
+# The link library must come from the same glibc as the binaries it links.
+STAMP="$VERSION $(getconf GNU_LIBC_VERSION)"
+if [ "$(cat "$SDK/.version" 2>/dev/null)" = "$STAMP" ]; then
     echo "cached $SDK"
     exit 0
 fi
@@ -26,10 +28,17 @@ SRC="$CACHE/pipewire-src"
 rm -rf "$SRC" "$SDK"
 mkdir -p "$SRC"
 tar -xzf "$CACHE/pipewire-$VERSION.tar.gz" -C "$SRC" --strip-components=1
-meson setup "$SRC/build" "$SRC" --prefix="$SDK" --libdir=lib \
-    -Dauto_features=disabled -Dflatpak=disabled -Dsession-managers=[] \
-    -Dexamples=disabled -Dtests=disabled >/dev/null
-ninja -C "$SRC/build" install >/dev/null
+log="$CACHE/pipewire-sdk-build.log"
+if ! { meson setup "$SRC/build" "$SRC" --prefix="$SDK" --libdir=lib \
+        -Dauto_features=disabled -Dflatpak=disabled -Ddbus=disabled \
+        -Dsession-managers=[] -Dexamples=disabled -Dtests=disabled &&
+    ninja -C "$SRC/build" install; } > "$log" 2>&1; then
+    tail -20 "$log" >&2
+    echo "build-pipewire-sdk: build failed (log: $log)" >&2
+    exit 1
+fi
 rm -rf "$SRC"
-echo "$VERSION" > "$SDK/.version"
+# Relocatable: the cache is used from different mount points (host, /src).
+sed -i 's|^prefix=.*|prefix=${pcfiledir}/../..|' "$SDK"/lib/pkgconfig/*.pc
+echo "$STAMP" > "$SDK/.version"
 echo "built $SDK"

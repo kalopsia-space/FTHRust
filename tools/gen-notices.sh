@@ -24,6 +24,8 @@ if [ "$have" != "$CARGO_ABOUT_VERSION" ]; then
     echo "gen-notices: need cargo-about $CARGO_ABOUT_VERSION (have ${have:-none}): cargo install cargo-about --locked --features cli --version $CARGO_ABOUT_VERSION" >&2
     exit 1
 fi
+# cargo-about resolves every target's crates; --offline below needs them all.
+(cd "$ROOT" && cargo fetch --locked --quiet)
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 {
