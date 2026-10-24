@@ -1,0 +1,14 @@
+The statically linked Rust crates in `fthrust`, `fthrust-engine` and
+`fthrust-uploader`, grouped by licence. Each licence text follows its list.
+{{#each licenses}}
+
+### {{name}}
+
+{{#each used_by}}
+- `{{crate.name}}` {{crate.version}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+{{/each}}
