@@ -32,7 +32,10 @@ synthetic frame size; cage's headless output is 1280×720), `--app PATH`,
 `--settings FILE` (merged over the seeded settings), `--cage PATH`,
 `--renderer auto|gles2|vulkan|pixman` (cage's renderer; `auto` is gles2 when a
 GPU render node exists so the app's Vulkan driver gets dmabuf buffers, else
-pixman for CI with lavapipe).
+pixman for CI with lavapipe), `--pipewire` (a private PipeWire and
+WirePlumber on the bench's runtime directory and bus, so desktop audio comes
+up and the "DESKTOP AUDIO UNAVAILABLE" notice goes away), `--seed DIR` (copied
+into the clips folder, timestamps kept, before the app starts).
 
 ## Commands
 
@@ -55,11 +58,16 @@ Widget names come from the app's `FTHRUST_UI_DUMP` file (`$BENCH/ui.json`):
 
 ## Scenarios
 
-`scenarios/selftest.sh`, `smoke.sh`, `save_clip.sh`, `record.sh`. Each prints
+`scenarios/selftest.sh`, `smoke.sh`, `save_clip.sh`, `record.sh`, `editor.sh`,
+`export.sh`, `overlays.sh`, `upload.sh`, `clips_server.sh`, `docs_shots.sh`. Each prints
 `PASS` or `FAIL <step>`, takes a screenshot on failure and tails the app log.
 `clips_server.sh` needs `FTHR_CLIPS_SERVER` (a fthr-clips-server binary) and
 prints `SKIP` without it.
-`scenarios/lib.sh` has `step`, `run`, `fail`, `names`, `wait_file`.
+`scenarios/lib.sh` has `step`, `run`, `fail`, `names`, `wait_file`, `scroll_to`.
+
+`docs-shots.sh` regenerates `docs/images`: it renders a few demo clips with
+ffmpeg (or takes `--seed DIR`), runs `docs_shots.sh` with `--pipewire`, and
+copies the named shots over.
 
 ## Reading a failure
 
@@ -86,5 +94,6 @@ BENCH_DIR=/tmp/uidrive-ai tools/uidrive/bench.sh run tools/uidrive/scenarios/sav
 ```
 
 Keep `BENCH_DIR` short: the Wayland socket path inside it must fit in 108
-bytes. The "DESKTOP AUDIO UNAVAILABLE" notice is expected in every bench run,
-because the private `XDG_RUNTIME_DIR` has no PipeWire socket.
+bytes. The "DESKTOP AUDIO UNAVAILABLE" notice is expected in every bench run
+without `--pipewire`, because the private `XDG_RUNTIME_DIR` has no PipeWire
+socket.

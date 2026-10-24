@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # The UI drive bench: a headless cage compositor on a private socket, a
 # scratch home and runtime directory, the FTHRust app inside it.
-#   bench.sh up   [--release] [--engine synthetic|real] [--size WxH] [--app PATH] [--settings FILE] [--cage PATH] [--renderer auto|gles2|vulkan|pixman]
+#   bench.sh up   [--release] [--engine synthetic|real] [--size WxH] [--app PATH] [--settings FILE] [--cage PATH] [--renderer auto|gles2|vulkan|pixman] [--pipewire] [--seed DIR]
+# --pipewire runs a private PipeWire and WirePlumber on the bench's runtime
+# directory and bus, so desktop audio comes up (a null sink, nothing audible).
+# --seed copies DIR's contents into the clips folder before the app starts.
 # The renderer is cage's (the compositor is still headless: nothing is shown
 # anywhere). `auto` picks gles2 when a GPU render node exists, so the app's
 # Vulkan driver gets dmabuf buffers, and pixman otherwise (CI, with lavapipe).
@@ -19,7 +22,7 @@ die() { echo "bench: $*" >&2; exit 1; }
 cmd=${1:-}; shift || true
 
 parse_up() {
-  PROFILE=debug; ENGINE=synthetic; SIZE=1920x1080; APP=""; SETTINGS=""; CAGE=cage; RENDERER=auto
+  PROFILE=debug; ENGINE=synthetic; SIZE=1920x1080; APP=""; SETTINGS=""; CAGE=cage; RENDERER=auto; PIPEWIRE=0; SEED=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --release) PROFILE=release ;;
@@ -29,6 +32,8 @@ parse_up() {
       --settings) SETTINGS=$2; shift ;;
       --cage) CAGE=$2; shift ;;
       --renderer) RENDERER=$2; shift ;;
+      --pipewire) PIPEWIRE=1 ;;
+      --seed) SEED=$2; shift ;;
       *) die "unknown option $1" ;;
     esac
     shift
@@ -56,6 +61,7 @@ if extra:
     s.update(json.loads(pathlib.Path(extra).read_text().replace("${ROOT}", root)))
 pathlib.Path(bench, "home", ".fthr", "settings.json").write_text(json.dumps(s))
 PY
+  [ -z "$SEED" ] || cp -a "$SEED"/. "$BENCH/clips/"
   case "$ENGINE" in
     synthetic) ENGINE_ENV="FTHRUST_SYNTHETIC_BACKEND=1 FTHR_CAPTURE_BACKEND=synthetic FTHRUST_SYNTHETIC_SIZE=$SIZE" ;;
     real) ENGINE_ENV="FTHR_CAPTURE_BACKEND=screencopy" ;;
@@ -88,6 +94,19 @@ XML
       echo "$DBUS_PID" > "$BENCH/dbus.pid"
       DBUS_ENV="DBUS_SESSION_BUS_ADDRESS=unix:path=$BENCH/rt/bus"
     fi
+  fi
+  if [ "$PIPEWIRE" = 1 ]; then
+    [ -n "$DBUS_ENV" ] || die "--pipewire needs dbus-daemon"
+    command -v pipewire >/dev/null 2>&1 && command -v wireplumber >/dev/null 2>&1 \
+      || die "--pipewire needs pipewire and wireplumber"
+    # shellcheck disable=SC2086
+    for d in pipewire wireplumber; do
+      env -i HOME="$BENCH/home" XDG_RUNTIME_DIR="$BENCH/rt" PATH="$PATH" $DBUS_ENV \
+        "$d" > "$BENCH/logs/$d.log" 2>&1 &
+      echo $! > "$BENCH/$d.pid"
+      [ "$d" = pipewire ] && for _ in $(seq 1 50); do [ -S "$BENCH/rt/pipewire-0" ] && break; sleep 0.1; done
+    done
+    sleep 1
   fi
   if [ "$RENDERER" = auto ]; then
     if ls /dev/dri/renderD* >/dev/null 2>&1; then RENDERER=gles2; else RENDERER=pixman; fi
@@ -133,6 +152,9 @@ bench_down() {
     kill -KILL "$pid" 2>/dev/null || true
     pkill -KILL -P "$pid" 2>/dev/null || true
   fi
+  for d in wireplumber pipewire; do
+    [ -f "$b/$d.pid" ] && kill -TERM "$(cat "$b/$d.pid")" 2>/dev/null; rm -f "$b/$d.pid"
+  done
   if [ -f "$b/dbus.pid" ]; then
     kill -TERM "$(cat "$b/dbus.pid")" 2>/dev/null || true
     rm -f "$b/dbus.pid"

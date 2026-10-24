@@ -1,7 +1,7 @@
 //! The fidelity gate: every Qt reference screen this plan owns is rendered
 //! from the same state the Qt renderer used and compared marker for marker
-//! (`docs/ui-fidelity.md`). Screens owned by later plans are ignored with
-//! the owning plan named.
+//! (see "UI fidelity tests" in `docs/development.md`). Screens owned by later
+//! plans are ignored with the owning plan named.
 
 mod common;
 

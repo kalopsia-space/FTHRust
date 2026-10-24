@@ -1,76 +1,75 @@
-# Capture overlays
+# Overlays
 
-Plan 6d. Reference digests: `docs/superpowers/notes-overlays-reference.md`
-(webcam, image layers, Gary) and `docs/superpowers/notes-pickers-reference.md`
-(file and folder pickers).
+Things FTHRust can draw into your clips or onto your screen: a webcam, images, a keyboard overlay, Gary, and the capture card.
 
-## After a save: image layers and the webcam
+- [Burned-in overlays](#burned-in-overlays)
+  - [Webcam](#webcam)
+  - [Image layers](#image-layers)
+  - [Keyboard overlay](#keyboard-overlay)
+- [Gary Mode](#gary-mode)
+- [The capture card](#the-capture-card)
 
-When `camera_enabled` is on or any image layer is enabled, a saved clip stays
-`Finalizing` (its card shows the badge; opening it shows `CLIP STILL
-FINALIZING`) while one worker (`services::finalize`) rewrites it:
+## Burned-in overlays
 
-1. Missing layer files and files FFmpeg cannot decode are dropped, each with
-   a warning (`Image overlay source is missing: …`, `Image overlay could not
-   be read: …`).
-2. The camera window `[save − length, save]` is written from the ring as an
-   MJPEG Matroska file with each frame at its capture time.
-3. `fthrust-core::finalize::plan` builds one filter graph: every layer
-   (`movie=` source, fit with transparent padding or fill with a centre crop,
-   opacity as alpha) in list order, then the camera letterboxed in black on
-   top. Pixel geometry is the reference's (`int()` truncation, 64×48
-   minimum, even sizes).
-4. The plan 6c runner re-encodes the video once (High quality), copies every
-   audio stream with its title, keeps the container tags, and stages the
-   result in `.fthr-finalize-*` beside the clip; it is renamed over the clip
-   and the audio manifest is rebound to the new file.
+<img src="images/settings-visuals.png" alt="Settings, Visuals tab: camera, image layers, keyboard overlay and the composite preview" width="860">
 
-Any failure keeps the base clip and records a warning; the last one shows as
-`CLIP SAVED WITH WARNING`. A failed camera burn also shows `CAMERA OVERLAY
-FAILED`. Clips finalize one at a time in save order; quitting cancels the
-running one.
+**Settings → Visuals** holds everything that gets drawn **into** saved clips. On the right is the **Composite preview**, a mock frame where you arrange it all: drag a box to move it, and drag its edges to resize it. Boxes are kept on screen and at least 5% of the frame in size.
 
-## The webcam
+Overlays are burned in when a clip is saved, so they're part of the file wherever it goes. Your live capture and the replay buffer stay clean.
 
-`fthrust-media::camera` reads the selected V4L2 camera through libavdevice
-(MJPEG requested; raw formats are encoded to MJPEG) into a 90 s ring stamped
-at capture. Devices are listed with their V4L2 names. `services::camera`
-scans at start and on Refresh, opens the selected camera while the overlay is
-on, turns the overlay off with `CAMERA UNAVAILABLE` (action `OPEN CAMERA
-SETTINGS`) when it cannot open, and gives the Visuals placement box a live
-frame at 10 fps.
+**Preview background → Choose image** puts a screenshot of your game behind the preview, so you can place things around its HUD. **Use default** brings back the stock picture.
 
-## Gary mode
+### Webcam
 
-A PipeWire capture stream on the selected microphone (`services::mic_level`)
-measures `clamp(rms × 4)` of channel 0 after the mic gain; it feeds the Audio
-page meter and Gary, and runs only while either needs it. Gary
-(`overlay::gary`) ticks every 33 ms on its own thread: intensity steps up by
-0.18 and down by 0.065 towards the level between the MIN and MAX handles;
-the picture grows from 55 % to 100 % of a 58 % × 76 % box and fades in; one
-appearance in ten shows the cat. It draws on a click-through layer-shell
-surface covering the output (`notification_monitor`, else the compositor's
-choice) that exists only while it shows. Without layer-shell Gary stays off.
+1. Tick **Burn camera overlay into clips**.
+2. Choose your camera under **Device**. The refresh button rescans if you plugged it in after starting the app.
+3. Drag the **CAMERA** box in the preview to where you want it.
 
-## Pickers
+If the camera disappears or fails mid-session, the bar at the bottom shows **CAMERA UNAVAILABLE** or **CAMERA OVERLAY FAILED**, and clips keep saving without it.
 
-Every BROWSE / Choose / Import button opens the desktop FileChooser portal
-(`services::browse`) and applies the choice as the reference did: clips
-storage folder (prepared with its five subfolders; the recording folder
-follows when it was derived), recording folder (linked into the library when
-outside it), import folders, the Gary image, image layers, the preview
-background, theme archives (after confirmation), fonts, icons and sounds.
+### Image layers
 
-## Differences from the reference
+Logos, borders, a face-cam frame: add as many images as you like.
 
-See `CHANGES.md`: one re-encode instead of one per overlay; camera frames at
-their real times; unreadable layers dropped instead of failing every layer;
-libavdevice instead of OpenCV; portal pickers; icons resized without the crop
-dialog; picker failures shown instead of printed.
+1. Tick **Burn image layers into clips**.
+2. **Add images** picks one or more files. Each becomes a layer, shown as **IMAGE 1**, **IMAGE 2**… in the preview.
+3. Select a layer to set its **Fit**: **Inside frame** keeps its shape, **Fill frame** covers the whole box. **Opacity** fades it.
+4. **Remove** deletes the selected layer and **Clear all** deletes them all.
 
-## Tests
+### Keyboard overlay
 
-- `cargo test -p fthrust-core --test finalize_model`
-- `cargo test -p fthrust-media --test camera`, `--test export_run` (rewrites)
-- `cargo test -p fthrust-ui --test finalize --test gary --test browse`
-- `tools/uidrive/bench.sh run tools/uidrive/scenarios/overlays.sh --settings tools/uidrive/overlays-settings.json`
+Show your key presses in clips using a NohBoard-style keyboard window.
+
+1. Run your keyboard overlay app so its window is open.
+2. Tick **Show external keyboard in clips** and pick its **Window**.
+3. Click **Pick from preview**, then click the overlay's solid background colour, so FTHRust knows what to make transparent. **Intensity** sets how strictly that colour is removed.
+
+## Gary Mode
+
+Gary is a picture that pops up on your screen and grows when you're loud. Shout during a clutch and Gary gets *big*.
+
+Turn him on in **Settings → Audio → Gary Mode** (**Enable Gary Mode**). Gary listens to the microphone chosen above it, so pick one first.
+
+- The meter under **Live level** shows your mic. Drag **MIN** to where Gary should start appearing and **MAX** to where he's at full size.
+- **Choose** swaps Gary for any picture you like, and **Default** brings him back.
+- Gary is click-through: he never steals your mouse or keyboard.
+- Roughly one time in ten, Gary is a cat.
+
+Gary is drawn on your screen rather than burned into files, but since he's on the monitor you're capturing, he ends up in your clips too. That's rather the point. He needs a compositor with `wlr-layer-shell`, which Hyprland, Sway and KDE have and GNOME doesn't.
+
+## The capture card
+
+The capture card is the small notification that slides in when you save a clip, take a screenshot, finish an upload, or something goes wrong. It shows what happened and the clip's stats, and fades out on its own.
+
+Choose which cards you see in **Settings → General → Notifications → Capture card**:
+
+- **All notifications**
+- **Clips, recordings and screenshots only**
+- **Game detection / window switching only**
+- **Off**
+
+Pick which monitor it appears on under **Settings → Audio → Notifications → Monitor** (**Auto (highest Hz)** picks your gaming monitor). Restyle it in **Settings → Customize → Capture Card**. On desktops without `wlr-layer-shell`, cards arrive as ordinary desktop notifications.
+
+**Settings → Clip → Watermark** can also burn an animated capture card into the files made by Export and Share.
+
+Each card can play a sound. See [Settings → Audio](settings.md#audio).

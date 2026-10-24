@@ -1,88 +1,136 @@
-# Uploads
+# Uploading
 
-Uploading is optional and off by default. Nothing is sent anywhere until
-the uploader is enabled in **Settings → General → Upload** and its Terms of
-Service and Privacy Policy are accepted.
+FTHRust can send clips to a host and hand you back a link. It's entirely optional and off by default. Until you turn it on, nothing in the app talks to the internet.
 
-## How it is built
+- [How it's kept separate](#how-its-kept-separate)
+- [Turning it on](#turning-it-on)
+- [Providers](#providers)
+  - [Catbox](#catbox)
+  - [Your server](#your-server)
+  - [SFTP](#sftp)
+- [When uploads happen](#when-uploads-happen)
+- [Getting the link](#getting-the-link)
+- [What's stored where](#whats-stored-where)
+- [When an upload fails](#when-an-upload-fails)
+- [The Your server protocol](#the-your-server-protocol)
 
-- `fthrust-uploader` is a separate program shipped next to `fthrust`. The
-  app links no upload code (`tools/check-upload-isolation.sh` fails CI if
-  `reqwest`, `russh` or the keyring reach `fthrust-ui` or `fthrust-engine`).
-- Each request runs the program once: one JSON object on stdin, one JSON
-  line on stdout (`upload`, `test_connection`, `sftp_save`,
-  `sftp_forget`). It refuses network actions unless the uploader settings
-  say uploads are on and the current terms were accepted, and it reads
-  only clips under the clips folder and the imported folders.
-- `FTHRUST_UPLOADER` overrides where the app looks for the program.
+## How it's kept separate
+
+All upload code (HTTP, SFTP and the keyring) lives in its own program, `fthrust-uploader`. The app runs it once per upload, sends it a single request, and reads back a single answer. The main app and the capture engine never include any of that code, and CI fails the build if they ever start to. If you never enable uploads, that program never runs.
+
+## Turning it on
+
+<img src="images/settings-general.png" alt="Settings, General tab, with the Upload section" width="860">
+
+1. Open **Settings → General → Upload** and tick **Enable optional clip uploader**.
+2. Read the **Enable FTHR Upload Extension** dialog. It shows the Terms of Service and Privacy Policy for the upload extension. Tick both boxes and press **ACCEPT & ENABLE UPLOADER**.
+3. Choose a **Provider**, fill in its fields, and press **Test connection**.
+4. Press **Save upload settings**.
+
+If the terms are updated in a later version, you'll be asked to accept them again before the next upload.
 
 ## Providers
 
-| Provider | How | Link |
-|---|---|---|
-| Catbox | `multipart/form-data` to `catbox.moe/user/api.php` (`fileToUpload`, optional userhash); 200 MB limit, larger clips can be compressed first | the returned `https://files.catbox.moe/…` |
-| Your server | `multipart/form-data` with the field `clip` and an optional `Authorization` header; http or https | `url` or `raw_url` from a JSON reply, or a bare URL body |
-| SFTP / VaultScope | password login after the host key matches a `SHA256:` pin or a known_hosts entry; written as `.part`, size-checked, renamed to `fthr-<random>.<ext>` | the public HTTPS folder URL + file name when public links are on, else `sftp://host:port/path` |
+### Catbox
 
-SFTP passwords are kept in the desktop keyring (Secret Service), never in
-`~/.fthr/uploader/settings.json`. Keys verified through a pin are
-remembered in `~/.fthr/uploader/known_hosts`.
+[Catbox](https://catbox.moe) is free, needs no account, and gives you a public `https://files.catbox.moe/…` link.
 
-### FTHR Clips Server
+- The first time you choose it, FTHRust shows what Catbox stores (the file, its name and size, the upload time and your IP address) and asks you to accept Catbox's own terms.
+- **User hash** is optional. Paste your Catbox account's userhash to have uploads show up in your account.
+- Files are limited to **200 MB**. For bigger clips, FTHRust offers to compress a copy first; your original is never changed. Tick **Automatically compress oversized clips before upload** to skip the question.
+- Anyone with the link can watch the clip, and it stays up until it's deleted.
 
-[fthr-clips-server](https://github.com/kalopsia-space/fthr-clips-server) is
-built for the "Your server" provider and needs no extra setup in the app:
+Catbox is run by volunteers. **Support Catbox hosting** links to their donation page.
+
+### Your server
+
+Point FTHRust at your own HTTPS endpoint. It's made to pair with [FTHR Clips Server](https://github.com/kalopsia-space/fthr-clips-server), a self-hosted clip site with share pages that embed in Discord, but anything that speaks the [protocol below](#the-your-server-protocol) works.
 
 | Field | Value |
 |---|---|
-| URL | `https://clips.example.com/upload` |
-| Auth header | `Bearer <UPLOAD_TOKEN or a token from Admin → Tokens>` |
+| **Server URL** | The full upload URL, for example `https://clips.example.com/upload`. FTHRust posts to it exactly as written, so include the path. |
+| **Auth header** | Sent as the `Authorization` header, word for word. For FTHR Clips Server: `Bearer <your upload token>`. |
 
-Test connection sends `HEAD /upload` (200 with a good token, 401 without).
-An upload returns `{"url": "…/w/<slug>", …}`; the same file uploaded
-twice returns the same link.
+**Test connection** checks the URL and token without uploading anything, and explains what's wrong if it fails: a missing path, a wrong token, nothing at that address.
 
-What the app says when something is off:
+There's no size limit on FTHRust's side. Your server may set one, and if it does, you'll be told the clip is too large for it.
 
-| Problem | Message |
+### SFTP
+
+Upload to any server you can reach over SFTP, such as a seedbox, a NAS or a web host.
+
+| Field | Notes |
 |---|---|
-| URL without `/upload` | Your server answered (HTTP 200), but the URL has no path. FTHR Clips Server takes uploads at /upload. |
-| No token | Your server needs an upload token (HTTP 401). Set the Auth header to "Bearer <your upload token>". |
-| Token without `Bearer ` | … The Auth header usually looks like "Bearer <your upload token>". |
-| Wrong token | Your server rejected the authorization header (HTTP 401). |
-| `http://` behind an https redirect | Your server redirects to https://…/upload. Use that address as the server URL. |
-| `https://` to a plain-HTTP port | Could not reach your server: it did not answer with HTTPS. Check whether the URL should start with http://. |
-| Clip over `MAX_UPLOAD_BYTES` | The clip is too large for your server (HTTP 413). This clip is … MB. |
-| 30 uploads a minute | Your server is limiting uploads right now (HTTP 429). Try again in a minute. (retried) |
+| **Host**, **Port**, **Username** | Port defaults to 22. |
+| **Password** | Stored in your desktop keyring, never in a file. Leave it blank to keep the saved one. |
+| **Remote folder** | `.` for your home folder, or a path like `/uploads`. |
+| **Host key (optional)** | Paste the server's `SHA256:…` fingerprint to pin it. |
+| **Public folder URL** | If that folder is also served over HTTPS, enter its URL and tick **Generate public HTTPS sharing links for SFTP uploads** to get web links. |
 
-URL and token problems are not retried and put OPEN UPLOAD SETTINGS on the
-UPLOAD FAILED bar. `tools/uidrive/scenarios/clips_server.sh` drives all of
-this against a real server when `FTHR_CLIPS_SERVER` points at its binary.
+**Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. Only password logins are supported for now.
 
-## Files
+Files are uploaded as `fthr-<random>.mp4` under a temporary name, renamed when complete, and size-checked. **Forget saved password for this host and user** removes the password from the keyring.
 
-- `~/.fthr/uploader/settings.json`: provider, fields, auto-upload mode,
-  consent versions. Compatible with FTHR Clips; the consent version is
-  `2026-10-23-v4` because the Linux terms differ (no installer, desktop
-  keyring), so the reference's acceptance is asked for again.
-- `~/.fthr/uploader/upload_history.json`: successful uploads keyed by the
-  clip's resolved path; renaming a clip in the app moves its entry.
+**VaultScope** in the provider list is SFTP with VaultScope's settings filled in. **Paste VaultScope login** fills the fields from the login details VaultScope gives you.
 
-## Where uploads start
+## When uploads happen
 
-- The clip card's upload button (it becomes **Copy link** afterwards) and
-  its right-click menu.
-- The editor's **Upload** button (shown while uploads are on).
-- **Upload immediately after capture** and **Upload on an interval**
-  (clips untouched for 30 s, including imported folders).
+**Auto Upload** decides when clips are sent:
 
-Results show as the `CLIP UPLOADED` / `UPLOAD FAILED` capture card, the
-status bar (`UPLOADED ORIGINAL`, `UPLOADED COMPRESSED COPY`) and the error
-bar (`Error 020` with **RETRY NOW**, `Error 022` for a failed connection
-test).
+- **Manual only (right-click a clip → Upload)**: the default. Nothing leaves your PC unless you ask.
+- **Upload immediately after capture**: every saved clip is uploaded.
+- **Upload on an interval**: new clips are collected and sent every few minutes, hours or days. Files changed in the last 30 seconds are left for the next round.
 
-## Bench
+**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link. If no link comes back, your clip is kept.
 
-`tools/uidrive/scenarios/upload.sh` enables the uploader through both
-consent dialogs, points it at `tools/uidrive/upload_server.py`, uploads a
-clip from its card and copies the link.
+## Getting the link
+
+When an upload finishes, a capture card shows **UPLOADED ORIGINAL** (or **UPLOADED COMPRESSED COPY**) and the clip gets an **Uploaded** badge. To get the link:
+
+- click the clip's **share button** (*Copy link*), or
+- right-click it and choose **Open uploaded link**.
+
+The link isn't copied to your clipboard automatically.
+
+## What's stored where
+
+| What | Where |
+|---|---|
+| Uploader settings | `~/.fthr/uploader/settings.json` |
+| SFTP passwords | Your desktop keyring (Secret Service), one entry per host and user |
+| Catbox user hash, Your server auth header | `~/.fthr/uploader/settings.json`, **in plain text** |
+| Upload history and links | `~/.fthr/uploader/upload_history.json` |
+| SFTP host keys you've trusted | `~/.fthr/uploader/known_hosts` |
+
+The uploader only reads clips inside your clips folder and folders you've imported. It refuses any other path it's given.
+
+## When an upload fails
+
+A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too.
+
+Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
+
+[Troubleshooting](troubleshooting.md) lists every upload error code.
+
+## The Your server protocol
+
+For anyone writing a server, or debugging one.
+
+**Upload**
+
+```http
+POST <Server URL exactly as configured>
+Authorization: <Auth header, verbatim, if set>
+User-Agent: FTHR-Clips/Desktop-Uploader
+Content-Type: multipart/form-data; boundary=…
+Content-Length: <exact length>
+
+one file field named "clip", with the clip's file name and content type
+```
+
+- A URL without a scheme gets `https://`. Only `http` and `https` are allowed.
+- Redirects are **not** followed. A 3xx response is reported as an error; point the URL at the final address.
+- Any 2xx response is a success. If the body is JSON with a `url` (or `raw_url`) field, or is plain text starting with `http://` or `https://`, that's the link. Otherwise the upload counts as done without a link, and auto-delete is skipped.
+- On an error, an `error`, `message` or `detail` field in a JSON body (or a short plain-text body) is shown to the user, up to 400 characters. HTML error pages are not shown.
+
+**Test connection** sends `HEAD <Server URL>` with the same `Authorization` header. A 2xx answer, or a 405 from a server that doesn't support `HEAD`, counts as reachable.
