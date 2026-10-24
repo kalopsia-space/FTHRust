@@ -21,7 +21,7 @@ Hit a key and the last 30 seconds are saved. Trim the clip, crop it, grade it, s
 
 </div>
 
-> FTHRust Clips is a ground-up Rust rewrite of the FTHR Clips Linux app. It reads the same `~/.fthr` settings, so you can switch over and keep your clips, hotkeys and presets. This is a personal project and not an official FTHR Community release.
+> FTHRust Clips is a ground-up Rust rewrite of [FTHR Clips](https://github.com/FTHR-Community/FTHR-Clips), made as a personal hobby project by its Linux maintainer. It is **not an official FTHR Community release**. It reads the same `~/.fthr` settings, so you can switch over and keep your clips, hotkeys and presets.
 
 ---
 
