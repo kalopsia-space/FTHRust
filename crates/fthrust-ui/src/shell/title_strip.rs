@@ -29,7 +29,7 @@ pub struct TitleStripResponse {
 /// Ko-fi button text.
 pub const KOFI_TEXT: &str = "Help us keep the app free and open for everyone";
 /// Brand text (spec 11.2).
-pub const BRAND: &str = "FTHR Clips";
+pub const BRAND: &str = "FTHRust Clips";
 
 /// Draws the strip across the available width.
 pub fn ui(ui: &mut Ui, state: &mut AppState) -> TitleStripResponse {

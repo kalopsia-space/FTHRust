@@ -126,7 +126,7 @@ fn title_strip_markers_match_qt() {
         r.pixel(Pos2::new(300.0, 18.0)),
         Some(tokens.color(Color::ShellBg))
     );
-    let brand = r.marker("QLabel[FTHR Clips]").unwrap();
+    let brand = r.marker("QLabel[FTHRust Clips]").unwrap();
     assert_eq!(brand.rect.min.x, 56.0, "16 margin + 28 logo + 12 spacing");
     assert_eq!(brand.text.as_ref().unwrap().weight, Weight::W700);
     let logo = r.marker("logoLabel").unwrap();

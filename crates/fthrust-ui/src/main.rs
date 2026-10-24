@@ -82,7 +82,7 @@ fn main() {
     }];
     let placement = fthrust_ui::shell::window::restore_geometry(&state.settings, &screens);
     let viewport = egui::ViewportBuilder::default()
-        .with_title("FTHR Clips")
+        .with_title("FTHRust Clips")
         .with_app_id(fthrust_ui::services::APP_ID)
         .with_decorations(false)
         .with_inner_size(egui::vec2(
