@@ -73,3 +73,18 @@ The GitHub runner has no GPU encoder, so the CI scenarios pass
 `--settings tools/uidrive/ci-settings.json` (software encoder). The
 fidelity tests need Noto Sans Mono (`fonts-noto-mono`), the monospace face
 the reference screenshots were taken with.
+
+## Running scenarios against the AppImage
+
+`--app` must point at a `fthrust` with `fthrust-engine` beside it, so give it
+the image's `usr/bin/fthrust`, extracted or mounted:
+
+```sh
+(cd /tmp/ai && dist/FTHRust-*-x86_64.AppImage --appimage-extract)   # or --appimage-mount
+BENCH_DIR=/tmp/uidrive-ai tools/uidrive/bench.sh run tools/uidrive/scenarios/save_clip.sh \
+    --app /tmp/ai/squashfs-root/usr/bin/fthrust --engine real
+```
+
+Keep `BENCH_DIR` short: the Wayland socket path inside it must fit in 108
+bytes. The "DESKTOP AUDIO UNAVAILABLE" notice is expected in every bench run,
+because the private `XDG_RUNTIME_DIR` has no PipeWire socket.
