@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FTHR Clips
+Comment=Game capture and clip management
+Exec=fthrust
+Icon=space.kalopsia.fthrust
+StartupWMClass=space.kalopsia.fthrust
+Categories=AudioVideo;Video;
+Terminal=false
