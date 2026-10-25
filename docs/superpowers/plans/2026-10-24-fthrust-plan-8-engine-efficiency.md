@@ -25,7 +25,7 @@
 - No new crate dependencies except `libc` (already `[workspace.dependencies]`) in `fthrust-engine` and `fthrust-media`.
 - Upload isolation, `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` and `cargo deny check` stay green.
 - Tests that need VA-API skip with `eprintln!("skipping: …")` when `vaapi_available()` is false, like `tests/encoder.rs::vaapi_encodes_when_device_present`.
-- Out of scope: NVENC/AMF/QSV RGB input, zero-copy dmabuf capture (Plan 8b), the app process.
+- Out of scope: NVENC/AMF/QSV RGB input, zero-copy dmabuf capture (Plan 8b), app-process memory beyond the backend choice in Task 6.
 
 ## Review Focus
 
@@ -51,6 +51,7 @@
 | Create `crates/fthrust-engine/src/alloc.rs` | `configure()` and `trim()` around `mallopt` / `malloc_trim`. |
 | Modify `crates/fthrust-engine/src/main.rs`, `save.rs` | Call `alloc::configure()` at start, `alloc::trim()` after a save or recording ends. |
 | Create `crates/fthrust-media/tests/encoder_throughput.rs` | `#[ignore]` measurement: CPU ms per 1080p frame for each path. |
+| Modify `crates/fthrust-ui/src/runner.rs` | Vulkan-only wgpu instance, OpenGL fallback when no Vulkan adapter. |
 
 ---
 
@@ -273,7 +274,28 @@ fn snapshot_survives_the_ring_trimming_its_packets() {
 
 ---
 
-### Task 6: Measure on the real desktop
+### Task 6: The UI renders with Vulkan only
+
+Measured on the bench (2026-10-25, release build, radeonsi/radv): with egui-wgpu's default backends (`PRIMARY | GL`), wgpu probes EGL as well as Vulkan, which loads `libgallium` (~34 MB resident) for a GL adapter the app never uses. With `WGPU_BACKEND=vulkan`, UI RSS went from 274 MB to 221 MB. `libLLVM` stays mapped either way, since radv links it, and those pages are shared with the engine.
+
+**Files:**
+- Modify: `crates/fthrust-ui/src/runner.rs` (the `Painter::new` / `set_window` block, ~line 107)
+- Test: `crates/fthrust-ui/tests/runner_backends.rs` (or a unit test module in `runner.rs`, whichever matches how `runner.rs` is tested today)
+
+**Interfaces:**
+- Produces: `fn wgpu_config(backends: wgpu::Backends) -> WgpuConfiguration` and `fn preferred_backends() -> wgpu::Backends`, returning `wgpu::Backends::from_env()` when `WGPU_BACKEND` is set and `wgpu::Backends::VULKAN` otherwise.
+- Behaviour: create the painter with `preferred_backends()`. If `set_window` fails (no Vulkan adapter, e.g. a VM without a Vulkan driver), log once at `info`: `no Vulkan adapter; falling back to OpenGL` with the error, create a new painter with `wgpu::Backends::GL` and retry. Only if that also fails does the existing error path run.
+
+- [ ] **Step 1: Write the failing tests:** `preferred_backends()` is `VULKAN` with `WGPU_BACKEND` unset, and follows the variable when set (`gl` → `GL`). `wgpu_config(GL)` yields a `WgpuSetup::CreateNew` whose `instance_descriptor.backends == GL`.
+- [ ] **Step 2: Run** the test. Expected: compile failure.
+- [ ] **Step 3: Implement** the helpers and the fallback in `runner.rs`.
+- [ ] **Step 4: Bench check:** `tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh` passes. On `bench.sh up --release`, `/proc/<fthrust>/maps` has no `libgallium` mapping, and `VmRSS` is recorded in the commit message. With `BENCH_EXTRA_ENV=WGPU_BACKEND=gl`, the smoke scenario still passes (this exercises the GL path).
+- [ ] **Step 5: Run** `cargo test -p fthrust-ui` and clippy. Expected: green.
+- [ ] **Step 6: Commit** `perf(ui): render with Vulkan only, fall back to OpenGL`
+
+---
+
+### Task 7: Measure on the real desktop
 
 **Files:**
 - Modify: `docs/capturing.md` (the "How much memory it uses" paragraph, only if numbers change what it says), `docs/architecture.md` ("The engine" → Encoding paragraph: conversion now on the GPU for VA-API)
@@ -292,9 +314,9 @@ HOME=$H XDG_RUNTIME_DIR=$R WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY \
 
 Open the window on HDMI-A-1 without focus (the user games on DP-3). Clearing `HYPRLAND_INSTANCE_SIGNATURE` stops the managed hotkeys reload from touching the user's config.
 
-- [ ] **Step 3: Record** after 5 minutes of capture and one saved clip: engine `%CPU` from `top -b -n 2 -d 5`, and `VmRSS` and `RssAnon` from `/proc/<engine>/status`. Repeat once with `FTHR_CPU_COLOR_CONVERT=1` for a same-session comparison.
+- [ ] **Step 3: Record** after 5 minutes of capture and one saved clip: engine `%CPU` from `top -b -n 2 -d 5`, and `VmRSS` and `RssAnon` from `/proc/<engine>/status` and `/proc/<fthrust>/status` (window open, then minimised). Repeat once with `FTHR_CPU_COLOR_CONVERT=1` for a same-session comparison.
 
-- [ ] **Step 4: Check against targets:** engine ≤ 25% CPU and ≤ 600 MB RSS at the baseline settings; the comparison run shows the CPU path near the 72% baseline. If a target is missed, report the numbers rather than tuning further in this plan.
+- [ ] **Step 4: Check against targets:** engine ≤ 25% CPU and ≤ 600 MB RSS at the baseline settings, UI ≤ 300 MB RSS; the comparison run shows the CPU path near the 72% baseline. If a target is missed, report the numbers rather than tuning further in this plan.
 
 - [ ] **Step 5: Save a clip in each mode and check it plays** with correct colours (`ffprobe` shows `bt709`, `tv` range; open both in mpv side by side).
 
@@ -306,4 +328,4 @@ Open the window on HDMI-A-1 without focus (the user games on DP-3). Clearing `HY
 
 - **Plan 8b, zero-copy capture:** `zwp_linux_dmabuf_v1` buffers for screencopy / ext-image-copy, imported into VA-API as DRM PRIME surfaces, so frames never touch the CPU. Needs format and modifier negotiation and a fallback to shm.
 - NVENC, AMF and Quick Sync taking BGRA input directly.
-- App-process memory (~350 MB, mostly wgpu and fonts).
+- App-process memory beyond Task 6 (font atlas, egui textures).
