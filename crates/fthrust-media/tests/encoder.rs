@@ -383,3 +383,18 @@ fn gpu_failures_fall_back_to_cpu_conversion() {
         assert!(out.iter().all(|p| !p.data.is_empty()));
     }
 }
+
+#[test]
+fn first_send_after_a_size_change_can_fall_back_to_cpu() {
+    let Some(mut enc) = open_vaapi(320, 180, 320, 180) else {
+        return;
+    };
+    let mut out = encode_synthetic(&mut enc, 320, 180, 5, 0);
+    assert_eq!(enc.conversion(), Conversion::Gpu);
+    enc.inject_gpu_convert_failure();
+    out.extend(encode_synthetic(&mut enc, 160, 90, 5, 5));
+    enc.flush(&mut out).unwrap();
+    assert_eq!(enc.conversion(), Conversion::Cpu);
+    let (_, w, h) = decode::decode_frame_rgb(&enc.extradata(), &out, 7);
+    assert_eq!((w, h), (320, 180));
+}

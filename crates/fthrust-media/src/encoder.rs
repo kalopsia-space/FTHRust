@@ -94,7 +94,8 @@ pub struct Encoder {
     raw: RawEncoder,
     /// `None` while the GPU converter is in use.
     cpu: Option<CpuPath>,
-    /// Whether a GPU frame has been encoded successfully.
+    /// Whether a GPU frame has been encoded successfully since the converter
+    /// was last (re)built.
     gpu_proven: bool,
     inject_convert_failure: bool,
     hw_frame: Option<OwnedFrame>,
@@ -121,6 +122,12 @@ impl Encoder {
     pub fn open(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
         Self::open_with_devices(cfg, &candidate_devices())
+    }
+
+    /// Makes the next GPU convert fail (tests).
+    #[doc(hidden)]
+    pub fn inject_gpu_convert_failure(&mut self) {
+        self.inject_convert_failure = true;
     }
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
@@ -176,12 +183,13 @@ impl Encoder {
         }
         let candidates = encoder_candidates(cfg.codec, cfg.encoder);
         let mut failures = Vec::new();
+        let mut logged = false;
         for name in &candidates {
             if !RawEncoder::exists(name) {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg, devices, gop, force_cpu, inject) {
+            match Self::try_open(name, cfg, devices, gop, force_cpu, inject, &mut logged) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -219,6 +227,7 @@ impl Encoder {
         gop: Option<u32>,
         force_cpu: bool,
         inject: Option<GpuFailure>,
+        logged: &mut bool,
     ) -> Result<RawEncoder> {
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
@@ -244,7 +253,6 @@ impl Encoder {
         // keep going until an encoder actually opens.
         let cpu_only = force_cpu || std::env::var("FTHR_CPU_COLOR_CONVERT").as_deref() == Ok("1");
         let mut failures = Vec::new();
-        let mut logged = false;
         for device in devices {
             if !cpu_only {
                 let attempt = VaapiFrames::create_on(device, cfg.enc_width, cfg.enc_height)
@@ -259,9 +267,8 @@ impl Encoder {
                     Ok(raw) => return Ok(raw),
                     Err(e) => {
                         // Retry this device with plain NV12 uploads.
-                        if !logged {
+                        if !std::mem::replace(logged, true) {
                             log_gpu_fallback(&e);
-                            logged = true;
                         }
                     }
                 }
@@ -335,7 +342,15 @@ impl Encoder {
             encoder: EncoderPref::Auto,
             preset: 4,
         };
-        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices(), None, false, None) else {
+        let Ok(raw) = Self::try_open(
+            name,
+            &cfg,
+            &candidate_devices(),
+            None,
+            false,
+            None,
+            &mut false,
+        ) else {
             return false;
         };
         let Ok(mut encoder) = Self::finish_open(raw, &cfg, None) else {
@@ -440,10 +455,15 @@ impl Encoder {
             // context on the same VADisplay with the same NV12 format and
             // output size. h264_vaapi only uses avctx->hw_frames_ctx at init
             // and reads each surface from data[3]. A driver that rejects
-            // this fails the send and falls back to the CPU path below.
-            if let Err(e) = self.raw.rebuild_converter(width, height) {
-                log_gpu_fallback(&e);
-                self.switch_to_cpu(width, height)?;
+            // this fails the first send after the rebuild, which gets the same
+            // CPU fallback and retry as the first frame ever (gpu_proven is
+            // reset here).
+            match self.raw.rebuild_converter(width, height) {
+                Ok(()) => self.gpu_proven = false,
+                Err(e) => {
+                    log_gpu_fallback(&e);
+                    self.switch_to_cpu(width, height)?;
+                }
             }
         }
 
