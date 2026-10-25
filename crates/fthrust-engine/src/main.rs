@@ -22,6 +22,7 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
         CliMode::Serve { socket } => {
+            fthrust_engine::alloc::configure();
             init_logging();
             let default_override = std::env::var("FTHR_CAPTURE_BACKEND")
                 .ok()

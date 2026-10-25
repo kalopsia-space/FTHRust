@@ -1,7 +1,7 @@
 //! The capture engine: backend generations with recovery, encoding into
 //! the replay ring, health and status. Ports `capture_engine.cpp`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -140,6 +140,7 @@ struct Inner {
     audio: Arc<dyn AudioProvider>,
     keyframe_request: AtomicBool,
     record_overflow: AtomicBool,
+    normalized_frames: AtomicU64,
 }
 
 impl Inner {
@@ -194,6 +195,7 @@ impl CaptureEngine {
             audio: deps.audio.clone(),
             keyframe_request: AtomicBool::new(false),
             record_overflow: AtomicBool::new(false),
+            normalized_frames: AtomicU64::new(0),
         });
         Self {
             config,
@@ -366,6 +368,11 @@ impl CaptureEngine {
     /// Whether the capture thread is alive.
     pub fn is_capturing(&self) -> bool {
         self.inner.running.load(Ordering::Relaxed)
+    }
+
+    /// Frames that needed a `normalize` copy before encoding.
+    pub fn normalized_frames(&self) -> u64 {
+        self.inner.normalized_frames.load(Ordering::Relaxed)
     }
 
     /// The encoded ring.
@@ -881,36 +888,64 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 continue;
             }
             next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
-            let encoded = match normalize(&view, &mut bgra) {
-                Ok(()) => {
-                    if let Some(m) = watchdog.observe(&bgra) {
-                        inner.update(|s| {
-                            s.content_sample_sequence = m.sequence;
-                            s.content_suspicious_streak = m.streak;
-                            s.content_luma_mean = m.luma_mean;
-                            s.content_luma_variance = m.luma_variance;
-                            if m.suspect {
-                                s.health_flags |= flags::CONTENT_SUSPECT;
-                            } else {
-                                s.health_flags &= !flags::CONTENT_SUSPECT;
-                            }
-                        });
+            let update_content = |m: crate::watchdog::ContentMetrics| {
+                inner.update(|s| {
+                    s.content_sample_sequence = m.sequence;
+                    s.content_suspicious_streak = m.streak;
+                    s.content_luma_mean = m.luma_mean;
+                    s.content_luma_variance = m.luma_variance;
+                    if m.suspect {
+                        s.health_flags |= flags::CONTENT_SUSPECT;
+                    } else {
+                        s.health_flags &= !flags::CONTENT_SUSPECT;
                     }
-                    packets.clear();
-                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
-                        enc.request_keyframe();
-                    }
-                    enc.encode(
-                        &bgra.data,
-                        bgra.stride,
-                        bgra.width,
-                        bgra.height,
-                        ts,
-                        &mut packets,
-                    )
-                    .map_err(|e| e.to_string())
+                });
+            };
+            let encoded = if view.is_encodable_as_is() {
+                if let Some(m) = watchdog.observe_raw(
+                    view.data,
+                    view.width as usize,
+                    view.height as usize,
+                    view.stride,
+                ) {
+                    update_content(m);
                 }
-                Err(e) => Err(e.to_string()),
+                packets.clear();
+                if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                    enc.request_keyframe();
+                }
+                enc.encode(
+                    view.data,
+                    view.stride,
+                    view.width,
+                    view.height,
+                    ts,
+                    &mut packets,
+                )
+                .map_err(|e| e.to_string())
+            } else {
+                inner.normalized_frames.fetch_add(1, Ordering::Relaxed);
+                match normalize(&view, &mut bgra) {
+                    Ok(()) => {
+                        if let Some(m) = watchdog.observe(&bgra) {
+                            update_content(m);
+                        }
+                        packets.clear();
+                        if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                            enc.request_keyframe();
+                        }
+                        enc.encode(
+                            &bgra.data,
+                            bgra.stride,
+                            bgra.width,
+                            bgra.height,
+                            ts,
+                            &mut packets,
+                        )
+                        .map_err(|e| e.to_string())
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
             };
             match encoded {
                 Ok(()) => {

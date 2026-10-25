@@ -193,3 +193,18 @@ fn rejects_bad_input() {
         Err(FrameError::ShortBuffer)
     );
 }
+
+#[test]
+fn encodable_as_is_only_for_upright_bgra_bytes() {
+    let data = [0u8; 16];
+    for layout in [PixelLayout::Bgrx, PixelLayout::Bgra] {
+        assert!(view(&data, 2, 2, layout).is_encodable_as_is());
+    }
+    assert!(!view(&data, 2, 2, PixelLayout::Rgbx).is_encodable_as_is());
+    let mut v = view(&data, 2, 2, PixelLayout::Bgrx);
+    v.y_invert = true;
+    assert!(!v.is_encodable_as_is());
+    let mut v = view(&data, 2, 2, PixelLayout::Bgrx);
+    v.transform = OutputTransform::Rot90;
+    assert!(!v.is_encodable_as_is());
+}

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::{ViewportBuilder, ViewportId, ViewportInfo};
+use egui_wgpu::wgpu::Backends;
 use egui_wgpu::winit::Painter;
-use egui_wgpu::{RendererOptions, WgpuConfiguration};
+use egui_wgpu::{RendererOptions, WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -99,19 +100,62 @@ pub fn run(
     }
 }
 
+/// Vulkan only: egui-wgpu's default (`PRIMARY | GL`) also probes EGL, which
+/// maps libgallium (~34 MB resident) for an adapter we never use.
+/// `WGPU_BACKEND` still overrides.
+fn preferred_backends() -> Backends {
+    preferred_backends_from(std::env::var("WGPU_BACKEND").ok().as_deref())
+}
+
+fn preferred_backends_from(env: Option<&str>) -> Backends {
+    match env.map(str::trim) {
+        Some(v) if !v.is_empty() => Backends::from_comma_list(v),
+        _ => Backends::VULKAN,
+    }
+}
+
+fn wgpu_config(backends: Backends) -> WgpuConfiguration {
+    let mut setup = WgpuSetupCreateNew::without_display_handle();
+    setup.instance_descriptor.backends = backends;
+    WgpuConfiguration {
+        wgpu_setup: WgpuSetup::CreateNew(setup),
+        ..Default::default()
+    }
+}
+
+/// The display handle is what lets the GL backend create a Wayland-compatible
+/// context, which matters for the OpenGL fallback.
+fn new_painter(ctx: &egui::Context, el: &ActiveEventLoop, backends: Backends) -> Painter {
+    let mut config = wgpu_config(backends);
+    if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup {
+        setup.display_handle = Some(Box::new(el.owned_display_handle()));
+    }
+    pollster::block_on(Painter::new(
+        ctx.clone(),
+        config,
+        false,
+        RendererOptions::default(),
+    ))
+}
+
 impl Runner {
     fn create_window(&mut self, el: &ActiveEventLoop) -> Result<(), String> {
         let attrs = egui_winit::create_winit_window_attributes(&self.ctx, self.viewport.clone());
         let window = Arc::new(el.create_window(attrs).map_err(|e| e.to_string())?);
         egui_winit::apply_viewport_builder_to_window(&self.ctx, &window, &self.viewport);
-        let mut painter = pollster::block_on(Painter::new(
-            self.ctx.clone(),
-            WgpuConfiguration::default(),
-            false,
-            RendererOptions::default(),
-        ));
-        pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
-            .map_err(|e| e.to_string())?;
+        let first = preferred_backends();
+        let mut painter = new_painter(&self.ctx, el, first);
+        if let Err(e) =
+            pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
+        {
+            if first == Backends::GL {
+                return Err(e.to_string());
+            }
+            tracing::info!(error = %e, "Vulkan setup failed; falling back to OpenGL");
+            painter = new_painter(&self.ctx, el, Backends::GL);
+            pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
+                .map_err(|e2| format!("vulkan: {e}; gl: {e2}"))?;
+        }
         let mut winit_state = egui_winit::State::new(
             self.ctx.clone(),
             ViewportId::ROOT,
@@ -305,5 +349,32 @@ impl ApplicationHandler<Wake> for Runner {
         }
         self.winit_state = None;
         self.window = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_wgpu::WgpuSetup;
+    use egui_wgpu::wgpu::Backends;
+
+    #[test]
+    fn vulkan_only_unless_the_variable_says_otherwise() {
+        assert_eq!(preferred_backends_from(None), Backends::VULKAN);
+        assert_eq!(preferred_backends_from(Some("gl")), Backends::GL);
+        assert_eq!(preferred_backends_from(Some("")), Backends::VULKAN);
+        assert_eq!(preferred_backends_from(Some("  \t")), Backends::VULKAN);
+        assert_eq!(
+            preferred_backends_from(Some("vulkan,gl")),
+            Backends::VULKAN | Backends::GL
+        );
+    }
+
+    #[test]
+    fn config_carries_the_requested_backends() {
+        let WgpuSetup::CreateNew(setup) = wgpu_config(Backends::GL).wgpu_setup else {
+            panic!("expected CreateNew");
+        };
+        assert_eq!(setup.instance_descriptor.backends, Backends::GL);
     }
 }

@@ -44,6 +44,8 @@ pub mod transactional_save;
 /// VA-API device discovery (the safe surface of the private `ffi::hw`).
 pub mod vaapi {
     pub use crate::ffi::hw::{DEFAULT_DEVICE, candidate_devices, vaapi_available};
+    #[doc(hidden)]
+    pub use crate::ffi::vpp::{gpu_convert_rgb, gpu_convert_rgb_with_stride};
 }
 
 use std::sync::OnceLock;

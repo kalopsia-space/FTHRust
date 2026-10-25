@@ -38,7 +38,7 @@ The buffer always holds the longest length you've set up, plus two seconds of he
 
 ### How much memory it uses
 
-The buffer is encoded video, so its size is roughly *bitrate × length*. At the defaults (25 Mbps for 30 s) that's about 100 MB. Long lengths at high bitrates add up fast: 5 minutes at 50 Mbps is close to 2 GB. FTHRust never lets the buffer go past half your RAM, and the popup reminds you that *longer clips can use a lot of memory, especially at high quality*.
+The buffer is encoded video, so its size is roughly *bitrate × length*. At the defaults (25 Mbps for 30 s) that's about 100 MB. Long lengths at high bitrates add up fast: 5 minutes at 50 Mbps is close to 2 GB. The rest of the app is small next to that: at 1080p180 and 50 Mbps with 45-second clips, the capture engine measured about 430 MB in total (most of it the buffer) and the window about 185 MB. FTHRust never lets the buffer go past half your RAM, and the popup reminds you that *longer clips can use a lot of memory, especially at high quality*.
 
 ### When a save is refused
 

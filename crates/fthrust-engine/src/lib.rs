@@ -1,8 +1,10 @@
 //! The FTHRust capture daemon: policies, audio capture, the generation
 //! loop, save and record workers, and the IPC service.
-#![forbid(unsafe_code)]
+// deny, not forbid: alloc.rs wraps libc and opts in locally.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod alloc;
 pub mod audio;
 pub mod backend;
 pub mod cli;
