@@ -4,7 +4,7 @@ mod support;
 
 use fthrust_core::capture_config::{Codec, EncoderPref};
 use fthrust_media::MediaError;
-use fthrust_media::encoder::{Conversion, Encoder, EncoderConfig};
+use fthrust_media::encoder::{Conversion, Encoder, EncoderConfig, GpuFailure};
 use fthrust_media::ring::EncodedPacket;
 use fthrust_media::vaapi::vaapi_available;
 
@@ -260,9 +260,14 @@ fn vaapi_cfg(width: u32, height: u32) -> EncoderConfig {
     }
 }
 
-fn open_vaapi(src_w: u32, src_h: u32, enc_w: u32, enc_h: u32) -> Encoder {
+/// Opens an h264_vaapi encoder, or `None` (with a skip note) when the machine
+/// has no VA-API device.
+fn open_vaapi(src_w: u32, src_h: u32, enc_w: u32, enc_h: u32) -> Option<Encoder> {
     fthrust_media::init().unwrap();
-    assert!(vaapi_available(), "this test needs a VA-API device");
+    if !vaapi_available() {
+        eprintln!("skipping: no VA-API device");
+        return None;
+    }
     let cfg = EncoderConfig {
         src_width: src_w,
         src_height: src_h,
@@ -272,7 +277,7 @@ fn open_vaapi(src_w: u32, src_h: u32, enc_w: u32, enc_h: u32) -> Encoder {
     };
     let enc = Encoder::open(&cfg).unwrap();
     assert_eq!(enc.active_codec(), "h264_vaapi");
-    enc
+    Some(enc)
 }
 
 fn encode_synthetic(
@@ -300,14 +305,17 @@ fn encode_synthetic(
 
 #[test]
 fn vaapi_encoder_converts_on_the_gpu() {
-    let enc = open_vaapi(1920, 1080, 1920, 1080);
+    let Some(enc) = open_vaapi(1920, 1080, 1920, 1080) else {
+        return;
+    };
     assert_eq!(enc.conversion(), Conversion::Gpu);
 }
 
 #[test]
 fn gpu_and_cpu_paths_decode_to_the_same_colours() {
-    let mut gpu = open_vaapi(320, 180, 320, 180);
-    fthrust_media::init().unwrap();
+    let Some(mut gpu) = open_vaapi(320, 180, 320, 180) else {
+        return;
+    };
     let mut cpu = Encoder::open_forcing_cpu_conversion(&vaapi_cfg(320, 180)).unwrap();
     assert_eq!(gpu.conversion(), Conversion::Gpu);
     assert_eq!(cpu.conversion(), Conversion::Cpu);
@@ -335,7 +343,9 @@ fn gpu_and_cpu_paths_decode_to_the_same_colours() {
 
 #[test]
 fn gpu_path_keeps_output_size_when_source_changes() {
-    let mut enc = open_vaapi(1920, 1080, 1920, 1080);
+    let Some(mut enc) = open_vaapi(1920, 1080, 1920, 1080) else {
+        return;
+    };
     let mut out = encode_synthetic(&mut enc, 1920, 1080, 10, 0);
     out.extend(encode_synthetic(&mut enc, 1280, 720, 10, 10));
     enc.flush(&mut out).unwrap();
@@ -347,8 +357,29 @@ fn gpu_path_keeps_output_size_when_source_changes() {
 #[test]
 fn falls_back_to_cpu_when_forced() {
     fthrust_media::init().unwrap();
-    assert!(vaapi_available(), "this test needs a VA-API device");
+    if !vaapi_available() {
+        eprintln!("skipping: no VA-API device");
+        return;
+    }
     let enc = Encoder::open_forcing_cpu_conversion(&vaapi_cfg(320, 180)).unwrap();
     assert_eq!(enc.conversion(), Conversion::Cpu);
     assert!(Encoder::encoder_works("h264_vaapi"));
+}
+
+#[test]
+fn gpu_failures_fall_back_to_cpu_conversion() {
+    fthrust_media::init().unwrap();
+    if !vaapi_available() {
+        eprintln!("skipping: no VA-API device");
+        return;
+    }
+    for failure in [GpuFailure::Open, GpuFailure::FirstConvert] {
+        let mut enc =
+            Encoder::open_with_injected_gpu_failure(&vaapi_cfg(320, 180), failure).unwrap();
+        let mut out = encode_synthetic(&mut enc, 320, 180, 10, 0);
+        enc.flush(&mut out).unwrap();
+        assert_eq!(enc.conversion(), Conversion::Cpu, "{failure:?}");
+        assert!(!out.is_empty() && out[0].keyframe, "{failure:?}");
+        assert!(out.iter().all(|p| !p.data.is_empty()));
+    }
 }

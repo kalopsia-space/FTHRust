@@ -54,6 +54,23 @@ pub enum Conversion {
     Cpu,
 }
 
+/// Test hook: where to inject a GPU conversion failure.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuFailure {
+    /// Opening the encoder with the converter's frames fails.
+    Open,
+    /// The first GPU convert fails.
+    FirstConvert,
+}
+
+fn log_gpu_fallback(reason: &dyn std::fmt::Display) {
+    tracing::info!(
+        reason = %reason,
+        "GPU colour conversion unavailable; converting on the CPU"
+    );
+}
+
 /// The CPU conversion state.
 #[derive(Debug)]
 struct CpuPath {
@@ -77,6 +94,9 @@ pub struct Encoder {
     raw: RawEncoder,
     /// `None` while the GPU converter is in use.
     cpu: Option<CpuPath>,
+    /// Whether a GPU frame has been encoded successfully.
+    gpu_proven: bool,
+    inject_convert_failure: bool,
     hw_frame: Option<OwnedFrame>,
     cfg: EncoderConfig,
     pts_epoch_ns: Option<i64>,
@@ -105,7 +125,7 @@ impl Encoder {
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
-        Self::open_inner(cfg, devices, None, false)
+        Self::open_inner(cfg, devices, None, false, None)
     }
 
     /// [`Encoder::open`] with the CPU colour conversion forced (tests and
@@ -113,14 +133,32 @@ impl Encoder {
     #[doc(hidden)]
     pub fn open_forcing_cpu_conversion(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(cfg, &candidate_devices(), None, true)
+        Self::open_inner(cfg, &candidate_devices(), None, true, None)
     }
 
     /// [`Encoder::open`] with an explicit keyframe interval in frames
     /// (playback proxies and tests; capture keeps the two-second default).
     pub fn open_with_gop(cfg: &EncoderConfig, gop_frames: u32) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(cfg, &candidate_devices(), Some(gop_frames.max(1)), false)
+        Self::open_inner(
+            cfg,
+            &candidate_devices(),
+            Some(gop_frames.max(1)),
+            false,
+            None,
+        )
+    }
+
+    /// [`Encoder::open`] with a GPU conversion failure injected (tests).
+    #[doc(hidden)]
+    pub fn open_with_injected_gpu_failure(
+        cfg: &EncoderConfig,
+        failure: GpuFailure,
+    ) -> Result<Self> {
+        crate::init()?;
+        let mut enc = Self::open_inner(cfg, &candidate_devices(), None, false, Some(failure))?;
+        enc.inject_convert_failure = failure == GpuFailure::FirstConvert;
+        Ok(enc)
     }
 
     fn open_inner(
@@ -128,6 +166,7 @@ impl Encoder {
         devices: &[String],
         gop: Option<u32>,
         force_cpu: bool,
+        inject: Option<GpuFailure>,
     ) -> Result<Self> {
         crate::init()?;
         if cfg.fps == 0 || cfg.enc_width == 0 || cfg.enc_height == 0 {
@@ -142,7 +181,7 @@ impl Encoder {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg, devices, gop, force_cpu) {
+            match Self::try_open(name, cfg, devices, gop, force_cpu, inject) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -179,6 +218,7 @@ impl Encoder {
         devices: &[String],
         gop: Option<u32>,
         force_cpu: bool,
+        inject: Option<GpuFailure>,
     ) -> Result<RawEncoder> {
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
@@ -204,15 +244,31 @@ impl Encoder {
         // keep going until an encoder actually opens.
         let cpu_only = force_cpu || std::env::var("FTHR_CPU_COLOR_CONVERT").as_deref() == Ok("1");
         let mut failures = Vec::new();
+        let mut logged = false;
         for device in devices {
-            match VaapiFrames::create_on(device, cfg.enc_width, cfg.enc_height).and_then(|hw| {
-                let input = if cpu_only {
-                    HwInput::Pool(hw)
-                } else {
-                    Self::gpu_input(hw, cfg, device)
-                };
-                RawEncoder::open(name, &params, Some(input))
-            }) {
+            if !cpu_only {
+                let attempt = VaapiFrames::create_on(device, cfg.enc_width, cfg.enc_height)
+                    .and_then(|hw| Self::gpu_input(hw, cfg))
+                    .and_then(|input| {
+                        if inject == Some(GpuFailure::Open) {
+                            return Err(MediaError::Invalid("injected GPU open failure".into()));
+                        }
+                        RawEncoder::open(name, &params, Some(input))
+                    });
+                match attempt {
+                    Ok(raw) => return Ok(raw),
+                    Err(e) => {
+                        // Retry this device with plain NV12 uploads.
+                        if !logged {
+                            log_gpu_fallback(&e);
+                            logged = true;
+                        }
+                    }
+                }
+            }
+            match VaapiFrames::create_on(device, cfg.enc_width, cfg.enc_height)
+                .and_then(|hw| RawEncoder::open(name, &params, Some(HwInput::Pool(hw))))
+            {
                 Ok(raw) => return Ok(raw),
                 Err(e) => failures.push(format!("{device}: {e}")),
             }
@@ -224,28 +280,14 @@ impl Encoder {
         }))
     }
 
-    /// Wraps `hw` with a GPU converter that has converted one black frame,
-    /// or falls back to the plain upload pool, logging why.
-    fn gpu_input(hw: VaapiFrames, cfg: &EncoderConfig, device: &str) -> HwInput {
+    /// Wraps `hw` with a GPU converter that has converted one black frame.
+    fn gpu_input(hw: VaapiFrames, cfg: &EncoderConfig) -> Result<HwInput> {
         let (src_w, src_h) = (cfg.src_width.max(1), cfg.src_height.max(1));
-        let probe = || -> Result<VaapiConverter> {
-            let mut converter =
-                VaapiConverter::new(&hw, src_w, src_h, cfg.enc_width, cfg.enc_height)?;
-            let black = vec![0u8; src_w as usize * src_h as usize * 4];
-            let mut out = OwnedFrame::empty()?;
-            converter.convert(&black, src_w as usize * 4, &mut out)?;
-            Ok(converter)
-        };
-        match probe() {
-            Ok(converter) => HwInput::Converter(hw, converter),
-            Err(e) => {
-                tracing::info!(
-                    device,
-                    "GPU colour conversion unavailable ({e}); converting on the CPU"
-                );
-                HwInput::Pool(hw)
-            }
-        }
+        let mut converter = VaapiConverter::new(&hw, src_w, src_h, cfg.enc_width, cfg.enc_height)?;
+        let black = vec![0u8; src_w as usize * src_h as usize * 4];
+        let mut out = OwnedFrame::empty()?;
+        converter.convert(&black, src_w as usize * 4, &mut out)?;
+        Ok(HwInput::Converter(hw, converter))
     }
 
     fn finish_open(raw: RawEncoder, cfg: &EncoderConfig, gop: Option<u32>) -> Result<Self> {
@@ -262,6 +304,8 @@ impl Encoder {
         Ok(Self {
             raw,
             cpu,
+            gpu_proven: false,
+            inject_convert_failure: false,
             hw_frame,
             cfg: cfg.clone(),
             pts_epoch_ns: None,
@@ -291,7 +335,7 @@ impl Encoder {
             encoder: EncoderPref::Auto,
             preset: 4,
         };
-        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices(), None, false) else {
+        let Ok(raw) = Self::try_open(name, &cfg, &candidate_devices(), None, false, None) else {
             return false;
         };
         let Ok(mut encoder) = Self::finish_open(raw, &cfg, None) else {
@@ -392,27 +436,15 @@ impl Encoder {
                 height,
                 "source size changed; rebuilding the GPU converter"
             );
+            // Frames from the rebuilt converter come from a new sink frames
+            // context on the same VADisplay with the same NV12 format and
+            // output size. h264_vaapi only uses avctx->hw_frames_ctx at init
+            // and reads each surface from data[3]. A driver that rejects
+            // this fails the send and falls back to the CPU path below.
             if let Err(e) = self.raw.rebuild_converter(width, height) {
-                tracing::warn!("GPU converter rebuild failed ({e}); converting on the CPU");
-                self.raw.drop_converter();
-                self.cpu = Some(CpuPath::new(width, height, &self.raw)?);
+                log_gpu_fallback(&e);
+                self.switch_to_cpu(width, height)?;
             }
-        }
-        if let Some(cpu) = &mut self.cpu {
-            if cpu.scaler.source_size() != (width, height) {
-                tracing::info!(
-                    width,
-                    height,
-                    "source size changed; rescaling to the output size"
-                );
-                let (w, h) = self.raw.size();
-                cpu.scaler = Scaler::new(width, height, w, h, self.raw.input_format())?;
-            }
-            cpu.sw_frame.make_writable()?;
-            cpu.scaler
-                .scale_bgra(bgra, stride, height, &mut cpu.sw_frame)?;
-        } else if let Some(hw_frame) = self.hw_frame.as_mut() {
-            self.raw.convert(bgra, stride, hw_frame)?;
         }
 
         let fps = i64::from(self.cfg.fps);
@@ -434,24 +466,16 @@ impl Encoder {
             || frame_pts - self.last_forced_keyframe_pts >= self.forced_keyframe_interval
             || std::mem::take(&mut self.keyframe_requested);
 
-        match (&mut self.cpu, self.hw_frame.as_mut()) {
-            (Some(cpu), hw_frame) => {
-                cpu.sw_frame.set_pts(frame_pts);
-                cpu.sw_frame.set_forced_keyframe(force_key);
-                match (self.raw.vaapi(), hw_frame) {
-                    (Some(hw), Some(hw_frame)) => {
-                        hw.upload(hw_frame, &cpu.sw_frame)?;
-                        self.raw.send_frame(Some(hw_frame))?;
-                    }
-                    _ => self.raw.send_frame(Some(&cpu.sw_frame))?,
-                }
-            }
-            (None, Some(hw_frame)) => {
-                hw_frame.set_pts(frame_pts);
-                hw_frame.set_forced_keyframe(force_key);
-                self.raw.send_frame(Some(hw_frame))?;
-            }
-            (None, None) => unreachable!("GPU conversion implies a hardware frame"),
+        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
+        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        if first_gpu && let Err(e) = &sent {
+            log_gpu_fallback(e);
+            self.switch_to_cpu(width, height)?;
+            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        }
+        sent?;
+        if self.cpu.is_none() {
+            self.gpu_proven = true;
         }
         self.pending.push_back(FrameTiming {
             pts: frame_pts,
@@ -461,6 +485,57 @@ impl Encoder {
             self.last_forced_keyframe_pts = frame_pts;
         }
         self.drain(wall_time_ns, out)
+    }
+
+    fn switch_to_cpu(&mut self, width: u32, height: u32) -> Result<()> {
+        self.raw.drop_converter();
+        self.cpu = Some(CpuPath::new(width, height, &self.raw)?);
+        Ok(())
+    }
+
+    /// Converts `bgra` on the active path and submits it to the encoder.
+    fn convert_and_send(
+        &mut self,
+        bgra: &[u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        pts: i64,
+        force_key: bool,
+    ) -> Result<()> {
+        if let Some(cpu) = &mut self.cpu {
+            if cpu.scaler.source_size() != (width, height) {
+                tracing::info!(
+                    width,
+                    height,
+                    "source size changed; rescaling to the output size"
+                );
+                let (w, h) = self.raw.size();
+                cpu.scaler = Scaler::new(width, height, w, h, self.raw.input_format())?;
+            }
+            cpu.sw_frame.make_writable()?;
+            cpu.scaler
+                .scale_bgra(bgra, stride, height, &mut cpu.sw_frame)?;
+            cpu.sw_frame.set_pts(pts);
+            cpu.sw_frame.set_forced_keyframe(force_key);
+            match (self.raw.vaapi(), self.hw_frame.as_mut()) {
+                (Some(hw), Some(hw_frame)) => {
+                    hw.upload(hw_frame, &cpu.sw_frame)?;
+                    self.raw.send_frame(Some(hw_frame))
+                }
+                _ => self.raw.send_frame(Some(&cpu.sw_frame)),
+            }
+        } else if let Some(hw_frame) = self.hw_frame.as_mut() {
+            if std::mem::take(&mut self.inject_convert_failure) {
+                return Err(MediaError::Invalid("injected GPU convert failure".into()));
+            }
+            self.raw.convert(bgra, stride, hw_frame)?;
+            hw_frame.set_pts(pts);
+            hw_frame.set_forced_keyframe(force_key);
+            self.raw.send_frame(Some(hw_frame))
+        } else {
+            Err(MediaError::Invalid("GPU conversion without a frame".into()))
+        }
     }
 
     fn drain(&mut self, fallback_wall_ns: i64, out: &mut Vec<EncodedPacket>) -> Result<()> {

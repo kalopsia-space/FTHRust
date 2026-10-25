@@ -71,8 +71,8 @@ pub struct RawEncoder {
     ctx: *mut ffi::AVCodecContext,
     pkt: *mut ffi::AVPacket,
     hw: Option<VaapiFrames>,
-    // Declared after `hw`'s users only for readability; the converter owns
-    // its own device reference.
+    // The converter holds its own device reference, so drop order against
+    // `hw` does not matter.
     converter: Option<VaapiConverter>,
     name: &'static str,
 }
@@ -153,6 +153,9 @@ impl RawEncoder {
                     frames = converter.output_frames_ref();
                 }
                 if device.is_null() || frames.is_null() {
+                    let (mut device, mut frames) = (device, frames);
+                    ffi::av_buffer_unref(&mut device);
+                    ffi::av_buffer_unref(&mut frames);
                     free(ctx);
                     return Err(MediaError::Invalid("hardware frames ref missing".into()));
                 }
