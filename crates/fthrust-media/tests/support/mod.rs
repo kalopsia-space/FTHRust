@@ -280,3 +280,22 @@ pub fn write_gop_clip(path: &std::path::Path, seconds: u32, gop_frames: Option<u
     write_clip(path, &video, &[audio], None).unwrap();
     Some(())
 }
+
+/// A `width`×`height` BGRA frame filled with one pixel.
+pub fn solid(width: u32, height: u32, bgra: [u8; 4]) -> Vec<u8> {
+    bgra.iter()
+        .copied()
+        .cycle()
+        .take((width * height * 4) as usize)
+        .collect()
+}
+
+/// Asserts every channel of `got` is within `tol` of `want`.
+pub fn assert_rgb_near(got: &[u8], want: [u8; 3], tol: i32) {
+    for (g, w) in got.iter().zip(want) {
+        assert!(
+            (i32::from(*g) - i32::from(w)).abs() <= tol,
+            "got {got:?}, wanted {want:?} +-{tol}"
+        );
+    }
+}

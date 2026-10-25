@@ -67,6 +67,16 @@ impl VaapiFrames {
 
     /// Opens one render node and allocates the pool there.
     pub(crate) fn create_on(path: &str, width: u32, height: u32) -> Result<Self> {
+        Self::create_on_with(path, width, height, ffi::AVPixelFormat::AV_PIX_FMT_NV12)
+    }
+
+    /// Opens one render node and allocates a pool of `sw_format` surfaces.
+    pub(crate) fn create_on_with(
+        path: &str,
+        width: u32,
+        height: u32,
+        sw_format: ffi::AVPixelFormat,
+    ) -> Result<Self> {
         let cpath =
             CString::new(path).map_err(|_| MediaError::Invalid("device path has NUL".into()))?;
         let mut device: *mut ffi::AVBufferRef = ptr::null_mut();
@@ -91,7 +101,7 @@ impl VaapiFrames {
             }
             let ctx = (*frames).data as *mut ffi::AVHWFramesContext;
             (*ctx).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI;
-            (*ctx).sw_format = ffi::AVPixelFormat::AV_PIX_FMT_NV12;
+            (*ctx).sw_format = sw_format;
             (*ctx).width = width as i32;
             (*ctx).height = height as i32;
             (*ctx).initial_pool_size = 8;
@@ -109,6 +119,12 @@ impl VaapiFrames {
             frames,
             device_path: path.to_string(),
         })
+    }
+
+    /// The device context (borrowed, not a new reference).
+    #[allow(dead_code)] // used by the encoder wiring in the next task
+    pub(crate) fn device_ref(&self) -> *mut ffi::AVBufferRef {
+        self.device
     }
 
     /// New references for a codec context (`hw_device_ctx`, `hw_frames_ctx`).

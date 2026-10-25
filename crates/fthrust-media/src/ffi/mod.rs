@@ -13,6 +13,7 @@ pub mod hw;
 pub mod mux;
 pub mod probe;
 pub mod scaler;
+pub mod vpp;
 
 use ffmpeg_next::ffi;
 
