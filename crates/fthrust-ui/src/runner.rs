@@ -108,7 +108,10 @@ fn preferred_backends() -> Backends {
 }
 
 fn preferred_backends_from(env: Option<&str>) -> Backends {
-    env.map_or(Backends::VULKAN, Backends::from_comma_list)
+    match env.map(str::trim) {
+        Some(v) if !v.is_empty() => Backends::from_comma_list(v),
+        _ => Backends::VULKAN,
+    }
 }
 
 fn wgpu_config(backends: Backends) -> WgpuConfiguration {
@@ -140,14 +143,18 @@ impl Runner {
         let attrs = egui_winit::create_winit_window_attributes(&self.ctx, self.viewport.clone());
         let window = Arc::new(el.create_window(attrs).map_err(|e| e.to_string())?);
         egui_winit::apply_viewport_builder_to_window(&self.ctx, &window, &self.viewport);
-        let mut painter = new_painter(&self.ctx, el, preferred_backends());
+        let first = preferred_backends();
+        let mut painter = new_painter(&self.ctx, el, first);
         if let Err(e) =
             pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
         {
-            tracing::info!("no Vulkan adapter; falling back to OpenGL: {e}");
+            if first == Backends::GL {
+                return Err(e.to_string());
+            }
+            tracing::info!(error = %e, "Vulkan setup failed; falling back to OpenGL");
             painter = new_painter(&self.ctx, el, Backends::GL);
             pollster::block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e2| format!("vulkan: {e}; gl: {e2}"))?;
         }
         let mut winit_state = egui_winit::State::new(
             self.ctx.clone(),
@@ -355,6 +362,8 @@ mod tests {
     fn vulkan_only_unless_the_variable_says_otherwise() {
         assert_eq!(preferred_backends_from(None), Backends::VULKAN);
         assert_eq!(preferred_backends_from(Some("gl")), Backends::GL);
+        assert_eq!(preferred_backends_from(Some("")), Backends::VULKAN);
+        assert_eq!(preferred_backends_from(Some("  \t")), Backends::VULKAN);
         assert_eq!(
             preferred_backends_from(Some("vulkan,gl")),
             Backends::VULKAN | Backends::GL
