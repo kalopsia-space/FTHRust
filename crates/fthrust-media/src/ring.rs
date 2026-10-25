@@ -17,7 +17,7 @@ use crate::replay_interval::{self, Sample};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedPacket {
     /// Compressed payload.
-    pub data: Vec<u8>,
+    pub data: std::sync::Arc<[u8]>,
     /// Presentation timestamp in `1/fps` ticks.
     pub pts: i64,
     /// Decode timestamp in `1/fps` ticks.

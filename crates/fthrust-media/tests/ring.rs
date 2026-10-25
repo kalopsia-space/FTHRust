@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use fthrust_media::ring::{EncodedPacket, EncodedRing};
@@ -6,7 +7,7 @@ const SECOND: i64 = 1_000_000_000;
 
 fn packet(pts: i64, wall_time_ns: i64, keyframe: bool) -> EncodedPacket {
     EncodedPacket {
-        data: vec![0x01],
+        data: vec![0x01].into(),
         pts,
         dts: pts,
         keyframe,
@@ -17,7 +18,7 @@ fn packet(pts: i64, wall_time_ns: i64, keyframe: bool) -> EncodedPacket {
 
 fn sized(pts: i64, wall_time_ns: i64, keyframe: bool, bytes: usize) -> EncodedPacket {
     EncodedPacket {
-        data: vec![0x01; bytes],
+        data: vec![0x01; bytes].into(),
         ..packet(pts, wall_time_ns, keyframe)
     }
 }
@@ -268,4 +269,27 @@ fn long_gap_then_save_is_partial_history() {
         ring.snapshot(0, resume, 0).is_none(),
         "zero duration is nothing"
     );
+}
+
+#[test]
+fn snapshot_shares_payloads_with_the_ring() {
+    let ring = EncodedRing::new(10_000, 30, 0);
+    let p = sized(0, 0, true, 1_000);
+    let data = p.data.clone();
+    ring.push(p);
+    let snap = ring.snapshot(1_000, 0, 0).unwrap();
+    assert!(Arc::ptr_eq(&snap.packets[0].data, &data));
+}
+
+#[test]
+fn snapshot_survives_the_ring_trimming_its_packets() {
+    let ring = EncodedRing::new(1_000, 30, 0);
+    for i in 0..30 {
+        ring.push(sized(i, i * 33_333_333, i % 10 == 0, 100));
+    }
+    let snap = ring.snapshot(1_000, 0, 0).unwrap();
+    for i in 30..120 {
+        ring.push(sized(i, i * 33_333_333, i % 10 == 0, 100));
+    }
+    assert!(snap.packets.iter().all(|p| p.data.len() == 100));
 }

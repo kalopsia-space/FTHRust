@@ -34,7 +34,7 @@ pub struct OpenParams {
 #[derive(Debug)]
 pub struct RawPacket {
     /// Compressed bytes (copied out of the packet).
-    pub data: Vec<u8>,
+    pub data: std::sync::Arc<[u8]>,
     /// Presentation timestamp.
     pub pts: i64,
     /// Decode timestamp.
@@ -49,12 +49,12 @@ pub struct RawPacket {
 /// # Safety
 /// `p` must be a packet whose `data` is either null or valid for `size`
 /// bytes.
-pub(crate) unsafe fn packet_bytes(p: &ffi::AVPacket) -> Vec<u8> {
+pub(crate) unsafe fn packet_bytes(p: &ffi::AVPacket) -> std::sync::Arc<[u8]> {
     if p.data.is_null() || p.size <= 0 {
-        return Vec::new();
+        return std::sync::Arc::from([]);
     }
     // SAFETY: guaranteed by the caller contract above.
-    unsafe { std::slice::from_raw_parts(p.data, p.size as usize).to_vec() }
+    unsafe { std::slice::from_raw_parts(p.data, p.size as usize) }.into()
 }
 
 /// What a VA-API encoder takes its frames from.
