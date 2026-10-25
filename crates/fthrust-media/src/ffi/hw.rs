@@ -129,12 +129,6 @@ impl VaapiFrames {
         })
     }
 
-    /// The device context (borrowed, not a new reference).
-    #[allow(dead_code)] // used by the encoder wiring in the next task
-    pub(crate) fn device_ref(&self) -> *mut ffi::AVBufferRef {
-        self.device
-    }
-
     /// New references for a codec context (`hw_device_ctx`, `hw_frames_ctx`).
     pub(crate) fn new_refs(&self) -> (*mut ffi::AVBufferRef, *mut ffi::AVBufferRef) {
         // SAFETY: both refs are valid; av_buffer_ref returns owned refs.

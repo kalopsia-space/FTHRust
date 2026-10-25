@@ -7,6 +7,7 @@ use ffmpeg_next::ffi;
 
 use super::frame::OwnedFrame;
 use super::hw::VaapiFrames;
+use super::vpp::VaapiConverter;
 use crate::{MediaError, Result};
 
 /// What an encoder is opened with.
@@ -56,13 +57,34 @@ pub(crate) unsafe fn packet_bytes(p: &ffi::AVPacket) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(p.data, p.size as usize).to_vec() }
 }
 
+/// What a VA-API encoder takes its frames from.
+pub(crate) enum HwInput {
+    /// The caller uploads NV12 frames into the pool.
+    Pool(VaapiFrames),
+    /// The converter produces NV12 frames on the same device; the device
+    /// owner `VaapiFrames` is kept for uploads after a CPU fallback.
+    Converter(VaapiFrames, VaapiConverter),
+}
+
 /// An open encoder context.
-#[derive(Debug)]
 pub struct RawEncoder {
     ctx: *mut ffi::AVCodecContext,
     pkt: *mut ffi::AVPacket,
     hw: Option<VaapiFrames>,
+    // Declared after `hw`'s users only for readability; the converter owns
+    // its own device reference.
+    converter: Option<VaapiConverter>,
     name: &'static str,
+}
+
+impl std::fmt::Debug for RawEncoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawEncoder")
+            .field("name", &self.name)
+            .field("vaapi", &self.hw.is_some())
+            .field("gpu_converter", &self.converter.is_some())
+            .finish()
+    }
 }
 
 // SAFETY: the context and packet are exclusively owned.
@@ -79,9 +101,18 @@ impl RawEncoder {
     }
 
     /// Opens `name` with `params`; a VA-API encoder gets `hw` as its device
-    /// and frame pool. Colour is BT.709 studio range, GOP is `2*fps` with no
+    /// and frame pool (or the converter's output pool). Colour is BT.709 studio range, GOP is `2*fps` with no
     /// B-frames, and a global header is requested.
-    pub fn open(name: &'static str, params: &OpenParams, hw: Option<VaapiFrames>) -> Result<Self> {
+    pub(crate) fn open(
+        name: &'static str,
+        params: &OpenParams,
+        hw: Option<HwInput>,
+    ) -> Result<Self> {
+        let (hw, converter) = match hw {
+            None => (None, None),
+            Some(HwInput::Pool(frames)) => (Some(frames), None),
+            Some(HwInput::Converter(frames, converter)) => (Some(frames), Some(converter)),
+        };
         let cname =
             CString::new(name).map_err(|_| MediaError::Invalid("codec name has NUL".into()))?;
         // SAFETY: every pointer is checked before use; on any failure the
@@ -116,7 +147,15 @@ impl RawEncoder {
             (*ctx).colorspace = ffi::AVColorSpace::AVCOL_SPC_BT709;
             (*ctx).chroma_sample_location = ffi::AVChromaLocation::AVCHROMA_LOC_LEFT;
             if let Some(hw) = &hw {
-                let (device, frames) = hw.new_refs();
+                let (device, mut frames) = hw.new_refs();
+                if let Some(converter) = &converter {
+                    ffi::av_buffer_unref(&mut frames);
+                    frames = converter.output_frames_ref();
+                }
+                if device.is_null() || frames.is_null() {
+                    free(ctx);
+                    return Err(MediaError::Invalid("hardware frames ref missing".into()));
+                }
                 (*ctx).hw_device_ctx = device;
                 (*ctx).hw_frames_ctx = frames;
                 (*ctx).pix_fmt = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI;
@@ -147,7 +186,13 @@ impl RawEncoder {
                 free(ctx);
                 return Err(MediaError::Invalid("av_packet_alloc failed".into()));
             }
-            Ok(Self { ctx, pkt, hw, name })
+            Ok(Self {
+                ctx,
+                pkt,
+                hw,
+                converter,
+                name,
+            })
         }
     }
 
@@ -164,6 +209,45 @@ impl RawEncoder {
     /// The VA-API pool, when present.
     pub fn vaapi(&self) -> Option<&VaapiFrames> {
         self.hw.as_ref()
+    }
+
+    /// Whether frames are converted on the GPU.
+    pub(crate) fn has_converter(&self) -> bool {
+        self.converter.is_some()
+    }
+
+    /// The GPU converter's source size, when one is active.
+    pub(crate) fn converter_source_size(&self) -> Option<(u32, u32)> {
+        self.converter.as_ref().map(VaapiConverter::source_size)
+    }
+
+    /// Replaces the converter with one for `src_w`x`src_h` (same output size).
+    pub(crate) fn rebuild_converter(&mut self, src_w: u32, src_h: u32) -> Result<()> {
+        let hw = self
+            .hw
+            .as_ref()
+            .ok_or_else(|| MediaError::Invalid("no VA-API device".into()))?;
+        let (w, h) = self.size();
+        self.converter = Some(VaapiConverter::new(hw, src_w, src_h, w, h)?);
+        Ok(())
+    }
+
+    /// Drops the GPU converter; frames must be uploaded from then on.
+    pub(crate) fn drop_converter(&mut self) {
+        self.converter = None;
+    }
+
+    /// Converts a BGRA frame into `out` on the GPU.
+    pub(crate) fn convert(
+        &mut self,
+        bgra: &[u8],
+        stride: usize,
+        out: &mut OwnedFrame,
+    ) -> Result<()> {
+        match &mut self.converter {
+            Some(c) => c.convert(bgra, stride, out),
+            None => Err(MediaError::Invalid("no GPU converter".into())),
+        }
     }
 
     /// The pixel format of frames to feed the encoder (NV12 for VA-API,

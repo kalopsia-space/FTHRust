@@ -11,9 +11,9 @@ use crate::{MediaError, Result};
 
 /// A filter graph `buffer -> scale_vaapi -> buffersink` fed from a BGRX
 /// hardware surface pool.
-#[allow(dead_code)] // wired into the encoder in the next task
 pub(crate) struct VaapiConverter {
     // Declared before `pool` so the graph drops first.
+    #[allow(dead_code)] // owns the filters the raw pointers below point into
     graph: ff::filter::Graph,
     src: *mut ffi::AVFilterContext,
     sink: *mut ffi::AVFilterContext,
@@ -28,7 +28,6 @@ pub(crate) struct VaapiConverter {
 // owned and only used through `&mut self`.
 unsafe impl Send for VaapiConverter {}
 
-#[allow(dead_code)] // wired into the encoder in the next task
 impl VaapiConverter {
     /// Builds the graph on the render node `device` opened, converting
     /// `src_w`×`src_h` BGRA into `dst_w`×`dst_h` NV12 (BT.709, limited range).
