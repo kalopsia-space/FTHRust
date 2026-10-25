@@ -65,11 +65,11 @@ flowchart BT
 
 **Capture.** On start, the engine picks a backend: `ext-image-copy-capture` first, then `wlr-screencopy`, then the ScreenCast portal. When capture fails it retries the last working backend first, backing off 250 ms, 750 ms and 1.5 s. It never re-opens the portal on its own (unless the portal was the last one that worked), because that would put a permission dialog in front of a game. A watchdog watches for blank or frozen content and triggers recovery.
 
-**Encoding.** Frames go to a hardware encoder chosen by `fthrust-media::encoder_policy`: NVENC, then VA-API (and AMF), then Quick Sync, or software only when the user explicitly asks for it. Which encoders actually work is decided at app startup by test-encoding one frame with each, in a child process with a 5-second timeout, and cached in `~/.fthr/encoder_capabilities.json`.
+**Encoding.** Frames go to a hardware encoder chosen by `fthrust-media::encoder_policy`: NVENC, then VA-API (and AMF), then Quick Sync, or software only when the user explicitly asks for it. Which encoders actually work is decided at app startup by test-encoding one frame with each, in a child process with a 5-second timeout, and cached in `~/.fthr/encoder_capabilities.json`. On VA-API, colour conversion (BGRA to NV12, plus any scaling) runs on the GPU through a `scale_vaapi` filter graph; every other encoder, or a VA-API driver that refuses it, converts on the CPU with swscale. `FTHR_CPU_COLOR_CONVERT=1` forces the CPU path. Upright BGRX frames are encoded straight from the capture buffer without a copy.
 
 **The ring.** Encoded packets go into an in-memory ring sized for the longest configured clip plus 2 seconds. Its memory budget is about *bitrate × (buffer + 5 s) × 1.25 + 64 MiB*, clamped between 64 MiB and 16 GiB and never more than half of RAM.
 
-**Saving.** A save copies the last N seconds of packets (starting on a keyframe) plus the matching audio window into an MP4 on a worker thread, without re-encoding the video. Audio is encoded as AAC at this point. The file is written as `.partial` and renamed when complete, so the library never shows a half-written clip. Only one save runs at a time.
+**Saving.** A save takes the last N seconds of packets (shared with the ring, not copied) (starting on a keyframe) plus the matching audio window into an MP4 on a worker thread, without re-encoding the video. Audio is encoded as AAC at this point. The file is written as `.partial` and renamed when complete, so the library never shows a half-written clip. Only one save runs at a time.
 
 **Recording** taps the same packet stream. If the writer falls more than 8 seconds behind, the recording is stopped with an error rather than eating memory.
 
