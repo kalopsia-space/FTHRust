@@ -1,6 +1,6 @@
 # Installing
 
-FTHRust Clips ships as a single AppImage: one file that holds the app, its capture engine, its uploader and a pinned copy of FFmpeg. There's nothing to install system-wide and nothing to uninstall but the file and its settings folder.
+FTHRust Clips ships as a single AppImage: one file that holds the app, its capture engine, its uploader and a pinned copy of FFmpeg. There's nothing to install system-wide and nothing to uninstall but the file and its settings folder. If you'd rather install a native build, see [Installing a native build](#installing-a-native-build).
 
 - [What you need](#what-you-need)
 - [Running the AppImage](#running-the-appimage)
@@ -105,9 +105,26 @@ cargo build --release -p fthrust-ui -p fthrust-engine -p fthrust-uploader
 
 The three binaries must sit in the same folder, because the app looks for its engine and uploader next to itself.
 
+### Installing a native build
+
+To install a source build like a normal program, with no AppImage, use `packaging/install.sh`. It builds the release binaries and installs them with their assets, desktop entry, icon and licences:
+
+```sh
+packaging/install.sh --prefix ~/.local          # just for you
+```
+
+For a system-wide install, build as yourself first, then install as root without building:
+
+```sh
+cargo build --release --locked -p fthrust-ui -p fthrust-engine -p fthrust-uploader
+sudo packaging/install.sh --no-build            # --prefix defaults to /usr/local
+```
+
+This build uses your system's FFmpeg (8.x) and PipeWire instead of a bundled FFmpeg. After a major FFmpeg upgrade it won't start until you rebuild and reinstall. Run the same command with `--uninstall` to remove it. Packagers can set `DESTDIR` to stage the install. [Packaging](packaging.md#native-install) lists what goes where.
+
 ## Uninstalling
 
-1. Delete the AppImage.
+1. Delete the AppImage, or run `packaging/install.sh --uninstall` with the `--prefix` you installed to.
 2. Delete `~/.fthr` for settings, logs and caches. Leave it if you might come back.
 3. If you used Hyprland's managed hotkeys, delete `~/.config/hypr/fthr-hotkeys.conf` and the `source = …fthr-hotkeys.conf` line the app added to `hyprland.conf`. On Lua configs, remove the block between the `FTHR Clips hotkeys begin/end (managed)` markers in `custom/keybinds.lua`.
 4. Your clips in `~/Videos/FTHR Clips` are yours. Keep or delete them as you like.

@@ -9,6 +9,7 @@ FTHRust Clips is released as an AppImage built on Ubuntu 22.04, so it runs on an
 - [Pinned inputs](#pinned-inputs)
 - [Licences and notices](#licences-and-notices)
 - [Releasing](#releasing)
+- [Native install](#native-install)
 
 ## What's in the AppImage
 
@@ -109,3 +110,17 @@ tools/gen-notices.sh --check   # what CI runs
 4. Download the artifact and attach both files to a GitHub release.
 
 The workflow can also be started by hand (**Actions → release → Run workflow**) to build an AppImage from any branch without tagging.
+
+## Native install
+
+`packaging/install.sh` installs a release build linked against the system's FFmpeg and PipeWire, for people who don't want the AppImage and for distribution packages. It takes `--prefix DIR` (default `$PREFIX`, else `/usr/local`), `--no-build` and `--uninstall`, and puts `$DESTDIR` in front of every path it writes. It won't run `cargo` as root.
+
+```
+<prefix>/bin/fthrust, fthrust-engine, fthrust-uploader
+<prefix>/share/fthrust/assets/                                  fonts, icons, sounds
+<prefix>/share/applications/space.kalopsia.fthrust.desktop      Exec= points at <prefix>/bin/fthrust
+<prefix>/share/icons/hicolor/512x512/apps/space.kalopsia.fthrust.png
+<prefix>/share/licenses/fthrust/                                LICENSE, THIRD_PARTY_NOTICES.md, licenses/
+```
+
+The app looks for its assets in `<exe dir>/assets` (the AppImage layout), then `<exe dir>/../share/fthrust/assets` (this layout), then the source tree it was built from. `$FTHRUST_ASSETS` overrides all three. `tools/test-packaging.sh install` covers the script.

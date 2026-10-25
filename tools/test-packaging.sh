@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc.
@@ -166,8 +166,49 @@ group_version() {
     else fail version_binary_mismatch "$out"; fi
 }
 
+group_install() {
+    local inst="$ROOT/packaging/install.sh" t="$WORK/inst-target/release" d="$WORK/inst-dest" p=/opt/fthrust out
+    mkdir -p "$t"
+    for b in fthrust fthrust-engine fthrust-uploader; do
+        printf '#!/bin/sh\necho %s\n' "$b" > "$t/$b"; chmod +x "$t/$b"
+    done
+    run_install() { DESTDIR="$d" CARGO_TARGET_DIR="$WORK/inst-target" "$inst" --no-build --prefix "$p" "$@"; }
+
+    if ! out="$(run_install 2>&1)"; then fail install_runs "$out"; return; fi
+    pass install_runs
+    local missing=""
+    for f in bin/fthrust bin/fthrust-engine bin/fthrust-uploader share/fthrust/assets/fonts \
+        share/applications/space.kalopsia.fthrust.desktop \
+        share/icons/hicolor/512x512/apps/space.kalopsia.fthrust.png \
+        share/licenses/fthrust/LICENSE share/licenses/fthrust/licenses; do
+        [ -e "$d$p/$f" ] || missing="$missing $f"
+    done
+    if [ -z "$missing" ]; then pass install_layout; else fail install_layout "missing:$missing"; fi
+    if grep -qx "Exec=$p/bin/fthrust" "$d$p/share/applications/space.kalopsia.fthrust.desktop"; then
+        pass install_desktop_exec_absolute
+    else fail install_desktop_exec_absolute "$(grep Exec= "$d$p/share/applications/space.kalopsia.fthrust.desktop")"; fi
+
+    touch "$d$p/share/fthrust/assets/stale"
+    run_install >/dev/null 2>&1
+    if [ -e "$d$p/share/fthrust/assets/stale" ] || [ -e "$d$p/share/licenses/fthrust/licenses/licenses" ]; then
+        fail install_reinstall_replaces_trees "stale file or nested licences left"
+    else pass install_reinstall_replaces_trees; fi
+
+    rm "$t/fthrust-engine"
+    if out="$(run_install 2>&1)"; then fail install_rejects_missing_binary "exit 0"
+    elif grep -q "fthrust-engine is missing" <<<"$out"; then pass install_rejects_missing_binary
+    else fail install_rejects_missing_binary "$out"; fi
+
+    if out="$("$inst" --no-build --prefix relative/dir 2>&1)"; then fail install_rejects_relative_prefix "exit 0"
+    else pass install_rejects_relative_prefix; fi
+
+    run_install --uninstall >/dev/null 2>&1
+    out="$(find "$d$p" -type f)"
+    if [ -z "$out" ]; then pass install_uninstall_removes_files; else fail install_uninstall_removes_files "left: $out"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

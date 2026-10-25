@@ -145,7 +145,8 @@ impl App {
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Where the bundled assets live: `$FTHRUST_ASSETS`, else next to the
-/// executable (packaged), else the repository (development).
+/// executable (AppImage), else `<prefix>/share/fthrust/assets` (installed),
+/// else the repository (development).
 pub fn assets_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("FTHRUST_ASSETS") {
         return std::path::PathBuf::from(dir);
@@ -168,14 +169,21 @@ pub fn hotkey_client_exe(
     }
 }
 
-/// [`assets_dir`] without the environment: `<exe dir>/assets` wins over the
-/// repository tree, so a packaged build on the build machine never reads the
+/// [`assets_dir`] without the environment: `<exe dir>/assets` (AppImage),
+/// then `<exe dir>/../share/fthrust/assets` (`packaging/install.sh`), then
+/// the repository tree, so a packaged or installed build never reads the
 /// compile-time path.
 pub fn assets_dir_for(exe: Option<&std::path::Path>, dev: &std::path::Path) -> std::path::PathBuf {
-    if let Some(adjacent) = exe.and_then(|p| p.parent()).map(|d| d.join("assets"))
+    let exe_dir = exe.and_then(|p| p.parent());
+    if let Some(adjacent) = exe_dir.map(|d| d.join("assets"))
         && adjacent.is_dir()
     {
         return adjacent;
+    }
+    if let Some(installed) = exe_dir.map(|d| d.join("../share/fthrust/assets"))
+        && installed.is_dir()
+    {
+        return installed.canonicalize().unwrap_or(installed);
     }
     if dev.is_dir() {
         return dev.canonicalize().unwrap_or_else(|_| dev.to_path_buf());
