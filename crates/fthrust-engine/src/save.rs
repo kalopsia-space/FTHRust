@@ -79,6 +79,7 @@ impl SaveWorker {
                         result,
                     });
                     worker_busy.store(false, Ordering::SeqCst);
+                    crate::alloc::trim();
                 }
             })
             .expect("spawn save thread");
@@ -395,6 +396,7 @@ impl RecordWorker {
                         });
                     }
                 }
+                crate::alloc::trim();
             })
             .expect("spawn record thread");
         *self.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(thread);
