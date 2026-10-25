@@ -40,10 +40,12 @@ impl VaapiConverter {
         dst_h: u32,
     ) -> Result<Self> {
         let bgr0 = ffi::AVPixelFormat::AV_PIX_FMT_BGR0;
-        let pool = VaapiFrames::create_on_with(&device.device_path, src_w, src_h, bgr0)?;
-        let (mut dev, frames) = pool.new_refs();
-        // SAFETY: new_refs returned an owned device ref the graph does not need.
-        unsafe { ffi::av_buffer_unref(&mut dev) };
+        if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+            return Err(MediaError::Invalid(format!(
+                "cannot convert {src_w}x{src_h} to {dst_w}x{dst_h}"
+            )));
+        }
+        let pool = device.pool_on(src_w, src_h, bgr0)?;
 
         let mut graph = ff::filter::Graph::new();
         let buffer = ff::filter::find("buffer")
@@ -61,15 +63,15 @@ impl VaapiConverter {
             ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr())
         };
         if src.is_null() {
-            let mut frames = frames;
-            // SAFETY: frames is an owned ref.
-            unsafe { ffi::av_buffer_unref(&mut frames) };
             return Err(MediaError::Invalid(
                 "could not allocate buffer source".into(),
             ));
         }
         graph.add(&sink_filter, "out", "")?;
         let sink = filter_ptr(&mut graph, "out")?;
+        let (mut dev, frames) = pool.new_refs();
+        // SAFETY: new_refs returned an owned device ref the graph does not need.
+        unsafe { ffi::av_buffer_unref(&mut dev) };
         // SAFETY: src is a live buffer filter context; the parameters struct
         // is allocated, filled and freed here, and the frames ref is released
         // after buffersrc took its own reference.
@@ -96,7 +98,7 @@ impl VaapiConverter {
             super::check(ffi::avfilter_init_str(src, cargs.as_ptr()))?;
         }
         graph.output("in", 0)?.input("out", 0)?.parse(&format!(
-            "scale_vaapi=w={dst_w}:h={dst_h}:format=nv12:out_color_matrix=bt709:out_range=tv"
+            "scale_vaapi=w={dst_w}:h={dst_h}:format=nv12:out_color_matrix=bt709:out_range=tv:out_chroma_location=left"
         ))?;
         graph.validate()?;
 
@@ -278,4 +280,36 @@ pub fn gpu_convert_rgb_with_stride(
         }
     }
     Ok(rgb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_pool_survives_many_held_frames() {
+        if !super::super::hw::vaapi_available() {
+            return;
+        }
+        let device = VaapiFrames::create(64, 64).unwrap();
+        let mut conv = VaapiConverter::new(&device, 64, 64, 64, 64).unwrap();
+        let bgra = vec![0u8; 64 * 64 * 4];
+        let mut held = Vec::new();
+        for i in 0..24 {
+            let mut out = OwnedFrame::empty().unwrap();
+            conv.convert(&bgra, 64 * 4, &mut out)
+                .unwrap_or_else(|e| panic!("frame {i} failed: {e:?}"));
+            held.push(out);
+        }
+        assert!(!conv.output_frames_ref().is_null());
+    }
+
+    #[test]
+    fn rejects_zero_sizes() {
+        if !super::super::hw::vaapi_available() {
+            return;
+        }
+        let device = VaapiFrames::create(64, 64).unwrap();
+        assert!(VaapiConverter::new(&device, 0, 64, 64, 64).is_err());
+    }
 }

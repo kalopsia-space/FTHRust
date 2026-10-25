@@ -91,33 +91,41 @@ impl VaapiFrames {
                 0,
             ))?;
         }
-        // SAFETY: device is a valid device context ref; the frames context
-        // layout is FFmpeg's public AVHWFramesContext.
-        let frames = unsafe {
-            let frames = ffi::av_hwframe_ctx_alloc(device);
-            if frames.is_null() {
-                ffi::av_buffer_unref(&mut device);
-                return Err(MediaError::Invalid("av_hwframe_ctx_alloc failed".into()));
+        match alloc_pool(device, width, height, sw_format) {
+            Ok(frames) => Ok(Self {
+                device,
+                frames,
+                device_path: path.to_string(),
+            }),
+            Err(e) => {
+                // SAFETY: device is an owned ref.
+                unsafe { ffi::av_buffer_unref(&mut device) };
+                Err(e)
             }
-            let ctx = (*frames).data as *mut ffi::AVHWFramesContext;
-            (*ctx).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI;
-            (*ctx).sw_format = sw_format;
-            (*ctx).width = width as i32;
-            (*ctx).height = height as i32;
-            (*ctx).initial_pool_size = 8;
-            let ret = ffi::av_hwframe_ctx_init(frames);
-            if ret < 0 {
-                let mut frames = frames;
-                ffi::av_buffer_unref(&mut frames);
-                ffi::av_buffer_unref(&mut device);
-                return Err(MediaError::Ffmpeg(ffmpeg_next::Error::from(ret)));
-            }
-            frames
-        };
+        }
+    }
+
+    /// A pool of `sw_format` surfaces on this device context, so frames from
+    /// both pools share one VADisplay.
+    pub(crate) fn pool_on(
+        &self,
+        width: u32,
+        height: u32,
+        sw_format: ffi::AVPixelFormat,
+    ) -> Result<Self> {
+        let frames = alloc_pool(self.device, width, height, sw_format)?;
+        // SAFETY: self.device is valid; av_buffer_ref returns an owned ref.
+        let device = unsafe { ffi::av_buffer_ref(self.device) };
+        if device.is_null() {
+            let mut frames = frames;
+            // SAFETY: frames is an owned ref.
+            unsafe { ffi::av_buffer_unref(&mut frames) };
+            return Err(MediaError::Invalid("av_buffer_ref failed".into()));
+        }
         Ok(Self {
             device,
             frames,
-            device_path: path.to_string(),
+            device_path: self.device_path.clone(),
         })
     }
 
@@ -157,6 +165,36 @@ impl Drop for VaapiFrames {
             ffi::av_buffer_unref(&mut self.frames);
             ffi::av_buffer_unref(&mut self.device);
         }
+    }
+}
+
+/// Allocates and initialises an 8-surface pool on `device`.
+fn alloc_pool(
+    device: *mut ffi::AVBufferRef,
+    width: u32,
+    height: u32,
+    sw_format: ffi::AVPixelFormat,
+) -> Result<*mut ffi::AVBufferRef> {
+    // SAFETY: device is a valid device context ref; the frames context
+    // layout is FFmpeg's public AVHWFramesContext.
+    unsafe {
+        let frames = ffi::av_hwframe_ctx_alloc(device);
+        if frames.is_null() {
+            return Err(MediaError::Invalid("av_hwframe_ctx_alloc failed".into()));
+        }
+        let ctx = (*frames).data as *mut ffi::AVHWFramesContext;
+        (*ctx).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI;
+        (*ctx).sw_format = sw_format;
+        (*ctx).width = width as i32;
+        (*ctx).height = height as i32;
+        (*ctx).initial_pool_size = 8;
+        let ret = ffi::av_hwframe_ctx_init(frames);
+        if ret < 0 {
+            let mut frames = frames;
+            ffi::av_buffer_unref(&mut frames);
+            return Err(MediaError::Ffmpeg(ffmpeg_next::Error::from(ret)));
+        }
+        Ok(frames)
     }
 }
 
