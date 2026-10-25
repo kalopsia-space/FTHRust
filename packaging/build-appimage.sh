@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Builds dist/FTHRust-<version>-x86_64.AppImage and its .sha256 on an Ubuntu
-# 22.04 host (CI) or inside packaging/docker-build.sh (anywhere else).
+# Builds dist/FTHRust-<version>-x86_64.AppImage, the portable
+# dist/FTHRust-<version>-x86_64.tar.gz (the same binaries and FFmpeg as a
+# relocatable prefix) and their .sha256 files on an Ubuntu 22.04 host (CI) or
+# inside packaging/docker-build.sh (anywhere else).
 #
 #   packaging/build-appimage.sh [--skip-build]
 #
@@ -24,8 +26,10 @@ cd "$ROOT"
 VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "fthrust-ui") | .version')"
 [ -n "$VERSION" ] || die "could not read the workspace version"
 NAME="FTHRust-$VERSION-x86_64.AppImage"
+TARBASE="FTHRust-$VERSION-x86_64"
+TARNAME="$TARBASE.tar.gz"
 # An earlier build of this version must not look like this build's output.
-rm -f "$DIST/$NAME" "$DIST/$NAME.sha256"
+rm -f "$DIST/$NAME" "$DIST/$NAME.sha256" "$DIST/$TARNAME" "$DIST/$TARNAME.sha256"
 
 step "fetching pinned inputs"
 "$PKG/fetch-third-party.sh" --cache "$CACHE"
@@ -81,18 +85,52 @@ ROOTFS="$EXTRACT/squashfs-root"
 "$PKG/verify-appdir.sh" "$ROOTFS"
 # The host's libpipewire is absent from the build image; LD_LIBRARY_PATH only
 # supplies it, because DT_RPATH outranks LD_LIBRARY_PATH for FFmpeg.
-for b in fthrust fthrust-engine; do
-    log="$(LD_LIBRARY_PATH="$PW_LIB" LD_DEBUG=libs "$ROOTFS/usr/bin/$b" --version 2>&1 >/dev/null)"
-    loaded="$(grep -oE 'calling init: \S*lib(av|sw)\S*' <<<"$log" | sed 's/calling init: //' | xargs -r readlink -f)"
-    [ -n "$loaded" ] || die "$b loaded no FFmpeg library"
-    stray="$(grep -vF "$(readlink -f "$ROOTFS/usr/lib")/" <<<"$loaded" || true)"
-    [ -z "$stray" ] || die "$b loaded FFmpeg from outside the image: $stray"
-    echo "PASS $b loads FFmpeg from usr/lib ($(wc -l <<<"$loaded") libraries)"
-done
-LD_LIBRARY_PATH="$PW_LIB" "$ROOT/tools/check-version.sh" \
-    --binary "$ROOTFS/usr/bin/fthrust" --binary "$ROOTFS/usr/bin/fthrust-engine"
+gate_ffmpeg_loads() { # <root with bin/ and lib/>
+    local root="$1" b log loaded stray
+    for b in fthrust fthrust-engine; do
+        log="$(LD_LIBRARY_PATH="$PW_LIB" LD_DEBUG=libs "$root/bin/$b" --version 2>&1 >/dev/null)"
+        loaded="$(grep -oE 'calling init: \S*lib(av|sw)\S*' <<<"$log" | sed 's/calling init: //' | xargs -r readlink -f)"
+        [ -n "$loaded" ] || die "$b loaded no FFmpeg library"
+        stray="$(grep -vF "$(readlink -f "$root/lib")/" <<<"$loaded" || true)"
+        [ -z "$stray" ] || die "$b loaded FFmpeg from outside the package: $stray"
+        echo "PASS $b loads FFmpeg from ${root#"$DIST/.staging/"}/lib ($(wc -l <<<"$loaded") libraries)"
+    done
+    LD_LIBRARY_PATH="$PW_LIB" "$ROOT/tools/check-version.sh" \
+        --binary "$root/bin/fthrust" --binary "$root/bin/fthrust-engine"
+}
+gate_ffmpeg_loads "$ROOTFS/usr"
 
-step "writing $NAME.sha256"
+step "packing $TARNAME"
+# The gated AppDir's binaries and FFmpeg as a prefix: bin/ keeps its
+# $ORIGIN/../lib rpath and the app finds share/fthrust/assets.
+TREE="$DIST/.staging/tree/$TARBASE"
+mkdir -p "$TREE/bin" "$TREE/share/fthrust" "$TREE/share/applications" \
+    "$TREE/share/icons/hicolor/512x512/apps" "$TREE/share/licenses/fthrust"
+for b in fthrust fthrust-engine fthrust-uploader; do
+    cp -a "$APPDIR/usr/bin/$b" "$TREE/bin/$b"
+done
+cp -a "$APPDIR/usr/lib" "$TREE/lib"
+cp -a "$APPDIR/usr/bin/assets" "$TREE/share/fthrust/assets"
+cp "$PKG/$APP_ID.desktop" "$TREE/share/applications/"
+cp "$PKG/$APP_ID.png" "$TREE/share/icons/hicolor/512x512/apps/"
+cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$TREE/"
+cp -r "$ROOT/licenses" "$TREE/share/licenses/fthrust/licenses"
+cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$TREE/share/licenses/fthrust/"
+TAROUT="$DIST/.staging/$TARNAME"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    -C "$DIST/.staging/tree" -cf - "$TARBASE" | gzip -n -9 > "$TAROUT"
+
+step "gating the extracted tarball"
+TEXTRACT="$DIST/.staging/textract"
+mkdir -p "$TEXTRACT"
+tar -C "$TEXTRACT" -xzf "$TAROUT"
+[ -f "$TEXTRACT/$TARBASE/share/fthrust/assets/fonts/Oswald-Regular.ttf" ] || die "tarball lacks share/fthrust/assets"
+[ -x "$TEXTRACT/$TARBASE/bin/fthrust-uploader" ] || die "tarball lacks bin/fthrust-uploader"
+gate_ffmpeg_loads "$TEXTRACT/$TARBASE"
+
+step "writing $NAME.sha256 and $TARNAME.sha256"
 mv "$OUT" "$DIST/$NAME"
+mv "$TAROUT" "$DIST/$TARNAME"
 rm -rf "$DIST/.staging"
-(cd "$DIST" && sha256sum "$NAME" > "$NAME.sha256" && cat "$NAME.sha256")
+(cd "$DIST" && sha256sum "$NAME" > "$NAME.sha256" && sha256sum "$TARNAME" > "$TARNAME.sha256" \
+    && cat "$NAME.sha256" "$TARNAME.sha256")

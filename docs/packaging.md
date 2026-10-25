@@ -25,6 +25,8 @@ usr/bin/assets/                 fonts, icons, sounds
 usr/lib/libav*.so.*, libsw*.so.* a pinned LGPL FFmpeg 8.1
 ```
 
+The release tarball `FTHRust-<version>-x86_64.tar.gz` packs the same gated files as a relocatable prefix: `bin/` (the three binaries, rpath unchanged), `lib/` (FFmpeg), `share/fthrust/assets/`, `share/applications/`, `share/icons/`, `share/licenses/fthrust/`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md` at the top. `build-appimage.sh` builds it after the AppImage, extracts it, and checks that `bin/fthrust` and `bin/fthrust-engine` load FFmpeg only from the tarball's `lib/` and report the workspace version.
+
 Binaries find the bundled FFmpeg through an `$ORIGIN/../lib` rpath. **PipeWire is deliberately not bundled.** It has to match the host's PipeWire daemon, so the AppImage loads the host's `libpipewire-0.3.so.0`. The same goes for Wayland, Vulkan, VA-API and GPU drivers.
 
 ## Building it
@@ -106,10 +108,10 @@ tools/gen-notices.sh --check   # what CI runs
 
 1. Bump `version` in the root `Cargo.toml`. It's the only place the version lives.
 2. Commit, then tag `v<version>` (for example `v2.0.0-alpha.2`) and push the tag.
-3. `.github/workflows/release.yml` runs on Ubuntu 22.04. It checks the tag matches the workspace version, builds with `packaging/build-appimage.sh`, verifies the checksum, and uploads the AppImage and `.sha256` as the `fthrust-appimage-<commit>` artifact, kept for 7 days.
-4. Download the artifact and attach both files to a GitHub release.
+3. `.github/workflows/release.yml` runs on Ubuntu 22.04. It checks the tag matches the workspace version, builds with `packaging/build-appimage.sh`, verifies the checksums, and uploads the AppImage, the tarball and their `.sha256` files as the `fthrust-appimage-<commit>` artifact, kept for 7 days.
+4. Its `publish` job then creates the GitHub release for the tag with all four files attached. A tag with a `-` in it (`v2.0.0-alpha.1`) is marked as a pre-release.
 
-The workflow can also be started by hand (**Actions → release → Run workflow**) to build an AppImage from any branch without tagging.
+The workflow can also be started by hand (**Actions → release → Run workflow**) to build from any branch without tagging. A hand-started run stops at the artifact and publishes nothing.
 
 ## Native install
 

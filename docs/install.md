@@ -4,6 +4,7 @@ FTHRust Clips ships as a single AppImage: one file that holds the app, its captu
 
 - [What you need](#what-you-need)
 - [Running the AppImage](#running-the-appimage)
+- [Running the tarball](#running-the-tarball)
 - [Your first minute](#your-first-minute)
 - [Desktop support](#desktop-support)
 - [Coming from FTHR Clips](#coming-from-fthr-clips)
@@ -37,6 +38,19 @@ chmod +x FTHRust-*-x86_64.AppImage
 Put the file somewhere permanent, like `~/Applications`, **before** you set up hotkeys. Hotkey bindings point at the AppImage's own path, so moving it later means rebinding.
 
 Running `./FTHRust-…AppImage --version` prints the version and exits.
+
+## Running the tarball
+
+Each release also has `FTHRust-<version>-x86_64.tar.gz`. It holds the same build as the AppImage, unpacked: the app, engine and uploader in `bin/`, the bundled FFmpeg in `lib/`, and assets, desktop entry, icon and licences in `share/`. It doesn't need FUSE, and it doesn't use your system's FFmpeg. Unpack it somewhere permanent and run `bin/fthrust`:
+
+```sh
+sha256sum -c FTHRust-*-x86_64.tar.gz.sha256
+mkdir -p ~/.local/opt && tar -C ~/.local/opt -xzf FTHRust-*-x86_64.tar.gz
+ln -s ~/.local/opt/FTHRust-*-x86_64/bin/fthrust ~/.local/bin/fthrust
+fthrust
+```
+
+Keep the folder together: the app finds its engine, uploader, FFmpeg and assets relative to `bin/`. A symlink to `bin/fthrust`, like the one above, is fine. To get a launcher entry, copy `share/applications/space.kalopsia.fthrust.desktop` to `~/.local/share/applications/` and the icon from `share/icons/hicolor/512x512/apps/` to the same folder under `~/.local/share/icons/`. The entry runs `fthrust`, so the symlink has to be on your `PATH`. As with the AppImage, set up hotkeys after the folder is in its final place.
 
 **If it says FUSE is missing**, install your distribution's FUSE package (`fuse3` on most, `libfuse2` on some older ones), or run it without mounting:
 
@@ -124,7 +138,7 @@ This build uses your system's FFmpeg (8.x) and PipeWire instead of a bundled FFm
 
 ## Uninstalling
 
-1. Delete the AppImage, or run `packaging/install.sh --uninstall` with the `--prefix` you installed to.
+1. Delete the AppImage or the unpacked tarball folder (and its symlink), or run `packaging/install.sh --uninstall` with the `--prefix` you installed to.
 2. Delete `~/.fthr` for settings, logs and caches. Leave it if you might come back.
 3. If you used Hyprland's managed hotkeys, delete `~/.config/hypr/fthr-hotkeys.conf` and the `source = …fthr-hotkeys.conf` line the app added to `hyprland.conf`. On Lua configs, remove the block between the `FTHR Clips hotkeys begin/end (managed)` markers in `custom/keybinds.lua`.
 4. Your clips in `~/Videos/FTHR Clips` are yours. Keep or delete them as you like.
