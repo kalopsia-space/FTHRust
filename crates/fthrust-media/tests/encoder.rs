@@ -398,16 +398,3 @@ fn first_send_after_a_size_change_can_fall_back_to_cpu() {
     let (_, w, h) = decode::decode_frame_rgb(&enc.extradata(), &out, 7);
     assert_eq!((w, h), (320, 180));
 }
-
-#[test]
-fn first_gpu_drain_error_falls_back_to_cpu() {
-    let Some(mut enc) = open_vaapi(320, 180, 320, 180) else {
-        return;
-    };
-    enc.inject_drain_failure();
-    let mut out = encode_synthetic(&mut enc, 320, 180, 10, 0);
-    enc.flush(&mut out).unwrap();
-    assert_eq!(enc.conversion(), Conversion::Cpu);
-    assert!(!out.is_empty() && out[0].keyframe);
-    assert_eq!(out[0].pts, 0);
-}

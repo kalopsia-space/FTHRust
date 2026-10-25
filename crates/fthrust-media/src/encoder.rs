@@ -98,7 +98,6 @@ pub struct Encoder {
     /// was last (re)built.
     gpu_proven: bool,
     inject_convert_failure: bool,
-    inject_drain_failure: bool,
     hw_frame: Option<OwnedFrame>,
     cfg: EncoderConfig,
     pts_epoch_ns: Option<i64>,
@@ -129,12 +128,6 @@ impl Encoder {
     #[doc(hidden)]
     pub fn inject_gpu_convert_failure(&mut self) {
         self.inject_convert_failure = true;
-    }
-
-    /// Makes the next drain fail (tests).
-    #[doc(hidden)]
-    pub fn inject_drain_failure(&mut self) {
-        self.inject_drain_failure = true;
     }
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
@@ -320,7 +313,6 @@ impl Encoder {
             cpu,
             gpu_proven: false,
             inject_convert_failure: false,
-            inject_drain_failure: false,
             hw_frame,
             cfg: cfg.clone(),
             pts_epoch_ns: None,
@@ -502,31 +494,17 @@ impl Encoder {
             sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
         }
         sent?;
+        if self.cpu.is_none() {
+            self.gpu_proven = true;
+        }
         self.pending.push_back(FrameTiming {
             pts: frame_pts,
             wall_time_ns,
         });
-        let mut drained = self.drain(wall_time_ns, out);
-        if first_gpu && let Err(e) = &drained {
-            // Encoding errors can surface on receive rather than send.
-            log_gpu_fallback(e);
-            self.pending.pop_back();
-            self.switch_to_cpu(width, height)?;
-            self.convert_and_send(bgra, stride, width, height, frame_pts, force_key)?;
-            self.pending.push_back(FrameTiming {
-                pts: frame_pts,
-                wall_time_ns,
-            });
-            drained = self.drain(wall_time_ns, out);
-        }
         if force_key {
             self.last_forced_keyframe_pts = frame_pts;
         }
-        drained?;
-        if self.cpu.is_none() {
-            self.gpu_proven = true;
-        }
-        Ok(())
+        self.drain(wall_time_ns, out)
     }
 
     fn switch_to_cpu(&mut self, width: u32, height: u32) -> Result<()> {
@@ -581,9 +559,6 @@ impl Encoder {
     }
 
     fn drain(&mut self, fallback_wall_ns: i64, out: &mut Vec<EncodedPacket>) -> Result<()> {
-        if std::mem::take(&mut self.inject_drain_failure) {
-            return Err(MediaError::Invalid("injected GPU drain failure".into()));
-        }
         let generation = self.generation;
         let pending = &mut self.pending;
         self.raw.receive_packets(|p| {
