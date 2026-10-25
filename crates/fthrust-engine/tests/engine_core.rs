@@ -132,6 +132,21 @@ fn healthy_generation_publishes_frames_and_flags() {
 }
 
 #[test]
+fn synthetic_capture_encodes_without_normalising() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut h = harness(config(|_| {}), wlr_ok(320, 180));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 30
+    });
+    assert!(h.engine.ring().stats().packets > 0);
+    assert_eq!(h.engine.normalized_frames(), 0);
+    h.engine.shutdown();
+}
+
+#[test]
 fn fit_scaling_masks_even_and_keeps_aspect() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");

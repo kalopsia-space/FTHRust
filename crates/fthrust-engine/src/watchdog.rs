@@ -47,19 +47,28 @@ impl ContentWatchdog {
 
     /// Counts a frame; returns metrics when a sample was taken.
     pub fn observe(&mut self, frame: &BgraFrame) -> Option<ContentMetrics> {
-        self.frames += 1;
-        if !self.frames.is_multiple_of(self.every) {
-            return None;
-        }
-        let sample = sample_bgra_grid(
+        self.observe_raw(
             &frame.data,
             frame.width as usize,
             frame.height as usize,
             frame.stride,
-            Self::COLUMNS,
-            Self::ROWS,
         )
-        .ok()?;
+    }
+
+    /// Like [`observe`](Self::observe) over raw BGRA bytes with a stride.
+    pub fn observe_raw(
+        &mut self,
+        data: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Option<ContentMetrics> {
+        self.frames += 1;
+        if !self.frames.is_multiple_of(self.every) {
+            return None;
+        }
+        let sample =
+            sample_bgra_grid(data, width, height, stride, Self::COLUMNS, Self::ROWS).ok()?;
         let suspect = self.tracker.observe(&sample);
         self.sequence = self.sequence.wrapping_add(1);
         Some(ContentMetrics {
@@ -69,5 +78,31 @@ impl ContentWatchdog {
             luma_variance: sample.luma_variance as f32,
             suspect,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observe_raw_matches_observe() {
+        let (w, h) = (64usize, 36usize);
+        let mut data = vec![0u8; w * 4 * h];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = (i * 7 % 251) as u8;
+        }
+        let frame = BgraFrame {
+            data: data.clone(),
+            stride: w * 4,
+            width: w as u32,
+            height: h as u32,
+            ..BgraFrame::default()
+        };
+        let mut a = ContentWatchdog::new(1);
+        let mut b = ContentWatchdog::new(1);
+        let via_frame = a.observe(&frame).expect("sample");
+        let via_raw = b.observe_raw(&data, w, h, w * 4).expect("sample");
+        assert_eq!(via_frame, via_raw);
     }
 }

@@ -149,6 +149,14 @@ pub struct FrameView<'a> {
     pub timestamp_ns: i64,
 }
 
+impl FrameView<'_> {
+    /// Whether the bytes are already upright BGRX/BGRA and can be encoded
+    /// without a `normalize` copy.
+    pub fn is_encodable_as_is(&self) -> bool {
+        self.layout.is_bgra_bytes() && !self.y_invert && self.transform == OutputTransform::Normal
+    }
+}
+
 /// An owned, upright, top-down BGRA frame with a packed stride.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BgraFrame {
