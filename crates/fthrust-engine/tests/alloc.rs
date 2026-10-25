@@ -10,28 +10,41 @@ fn rss_anon_kib() -> u64 {
 
 #[test]
 fn trim_returns_freed_memory() {
-    let before = rss_anon_kib();
+    // Force arena allocations and disable glibc's own trimming, so only an
+    // explicit trim() can give the freed pages back.
+    // SAFETY: mallopt only adjusts allocator parameters.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 1 << 20);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, i32::MAX);
+    }
     let threads: Vec<_> = (0..4)
         .map(|_| {
             std::thread::spawn(|| {
-                for _ in 0..50 {
-                    let mut v = vec![0u8; 1 << 20];
-                    for i in (0..v.len()).step_by(4096) {
-                        v[i] = 1;
-                    }
-                    std::hint::black_box(&v);
-                }
+                let mut chunks: Vec<Vec<u8>> = (0..800)
+                    .map(|_| {
+                        let mut v = vec![0u8; 64 * 1024];
+                        for i in (0..v.len()).step_by(4096) {
+                            v[i] = 1;
+                        }
+                        v
+                    })
+                    .collect();
+                // Sits above the chunks, so the heap top cannot shrink alone.
+                let pin = vec![7u8; 4096];
+                chunks.clear();
+                drop(chunks);
+                pin
             })
         })
         .collect();
-    for t in threads {
-        t.join().unwrap();
-    }
+    let pins: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let before = rss_anon_kib();
     alloc::trim();
     let after = rss_anon_kib();
+    drop(pins);
     assert!(
-        after <= before + 64 * 1024,
-        "RssAnon grew from {before} KiB to {after} KiB"
+        after + 100 * 1024 < before,
+        "trim freed too little: {before} KiB -> {after} KiB"
     );
 }
 
