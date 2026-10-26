@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use fthrust_core::capture_config::CaptureConfig;
 use fthrust_ipc::BackendKind;
 use fthrust_wayland::backend::{self as wb, monotonic_ns};
-use fthrust_wayland::frame::{FrameView, OutputTransform, PixelLayout};
+use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform, PixelLayout};
 
 pub use fthrust_wayland::backend::{CaptureFailure as CaptureError, FailureKind};
 
@@ -384,6 +384,8 @@ impl CaptureBackend for SyntheticBackend {
             y_invert: false,
             transform,
             timestamp_ns: ts,
+            repeated: false,
+            source: FrameSource::Shm,
         })
     }
 

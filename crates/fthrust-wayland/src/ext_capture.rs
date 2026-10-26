@@ -23,8 +23,8 @@ use crate::backend::{
 };
 use crate::connection::{CoreState, bounded_roundtrip, connect_display};
 use crate::dispatch::{WaitResult, WaylandOps, wait_for_event};
-use crate::frame::{FrameView, OutputTransform, PixelLayout, preferred_wl_shm};
-use crate::shm::{BufferGeometry, MemfdPool};
+use crate::frame::{FrameSource, FrameView, OutputTransform, PixelLayout, preferred_wl_shm};
+use crate::shm::{BufferGeometry, MemfdPool, SlotState};
 
 /// Time allowed for the whole open sequence.
 pub const OPEN_DEADLINE: Duration = Duration::from_secs(5);
@@ -157,7 +157,8 @@ pub struct ExtImageCopy {
     cancel: Arc<AtomicBool>,
     frame_period: Duration,
     pending_frame: Option<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1>,
-    last_frame: Vec<u8>,
+    slots: SlotState,
+    pending_slot: usize,
     last_geometry: Option<BufferGeometry>,
     last_transform: OutputTransform,
     last_delivery: Option<Instant>,
@@ -272,7 +273,8 @@ impl ExtImageCopy {
             cancel,
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1))),
             pending_frame: None,
-            last_frame: Vec::new(),
+            slots: SlotState::default(),
+            pending_slot: 0,
             last_geometry: None,
             last_transform: output_transform,
             last_delivery: None,
@@ -384,10 +386,17 @@ impl ExtImageCopy {
     fn request_frame(&mut self) -> Result<(), CaptureFailure> {
         let geometry = self.geometry()?;
         let qh = self.ops.queue().handle();
+        if self.pool.geometry().is_some_and(|g| g != geometry) {
+            // The pool is rebuilt below: the delivered frame is gone.
+            self.slots.reset();
+            self.last_geometry = None;
+        }
+        let slot = self.slots.next_request();
         let buffer = self
             .pool
-            .ensure(&qh, geometry)
+            .ensure(&qh, geometry, slot)
             .map_err(|e| CaptureFailure::Failed(e.to_string()))?;
+        self.pending_slot = slot;
         self.ops.state_mut().pending = PendingFrame::default();
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(buffer);
@@ -466,8 +475,7 @@ impl ExtImageCopy {
 
     fn store_frame(&mut self) {
         let geometry = self.pool.geometry();
-        self.last_frame.clear();
-        self.last_frame.extend_from_slice(self.pool.data());
+        self.slots.delivered(self.pending_slot);
         self.last_geometry = geometry;
         if let Some(t) = self.ops.state().pending.transform {
             self.last_transform = t;
@@ -492,7 +500,7 @@ impl ExtImageCopy {
         let timestamp_ns = monotonic_ns().max(self.last_timestamp_ns + 1);
         self.last_timestamp_ns = timestamp_ns;
         FrameView {
-            data: &self.last_frame,
+            data: self.pool.data(self.slots.view_slot().unwrap_or(0)),
             stride: geometry.stride as usize,
             width: geometry.width,
             height: geometry.height,
@@ -500,6 +508,8 @@ impl ExtImageCopy {
             y_invert: false,
             transform: self.last_transform,
             timestamp_ns,
+            repeated,
+            source: FrameSource::Shm,
         }
     }
 }

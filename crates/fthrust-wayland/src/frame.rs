@@ -147,13 +147,29 @@ pub struct FrameView<'a> {
     pub transform: OutputTransform,
     /// Capture time, `CLOCK_MONOTONIC` nanoseconds.
     pub timestamp_ns: i64,
+    /// The previous frame delivered again because the screen did not change.
+    pub repeated: bool,
+    /// Where the pixels live.
+    pub source: FrameSource,
+}
+
+/// Where a frame's pixels live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameSource {
+    /// In `FrameView::data`.
+    Shm,
+    /// In a dmabuf slot (`data` is empty).
+    Dmabuf(usize),
 }
 
 impl FrameView<'_> {
     /// Whether the bytes are already upright BGRX/BGRA and can be encoded
     /// without a `normalize` copy.
     pub fn is_encodable_as_is(&self) -> bool {
-        self.layout.is_bgra_bytes() && !self.y_invert && self.transform == OutputTransform::Normal
+        self.source == FrameSource::Shm
+            && self.layout.is_bgra_bytes()
+            && !self.y_invert
+            && self.transform == OutputTransform::Normal
     }
 }
 
@@ -184,6 +200,9 @@ pub enum FrameError {
     /// The buffer holds fewer than `stride * (height - 1) + width * 4` bytes.
     #[error("frame buffer is shorter than its geometry")]
     ShortBuffer,
+    /// The pixels are in a dmabuf, not in memory.
+    #[error("frame pixels are not in memory")]
+    NotInMemory,
 }
 
 fn convert_pixel(layout: PixelLayout, px: &[u8]) -> [u8; 4] {
@@ -219,6 +238,9 @@ fn convert_pixel(layout: PixelLayout, px: &[u8]) -> [u8; 4] {
 
 /// Converts `view` into an upright, top-down, packed BGRA frame.
 pub fn normalize(view: &FrameView<'_>, out: &mut BgraFrame) -> Result<(), FrameError> {
+    if view.source != FrameSource::Shm {
+        return Err(FrameError::NotInMemory);
+    }
     let (w, h) = (view.width as usize, view.height as usize);
     if w == 0 || h == 0 {
         return Err(FrameError::ZeroSize);

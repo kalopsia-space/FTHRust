@@ -1,5 +1,6 @@
 use fthrust_wayland::frame::{
-    BgraFrame, FrameError, FrameView, OutputTransform, PixelLayout, normalize, preferred_wl_shm,
+    BgraFrame, FrameError, FrameSource, FrameView, OutputTransform, PixelLayout, normalize,
+    preferred_wl_shm,
 };
 
 // wl_shm_format values (wayland.xml).
@@ -24,7 +25,20 @@ fn view<'a>(data: &'a [u8], w: u32, h: u32, layout: PixelLayout) -> FrameView<'a
         y_invert: false,
         transform: OutputTransform::Normal,
         timestamp_ns: 7,
+        repeated: false,
+        source: FrameSource::Shm,
     }
+}
+
+#[test]
+fn normalize_rejects_dmabuf_views() {
+    let v = FrameView {
+        source: FrameSource::Dmabuf(0),
+        ..view(&[], 1, 1, PixelLayout::Bgra)
+    };
+    assert!(!v.is_encodable_as_is());
+    let mut out = BgraFrame::default();
+    assert_eq!(normalize(&v, &mut out), Err(FrameError::NotInMemory));
 }
 
 #[test]
