@@ -851,6 +851,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         let mut produced: u64 = 0;
         let mut encode_failures = EncodeFailurePolicy::new(fps);
         let mut watchdog = ContentWatchdog::new(fps);
+        // Whether the latest fresh (non-repeated) view is what the encoder
+        // last took, so a repeat may re-send it.
+        let mut last_fresh_encoded = false;
         let mut packets = Vec::new();
         let end = loop {
             if !inner.running.load(Ordering::Relaxed) {
@@ -893,6 +896,11 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             };
             let ts = view.timestamp_ns;
             if ts < next_encode_ns {
+                // A fresh frame the encoder never saw: the last encoded
+                // surface is stale for any repeat that follows.
+                if !view.repeated {
+                    last_fresh_encoded = false;
+                }
                 continue;
             }
             next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
@@ -911,7 +919,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             };
             // A repeated frame on a static screen re-sends the last encoded
             // surface; without one (first frame, size change) it encodes.
-            let repeated = if view.repeated {
+            let repeated = if view.repeated && last_fresh_encoded {
                 packets.clear();
                 if inner.keyframe_request.swap(false, Ordering::SeqCst) {
                     enc.request_keyframe();
@@ -925,15 +933,29 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 None
             };
             let encoded = if let Some(result) = repeated {
-                if view.is_encodable_as_is()
-                    && let Some(m) = watchdog.observe_raw(
+                if view.is_encodable_as_is() {
+                    if let Some(m) = watchdog.observe_raw(
                         view.data,
                         view.width as usize,
                         view.height as usize,
                         view.stride,
-                    )
-                {
-                    update_content(m);
+                    ) {
+                        update_content(m);
+                    }
+                } else if watchdog.tick() {
+                    // The cadence advances on every frame; only a due
+                    // sample pays for the normalize copy.
+                    inner.normalized_frames.fetch_add(1, Ordering::Relaxed);
+                    if normalize(&view, &mut bgra).is_ok()
+                        && let Some(m) = watchdog.sample_raw(
+                            &bgra.data,
+                            bgra.width as usize,
+                            bgra.height as usize,
+                            bgra.stride,
+                        )
+                    {
+                        update_content(m);
+                    }
                 }
                 result
             } else if view.is_encodable_as_is() {
@@ -985,6 +1007,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             inner
                 .encoder_conversions
                 .store(enc.conversions(), Ordering::Relaxed);
+            last_fresh_encoded = encoded.is_ok();
             match encoded {
                 Ok(()) => {
                     encode_failures.on_encode_result(true);

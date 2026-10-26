@@ -63,10 +63,28 @@ impl ContentWatchdog {
         height: usize,
         stride: usize,
     ) -> Option<ContentMetrics> {
-        self.frames += 1;
-        if !self.frames.is_multiple_of(self.every) {
+        if !self.tick() {
             return None;
         }
+        self.sample_raw(data, width, height, stride)
+    }
+
+    /// Counts a frame without sampling it; true when this frame is due a
+    /// sample (then call [`sample_raw`](Self::sample_raw)). Repeats of a
+    /// static screen tick too, so the cadence matches the frame count.
+    pub fn tick(&mut self) -> bool {
+        self.frames += 1;
+        self.frames.is_multiple_of(self.every)
+    }
+
+    /// Takes a sample for a frame that [`tick`](Self::tick) reported due.
+    pub fn sample_raw(
+        &mut self,
+        data: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Option<ContentMetrics> {
         let sample =
             sample_bgra_grid(data, width, height, stride, Self::COLUMNS, Self::ROWS).ok()?;
         let suspect = self.tracker.observe(&sample);

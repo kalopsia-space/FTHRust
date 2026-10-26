@@ -447,3 +447,25 @@ fn repeat_without_previous_frame_returns_false() {
     assert!(out.is_empty());
     assert_eq!(enc.conversions(), 0);
 }
+
+#[test]
+fn repeats_release_old_surfaces_on_gpu_and_cpu_paths() {
+    let Some(gpu) = open_vaapi(320, 180, 320, 180) else {
+        return;
+    };
+    let cpu = Encoder::open_forcing_cpu_conversion(&vaapi_cfg(320, 180)).unwrap();
+    for mut enc in [gpu, cpu] {
+        let mut out = encode_synthetic(&mut enc, 320, 180, 3, 0);
+        assert!(enc.encode_repeat(3 * SECOND / 30, &mut out).unwrap());
+        assert!(enc.holds_repeat_reference());
+        // Far more new frames than the surface pool is deep.
+        out.extend(encode_synthetic(&mut enc, 320, 180, 40, 4));
+        assert!(!enc.holds_repeat_reference());
+        assert!(enc.encode_repeat(44 * SECOND / 30, &mut out).unwrap());
+        // A size change rebuilds the converter or scaler and drops it too.
+        out.extend(encode_synthetic(&mut enc, 160, 90, 3, 45));
+        assert!(!enc.holds_repeat_reference());
+        enc.flush(&mut out).unwrap();
+        assert!(out.windows(2).all(|w| w[0].pts < w[1].pts));
+    }
+}

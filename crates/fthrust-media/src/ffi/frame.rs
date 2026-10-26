@@ -83,6 +83,12 @@ impl OwnedFrame {
         unsafe { super::check(ffi::av_frame_ref(self.0, src.0)).map(|_| ()) }
     }
 
+    /// Whether the frame holds buffers.
+    pub fn is_referenced(&self) -> bool {
+        // SAFETY: valid frame pointer.
+        unsafe { !(*self.0).data[0].is_null() || !(*self.0).buf[0].is_null() }
+    }
+
     /// Copies timestamps and metadata from `src`.
     pub fn copy_props_from(&mut self, src: &OwnedFrame) -> Result<()> {
         // SAFETY: both pointers are valid frames.

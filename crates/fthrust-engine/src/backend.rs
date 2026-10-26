@@ -176,6 +176,11 @@ impl CaptureBackend for ExtAdapter {
     }
 }
 
+/// The grey level of fresh frame `index` when `SyntheticScript::solid` is set.
+pub fn solid_grey(index: u64) -> u8 {
+    (30 + index * 53 % 190) as u8
+}
+
 /// Per-kind behaviour of the synthetic factory.
 #[derive(Clone, Debug, Default)]
 pub struct KindScript {
@@ -212,6 +217,9 @@ pub struct SyntheticScript {
     /// After this many frames the screen goes static: the last frame is
     /// delivered again, marked `repeated`.
     pub static_after: Option<u64>,
+    /// Fill each fresh frame with one grey level that differs per frame,
+    /// so a test can tell which frame a decoded picture came from.
+    pub solid: bool,
 }
 
 impl SyntheticScript {
@@ -226,6 +234,7 @@ impl SyntheticScript {
             black: false,
             transform: OutputTransform::Normal,
             static_after: None,
+            solid: false,
         }
     }
 
@@ -357,6 +366,7 @@ impl CaptureBackend for SyntheticBackend {
             std::thread::sleep(self.next_at - now);
         }
         self.next_at = Instant::now() + interval;
+        let solid = self.script.lock().unwrap_or_else(|p| p.into_inner()).solid;
         let is_static = self
             .script
             .lock()
@@ -368,10 +378,13 @@ impl CaptureBackend for SyntheticBackend {
         self.buffer.resize(stride * h, 0);
         if !short_stride && !is_static {
             let shift = (self.frames % 256) as u8;
+            let grey = solid_grey(self.frames);
             for y in 0..h {
                 for x in 0..w {
                     let i = y * stride + x * 4;
-                    if black {
+                    if solid {
+                        self.buffer[i..i + 4].copy_from_slice(&[grey, grey, grey, 255]);
+                    } else if black {
                         self.buffer[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
                     } else {
                         self.buffer[i] = (x as u8).wrapping_add(shift);

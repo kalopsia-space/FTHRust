@@ -462,6 +462,10 @@ impl Encoder {
                 "frame buffer is shorter than its declared geometry".into(),
             ));
         }
+        // The new frame replaces the last one: drop the repeat reference so
+        // it pins no surface through the rebuild or the next convert.
+        self.last_frame_valid = false;
+        self.repeat_frame.unref();
         if self.cpu.is_none() && self.raw.converter_source_size() != Some((width, height)) {
             tracing::info!(
                 width,
@@ -484,7 +488,6 @@ impl Encoder {
             }
         }
 
-        self.last_frame_valid = false;
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
 
         let first_gpu = self.cpu.is_none() && !self.gpu_proven;
@@ -564,6 +567,12 @@ impl Encoder {
         }
         self.drain(wall_time_ns, out)?;
         Ok(true)
+    }
+
+    /// Whether a repeat still holds a reference to an old surface (tests).
+    #[doc(hidden)]
+    pub fn holds_repeat_reference(&self) -> bool {
+        self.repeat_frame.is_referenced()
     }
 
     /// How many BGRA frames have been converted (tests).

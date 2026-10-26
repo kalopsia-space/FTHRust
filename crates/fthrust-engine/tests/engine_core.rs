@@ -2,11 +2,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "../../fthrust-media/tests/support/decode.rs"]
+mod decode;
+
 use fthrust_core::capture_config::{CaptureConfig, Codec, EncoderPref, Scaling};
 use fthrust_core::capture_health::flags;
 use fthrust_engine::audio::SyntheticAudio;
 use fthrust_engine::backend::{
     CaptureError, FailureKind, KindScript, RealFactory, SyntheticFactory, SyntheticScript,
+    solid_grey,
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
@@ -605,5 +609,63 @@ fn static_screen_repeats_do_not_convert() {
     });
     assert_eq!(h.engine.encoder_conversions(), before);
     assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}
+
+#[test]
+fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Frames arrive about eight times per encoded frame, then the screen
+    // goes static: the repeats must show the last fresh frame even though
+    // pacing never encoded it.
+    const LAST_FRESH: u64 = 60;
+    let mut script = wlr_ok(160, 90);
+    script.frame_interval = Duration::from_millis(4);
+    script.solid = true;
+    script.static_after = Some(LAST_FRESH + 1);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    h.engine.set_packet_tap(Some(tx));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(20), |s| {
+        s.frames_captured >= 30
+    });
+    h.engine.shutdown();
+    let packets: Vec<_> = rx.try_iter().collect();
+    let extradata = h.engine.encoder_snapshot().map(|s| s.extradata);
+    let extradata = extradata.unwrap_or_else(|| {
+        panic!("no encoder snapshot after shutdown");
+    });
+    let (rgb, ..) = decode::decode_frame_rgb(&extradata, &packets, packets.len() - 1);
+    let expected = i32::from(solid_grey(LAST_FRESH));
+    let got = i32::from(rgb[rgb.len() / 2]);
+    assert!(
+        (got - expected).abs() <= 8,
+        "last picture is grey {got}, the last fresh frame is grey {expected}"
+    );
+}
+
+#[test]
+fn static_black_rotated_stream_is_still_flagged() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut script = wlr_ok(320, 180);
+    script.black = true;
+    script.static_after = Some(1);
+    script.transform = fthrust_wayland::frame::OutputTransform::Rot90;
+    script.frame_interval = Duration::from_millis(1);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(60), |s| {
+        s.content_suspicious_streak >= 12
+    });
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0);
+    assert!(
+        h.engine.normalized_frames() < 100,
+        "repeats should skip normalize"
+    );
     h.engine.shutdown();
 }
