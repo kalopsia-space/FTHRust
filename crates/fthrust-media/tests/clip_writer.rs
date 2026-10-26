@@ -19,6 +19,20 @@ struct Encoded {
 
 /// Encodes 12 s of synthetic video at 30 fps and snapshots the last 5 s.
 fn encode_twelve_seconds() -> Option<Encoded> {
+    let e = encode_seconds(12, 5_000)?;
+    assert!(e.snapshot.full_history);
+    assert!(e.snapshot.packets[0].keyframe);
+    assert!(
+        e.snapshot.packets[0].pts < e.snapshot.presentation_start_pts,
+        "physical pre-roll retained"
+    );
+    assert_eq!(e.snapshot.presentation_start_pts, 7 * FPS as i64);
+    Some(e)
+}
+
+/// Encodes `seconds` of synthetic video at 30 fps and snapshots the last
+/// `keep_ms`.
+fn encode_seconds(seconds: u32, keep_ms: u32) -> Option<Encoded> {
     support::skip_unless_encoder(&["libopenh264", "libx264"])?;
     let cfg = EncoderConfig {
         src_width: 160,
@@ -32,9 +46,9 @@ fn encode_twelve_seconds() -> Option<Encoded> {
         preset: 1,
     };
     let mut encoder = Encoder::open(&cfg).unwrap();
-    let ring = EncodedRing::new(17_000, FPS, 0);
+    let ring = EncodedRing::new(u64::from(seconds) * 1000 + 5_000, FPS, 0);
     let mut out = Vec::new();
-    for i in 0..12 * FPS {
+    for i in 0..seconds * FPS {
         let bgra = support::synthetic_bgra(160, 90, i);
         encoder
             .encode(
@@ -51,14 +65,9 @@ fn encode_twelve_seconds() -> Option<Encoded> {
     for p in out {
         ring.push(p);
     }
-    let snapshot = ring.snapshot(5_000, 12 * SECOND, 0).unwrap();
-    assert!(snapshot.full_history);
-    assert!(snapshot.packets[0].keyframe);
-    assert!(
-        snapshot.packets[0].pts < snapshot.presentation_start_pts,
-        "physical pre-roll retained"
-    );
-    assert_eq!(snapshot.presentation_start_pts, 7 * FPS as i64);
+    let snapshot = ring
+        .snapshot(keep_ms, i64::from(seconds) * SECOND, 0)
+        .unwrap();
     Some(Encoded {
         snapshot,
         extradata: encoder.extradata(),
@@ -348,4 +357,47 @@ fn one_failing_track_is_skipped_and_named() {
     assert!(
         !result.audio_included && result.audio_error.is_none() && result.audio_tracks.is_empty()
     );
+}
+
+/// Audio is interleaved with the video in the file: every audio packet sits
+/// before the video from a second after it. Clips longer than the muxer's
+/// 10 s interleave window had all their audio after all their video, which
+/// made the editor's playback silent and streams poorly.
+#[test]
+fn long_clip_interleaves_audio_with_video() {
+    let Some(e) = encode_seconds(14, 12_000) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("clip.mp4");
+    let a = tone(12, 440.0);
+    let tracks = [ClipAudio {
+        samples: &a,
+        sample_rate: 48_000,
+        channels: 2,
+        title: "Default Mix",
+    }];
+    let result = write_clip(&out, &video(&e, true), &tracks, None).unwrap();
+    assert!(result.audio_included, "{result:?}");
+    // (stream index, seconds, byte position) for every packet.
+    let mut ictx = ffmpeg_next::format::input(&out).unwrap();
+    let mut packets = Vec::new();
+    for (stream, packet) in ictx.packets() {
+        let tb = stream.time_base();
+        let t = packet.dts().unwrap_or(0) as f64 * f64::from(tb.numerator())
+            / f64::from(tb.denominator());
+        packets.push((stream.index(), t, packet.position()));
+    }
+    let audio: Vec<_> = packets.iter().filter(|p| p.0 == 1).collect();
+    assert!(audio.len() > 100, "{} audio packets", audio.len());
+    for &&(_, t, pos) in &audio {
+        if let Some(later_video) = packets.iter().find(|p| p.0 == 0 && p.1 >= t + 1.0) {
+            assert!(
+                pos < later_video.2,
+                "audio at {t:.2}s is stored at byte {pos}, after the video at {:.2}s (byte {})",
+                later_video.1,
+                later_video.2
+            );
+        }
+    }
 }
