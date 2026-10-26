@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use fthrust_core::capture_config::CaptureConfig;
 use fthrust_ipc::BackendKind;
 use fthrust_wayland::backend::{self as wb, monotonic_ns};
+use fthrust_wayland::dmabuf::{DmabufConstraints, DmabufImage};
 use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform, PixelLayout};
 
 pub use fthrust_wayland::backend::{CaptureFailure as CaptureError, FailureKind};
@@ -48,6 +49,19 @@ pub trait CaptureBackend: Send {
     fn last_frame_available(&self) -> bool {
         false
     }
+    /// What the compositor accepts for dmabuf capture buffers, if anything.
+    fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
+        None
+    }
+    /// Captures into `images` from now on; on error the backend stays on shm.
+    fn use_dmabuf(&mut self, images: Vec<DmabufImage>) -> Result<(), CaptureError> {
+        drop(images);
+        Err(CaptureError::Failed(
+            "this backend has no dmabuf capture".into(),
+        ))
+    }
+    /// Captures through shared memory from now on.
+    fn use_shm(&mut self) {}
 }
 
 /// Creates backends.
@@ -174,6 +188,15 @@ impl CaptureBackend for ExtAdapter {
     fn last_frame_available(&self) -> bool {
         self.0.last_frame_available()
     }
+    fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
+        self.0.dmabuf_constraints()
+    }
+    fn use_dmabuf(&mut self, images: Vec<DmabufImage>) -> Result<(), CaptureError> {
+        self.0.use_dmabuf(images)
+    }
+    fn use_shm(&mut self) {
+        self.0.use_shm();
+    }
 }
 
 /// The grey level of fresh frame `index` when `SyntheticScript::solid` is set.
@@ -220,6 +243,13 @@ pub struct SyntheticScript {
     /// Fill each fresh frame with one grey level that differs per frame,
     /// so a test can tell which frame a decoded picture came from.
     pub solid: bool,
+    /// Offer dmabuf capture with these constraints. In dmabuf mode frames
+    /// arrive as `FrameSource::Dmabuf` views with no pixel data.
+    pub dmabuf: Option<DmabufConstraints>,
+    /// In dmabuf mode, report `DmabufInvalidated` once after this many frames.
+    pub dmabuf_invalidate_after: Option<u64>,
+    /// `use_dmabuf` calls that succeeded (tests read it).
+    pub dmabuf_uses: u64,
 }
 
 impl SyntheticScript {
@@ -235,6 +265,9 @@ impl SyntheticScript {
             transform: OutputTransform::Normal,
             static_after: None,
             solid: false,
+            dmabuf: None,
+            dmabuf_invalidate_after: None,
+            dmabuf_uses: 0,
         }
     }
 
@@ -319,6 +352,9 @@ impl BackendFactory for SyntheticFactory {
             buffer: Vec::new(),
             last_ts: 0,
             next_at: Instant::now(),
+            dmabuf_images: 0,
+            dmabuf_next: 0,
+            dmabuf_invalidated: false,
         }))
     }
 }
@@ -334,6 +370,10 @@ struct SyntheticBackend {
     buffer: Vec<u8>,
     last_ts: i64,
     next_at: Instant,
+    /// Images handed over by `use_dmabuf`; 0 in shm mode.
+    dmabuf_images: usize,
+    dmabuf_next: usize,
+    dmabuf_invalidated: bool,
 }
 
 impl CaptureBackend for SyntheticBackend {
@@ -398,6 +438,32 @@ impl CaptureBackend for SyntheticBackend {
         self.frames += 1;
         let ts = monotonic_ns().max(self.last_ts + 1);
         self.last_ts = ts;
+        if self.dmabuf_images > 0 {
+            let invalidate_after = self
+                .script
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .dmabuf_invalidate_after;
+            if !self.dmabuf_invalidated && invalidate_after.is_some_and(|n| self.frames > n) {
+                self.dmabuf_invalidated = true;
+                self.dmabuf_images = 0;
+                return Err(CaptureError::DmabufInvalidated);
+            }
+            let index = self.dmabuf_next;
+            self.dmabuf_next = (index + 1) % self.dmabuf_images;
+            return Ok(FrameView {
+                data: &[],
+                stride: self.width as usize * 4,
+                width: self.width,
+                height: self.height,
+                layout: PixelLayout::Bgrx,
+                y_invert: false,
+                transform,
+                timestamp_ns: ts,
+                repeated: false,
+                source: FrameSource::Dmabuf(index),
+            });
+        }
         Ok(FrameView {
             data: &self.buffer,
             stride,
@@ -427,5 +493,34 @@ impl CaptureBackend for SyntheticBackend {
 
     fn selected_output(&self) -> String {
         self.selected.clone()
+    }
+
+    fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
+        self.script
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .dmabuf
+            .clone()
+    }
+
+    fn use_dmabuf(&mut self, images: Vec<DmabufImage>) -> Result<(), CaptureError> {
+        let mut s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+        let fits = images
+            .iter()
+            .all(|i| (i.width, i.height) == (self.width, self.height));
+        if s.dmabuf.is_none() || images.is_empty() || !fits {
+            self.dmabuf_images = 0;
+            return Err(CaptureError::Failed(
+                "synthetic dmabuf images do not fit".into(),
+            ));
+        }
+        s.dmabuf_uses += 1;
+        self.dmabuf_images = images.len();
+        self.dmabuf_next = 0;
+        Ok(())
+    }
+
+    fn use_shm(&mut self) {
+        self.dmabuf_images = 0;
     }
 }

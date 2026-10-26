@@ -15,6 +15,7 @@ pub mod policy;
 pub mod portal_backend;
 pub mod save;
 pub mod watchdog;
+pub mod zero_copy;
 
 /// Crate version, printed by `fthrust-engine --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

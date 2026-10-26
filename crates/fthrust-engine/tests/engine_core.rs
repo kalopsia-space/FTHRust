@@ -669,3 +669,103 @@ fn static_black_rotated_stream_is_still_flagged() {
     );
     h.engine.shutdown();
 }
+
+/// Constraints that accept exactly what this machine's VA-API encoder
+/// exports, or `None` without VA-API.
+fn vaapi_dmabuf_constraints(
+    width: u32,
+    height: u32,
+) -> Option<fthrust_wayland::dmabuf::DmabufConstraints> {
+    use fthrust_media::encoder::{Encoder, EncoderConfig};
+    fthrust_media::init().ok()?;
+    if !fthrust_media::vaapi::vaapi_available() {
+        return None;
+    }
+    let mut enc = Encoder::open(&EncoderConfig {
+        src_width: width,
+        src_height: height,
+        enc_width: width,
+        enc_height: height,
+        fps: 30,
+        bitrate_kbps: 2000,
+        codec: Codec::H264,
+        encoder: EncoderPref::Vaapi,
+        preset: 1,
+    })
+    .ok()?;
+    let image = enc
+        .dmabuf_targets(width, height, 1)
+        .ok()?
+        .into_iter()
+        .next()?;
+    let device = fthrust_media::vaapi::render_node_dev(enc.render_node()?)?;
+    Some(fthrust_wayland::dmabuf::DmabufConstraints {
+        device,
+        formats: vec![(image.fourcc, vec![image.modifier])],
+    })
+}
+
+fn ext_dmabuf(
+    width: u32,
+    height: u32,
+    constraints: fthrust_wayland::dmabuf::DmabufConstraints,
+) -> SyntheticScript {
+    let mut s = SyntheticScript::new(width, height);
+    s.kinds
+        .insert(BackendKind::ExtImageCopy, KindScript::default());
+    s.dmabuf = Some(constraints);
+    s
+}
+
+fn vaapi_config() -> EngineConfig {
+    config(|c| c.encoder = EncoderPref::Vaapi)
+}
+
+#[test]
+fn zero_copy_capture_encodes_dmabuf_frames() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 30
+    });
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
+    assert_eq!(h.engine.normalized_frames(), 0);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}
+
+#[test]
+fn dmabuf_geometry_change_reallocates_or_falls_back() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    let mut script = ext_dmabuf(320, 180, c);
+    script.dmabuf_invalidate_after = Some(10);
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 40
+    });
+    assert_eq!(s.capture_generation, 1, "no generation restart");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 2, "reallocated once");
+    h.engine.shutdown();
+}
+
+#[test]
+fn zero_copy_off_for_another_gpu_copies_frames() {
+    let Some(mut c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    c.device = u64::MAX;
+    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 30
+    });
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 0);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}
