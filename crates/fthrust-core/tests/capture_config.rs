@@ -202,3 +202,9 @@ fn failed_restart_keeps_previous_active_config() {
     assert!(empty.begin_apply().is_err());
     assert!(empty.succeed().is_err());
 }
+
+#[test]
+fn ring_window_is_clip_plus_gop_and_margin() {
+    assert_eq!(fthrust_core::capture_config::ring_window_ms(45), 47_500);
+    assert_eq!(fthrust_core::capture_config::ring_window_ms(30), 32_500);
+}

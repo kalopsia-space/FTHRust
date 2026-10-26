@@ -67,7 +67,7 @@ flowchart BT
 
 **Encoding.** Frames go to a hardware encoder chosen by `fthrust-media::encoder_policy`: NVENC, then VA-API (and AMF), then Quick Sync, or software only when the user explicitly asks for it. Which encoders actually work is decided at app startup by test-encoding one frame with each, in a child process with a 5-second timeout, and cached in `~/.fthr/encoder_capabilities.json`. On VA-API, colour conversion (BGRA to NV12, plus any scaling) runs on the GPU through a `scale_vaapi` filter graph; every other encoder, or a VA-API driver that refuses it, converts on the CPU with swscale. `FTHR_CPU_COLOR_CONVERT=1` forces the CPU path. Upright BGRX frames are encoded straight from the capture buffer without a copy.
 
-**The ring.** Encoded packets go into an in-memory ring sized for the longest configured clip plus 2 seconds. Its memory budget is about *bitrate × (buffer + 5 s) × 1.25 + 64 MiB*, clamped between 64 MiB and 16 GiB and never more than half of RAM.
+**The ring.** Encoded packets go into an in-memory ring that keeps the longest configured clip plus one GOP (2 seconds) and half a second of margin, so every clip can start on a keyframe. Its memory budget is about *bitrate × (buffer + 5 s) × 1.25 + 64 MiB*, clamped between 64 MiB and 16 GiB and never more than half of RAM.
 
 **Saving.** A save takes the last N seconds of packets (shared with the ring, not copied) (starting on a keyframe) plus the matching audio window into an MP4 on a worker thread, without re-encoding the video. Audio is encoded as AAC at this point. The file is written as `.partial` and renamed when complete, so the library never shows a half-written clip. Only one save runs at a time.
 

@@ -589,7 +589,7 @@ fn report_first(inner: &Inner, outcome: FirstOutcome) {
 fn make_ring(config: &EngineConfig) -> Arc<EncodedRing> {
     let c = &config.capture;
     Arc::new(EncodedRing::new(
-        (u64::from(c.buffer_seconds) + 5) * 1000,
+        fthrust_core::capture_config::ring_window_ms(c.buffer_seconds),
         c.fps,
         u64::from(config.max_buffer_mb) * 1024 * 1024,
     ))

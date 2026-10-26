@@ -92,6 +92,13 @@ fn total_memory_mb() -> u64 {
         .unwrap_or(0)
 }
 
+/// How much capture time the encoded ring keeps, in milliseconds: the clip
+/// plus one GOP (`2 × fps` frames), so a clip can start on a keyframe, plus
+/// half a second of margin.
+pub fn ring_window_ms(buffer_seconds: u32) -> u64 {
+    (u64::from(buffer_seconds) + 2) * 1000 + 500
+}
+
 /// Byte budget in MiB for the Linux engine's encoded replay ring.
 ///
 /// Sized for the configured bitrate over `buffer_seconds + 5` with 25 %
