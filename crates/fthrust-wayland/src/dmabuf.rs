@@ -77,6 +77,13 @@ impl ConstraintsAccumulator {
 
     /// A `dmabuf_format` event: `modifiers` is an array of native-endian u64.
     pub(crate) fn format(&mut self, fourcc: u32, modifiers: &[u8]) {
+        if !modifiers.len().is_multiple_of(8) {
+            tracing::debug!(
+                fourcc = format_args!("{fourcc:#x}"),
+                len = modifiers.len(),
+                "dmabuf_format modifiers array is not a multiple of 8 bytes; ignoring the tail"
+            );
+        }
         let mods: Vec<u64> = modifiers
             .as_chunks::<8>()
             .0

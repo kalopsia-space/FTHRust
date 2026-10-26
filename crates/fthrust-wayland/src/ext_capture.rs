@@ -384,10 +384,35 @@ impl ExtImageCopy {
     }
 
     /// Switches to dmabuf buffers: one `wl_buffer` per image (at least
-    /// two, all the session's buffer size, an offered format), used
+    /// two, all the session's buffer size with the same fourcc, modifier,
+    /// plane count and first-plane stride, in an offered format), used
     /// round-robin so the most recently delivered image is never
     /// re-attached. Views then carry `FrameSource::Dmabuf(index)`.
+    ///
+    /// On any error, validation included, the session is left in shm mode
+    /// (the previous mode's buffers and delivered frame are dropped).
     pub fn use_dmabuf(&mut self, images: Vec<DmabufImage>) -> Result<(), CaptureFailure> {
+        self.leave_mode();
+        match self.build_dmabuf_mode(&images) {
+            Ok(mode) => {
+                tracing::info!(
+                    images = mode.buffers.len(),
+                    width = mode.width,
+                    height = mode.height,
+                    fourcc = format_args!("{:#x}", mode.fourcc),
+                    "ext-image-copy-capture using dmabuf buffers"
+                );
+                self.dmabuf = Some(mode);
+                Ok(())
+            }
+            Err(e) => {
+                self.leave_mode();
+                Err(e)
+            }
+        }
+    }
+
+    fn build_dmabuf_mode(&mut self, images: &[DmabufImage]) -> Result<DmabufMode, CaptureFailure> {
         let Some(linux_dmabuf) = self.linux_dmabuf.clone() else {
             return Err(CaptureFailure::Failed(
                 "the compositor does not provide zwp_linux_dmabuf_v1 v4".into(),
@@ -400,41 +425,11 @@ impl ExtImageCopy {
             let s = &self.ops.state().session;
             (s.width, s.height)
         };
-        let first = images
-            .first()
-            .ok_or_else(|| CaptureFailure::Failed("no dmabuf images".into()))?;
-        let (fourcc, stride) = (first.fourcc, first.planes.first().map_or(0, |p| p.stride));
-        if images.len() < 2 {
-            return Err(CaptureFailure::Failed(
-                "dmabuf capture needs at least two images".into(),
-            ));
-        }
-        for (i, image) in images.iter().enumerate() {
-            if (image.width, image.height) != (width, height)
-                || image.fourcc != fourcc
-                || image.planes.is_empty()
-                || image.planes.len() > 4
-                || i32::try_from(image.width).is_err()
-                || i32::try_from(image.height).is_err()
-            {
-                return Err(CaptureFailure::Failed(format!(
-                    "dmabuf image {i} ({}x{}, {} planes, fourcc {:#x}) does not fit the {width}x{height} session",
-                    image.width,
-                    image.height,
-                    image.planes.len(),
-                    image.fourcc
-                )));
-            }
-            if !offers(&constraints, image.fourcc, image.modifier) {
-                return Err(CaptureFailure::Failed(format!(
-                    "the session does not offer fourcc {:#x} with modifier {:#x}",
-                    image.fourcc, image.modifier
-                )));
-            }
-        }
-        self.leave_mode();
+        let (fourcc, stride) =
+            validate_images(images, &constraints, width, height).map_err(CaptureFailure::Failed)?;
         let qh = self.ops.queue().handle();
         self.ops.state_mut().dmabuf_import_failed = false;
+        let mut params_list = Vec::with_capacity(images.len());
         let buffers: Vec<wl_buffer::WlBuffer> = images
             .iter()
             .map(|image| {
@@ -457,7 +452,9 @@ impl ExtImageCopy {
                     &qh,
                     (),
                 );
-                params.destroy();
+                // Kept alive until after the roundtrip: events for a
+                // destroyed proxy are dropped, `failed` included.
+                params_list.push(params);
                 buffer
             })
             .collect();
@@ -472,12 +469,13 @@ impl ExtImageCopy {
         // The compositor may refuse an import with `failed`.
         let cancel = self.cancel.clone();
         let keep = move || !cancel.load(Ordering::Relaxed);
-        match bounded_roundtrip(&mut self.ops, Instant::now() + CONSTRAINTS_DEADLINE, &keep) {
-            WaitResult::EventReceived => {}
-            other => {
-                mode.destroy();
-                return Err(wait_failure(other));
-            }
+        let result = bounded_roundtrip(&mut self.ops, Instant::now() + CONSTRAINTS_DEADLINE, &keep);
+        for params in params_list {
+            params.destroy();
+        }
+        if result != WaitResult::EventReceived {
+            mode.destroy();
+            return Err(wait_failure(result));
         }
         if self.ops.state().dmabuf_import_failed {
             mode.destroy();
@@ -485,15 +483,7 @@ impl ExtImageCopy {
                 "the compositor could not import the dmabuf images".into(),
             ));
         }
-        tracing::info!(
-            images = mode.buffers.len(),
-            width,
-            height,
-            fourcc = format_args!("{fourcc:#x}"),
-            "ext-image-copy-capture using dmabuf buffers"
-        );
-        self.dmabuf = Some(mode);
-        Ok(())
+        Ok(mode)
     }
 
     /// Switches back to the shm pool (a no-op in shm mode).
@@ -768,6 +758,58 @@ impl ExtImageCopy {
     }
 }
 
+/// Checks `images` against the session: at least two, each the session's
+/// size, matching image 0's fourcc, modifier, plane count and first-plane
+/// stride, 1 to 4 planes, and offered by `constraints`. Returns the fourcc
+/// and first-plane stride.
+fn validate_images(
+    images: &[DmabufImage],
+    constraints: &DmabufConstraints,
+    width: u32,
+    height: u32,
+) -> Result<(u32, u32), String> {
+    let first = images.first().ok_or("no dmabuf images")?;
+    if images.len() < 2 {
+        return Err("dmabuf capture needs at least two images".into());
+    }
+    let first_stride = |image: &DmabufImage| image.planes.first().map(|p| p.stride);
+    for (i, image) in images.iter().enumerate() {
+        if (image.width, image.height) != (width, height)
+            || image.planes.is_empty()
+            || image.planes.len() > 4
+            || i32::try_from(image.width).is_err()
+            || i32::try_from(image.height).is_err()
+        {
+            return Err(format!(
+                "dmabuf image {i} ({}x{}, {} planes) does not fit the {width}x{height} session",
+                image.width,
+                image.height,
+                image.planes.len()
+            ));
+        }
+        if image.fourcc != first.fourcc
+            || image.modifier != first.modifier
+            || image.planes.len() != first.planes.len()
+            || first_stride(image) != first_stride(first)
+        {
+            return Err(format!(
+                "dmabuf image {i} (fourcc {:#x}, modifier {:#x}, {} planes, stride {:?}) differs from image 0",
+                image.fourcc,
+                image.modifier,
+                image.planes.len(),
+                first_stride(image)
+            ));
+        }
+        if !offers(constraints, image.fourcc, image.modifier) {
+            return Err(format!(
+                "the session does not offer fourcc {:#x} with modifier {:#x}",
+                image.fourcc, image.modifier
+            ));
+        }
+    }
+    Ok((first.fourcc, first_stride(first).unwrap_or(0)))
+}
+
 impl Drop for ExtImageCopy {
     fn drop(&mut self) {
         if let Some(frame) = self.pending_frame.take() {
@@ -780,5 +822,66 @@ impl Drop for ExtImageCopy {
             d.destroy();
         }
         self.session.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dmabuf::{DRM_FORMAT_XRGB8888, DmabufPlane};
+
+    fn image(stride: u32, modifier: u64, planes: usize) -> DmabufImage {
+        DmabufImage {
+            width: 64,
+            height: 32,
+            fourcc: DRM_FORMAT_XRGB8888,
+            modifier,
+            planes: (0..planes)
+                .map(|_| DmabufPlane {
+                    fd: std::fs::File::open("/dev/null").unwrap().into(),
+                    offset: 0,
+                    stride,
+                })
+                .collect(),
+        }
+    }
+
+    fn constraints() -> DmabufConstraints {
+        DmabufConstraints {
+            device: 1,
+            formats: vec![(DRM_FORMAT_XRGB8888, vec![0, 5])],
+        }
+    }
+
+    #[test]
+    fn validate_accepts_matching_images() {
+        let images = [image(256, 0, 1), image(256, 0, 1)];
+        assert_eq!(
+            validate_images(&images, &constraints(), 64, 32),
+            Ok((DRM_FORMAT_XRGB8888, 256))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_images_that_differ_from_the_first() {
+        let c = constraints();
+        for images in [
+            [image(256, 0, 1), image(512, 0, 1)],
+            [image(256, 0, 1), image(256, 5, 1)],
+            [image(256, 0, 1), image(256, 0, 2)],
+        ] {
+            assert!(validate_images(&images, &c, 64, 32).is_err());
+        }
+        let mut other = image(256, 0, 1);
+        other.fourcc = crate::dmabuf::DRM_FORMAT_ARGB8888;
+        assert!(validate_images(&[image(256, 0, 1), other], &c, 64, 32).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_wrong_size_single_image_and_unoffered() {
+        let c = constraints();
+        assert!(validate_images(&[image(256, 0, 1)], &c, 64, 32).is_err());
+        assert!(validate_images(&[image(256, 0, 1), image(256, 0, 1)], &c, 65, 32).is_err());
+        assert!(validate_images(&[image(256, 7, 1), image(256, 7, 1)], &c, 64, 32).is_err());
     }
 }
