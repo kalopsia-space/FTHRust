@@ -587,12 +587,35 @@ fn report_first(inner: &Inner, outcome: FirstOutcome) {
 }
 
 fn make_ring(config: &EngineConfig) -> Arc<EncodedRing> {
+    make_ring_in(config, &crate::replay_dir::replay_root())
+}
+
+/// The ring for `config`; in disk mode its segments go under `root`
+/// (normally [`crate::replay_dir::replay_root`]). If the directory can't be
+/// used the ring stays in memory.
+pub fn make_ring_in(config: &EngineConfig, root: &std::path::Path) -> Arc<EncodedRing> {
     let c = &config.capture;
-    Arc::new(EncodedRing::new(
-        fthrust_core::capture_config::ring_window_ms(c.buffer_seconds),
-        c.fps,
-        u64::from(config.max_buffer_mb) * 1024 * 1024,
-    ))
+    let window = fthrust_core::capture_config::ring_window_ms(c.buffer_seconds);
+    let budget = u64::from(config.max_buffer_mb) * 1024 * 1024;
+    if c.buffer_location == fthrust_core::capture_config::BufferLocation::Disk {
+        let store = crate::replay_dir::create_own_in(root).and_then(|dir| {
+            if crate::replay_dir::on_tmpfs(&dir) {
+                tracing::info!("replay buffer directory is on tmpfs; disk mode saves no memory");
+            }
+            fthrust_media::payload::SegmentStore::new(
+                dir,
+                fthrust_media::payload::DEFAULT_SEGMENT_BYTES,
+            )
+        });
+        match store {
+            Ok(store) => return Arc::new(EncodedRing::new_on_disk(window, c.fps, budget, store)),
+            Err(e) => tracing::info!(
+                reason = %e,
+                "disk replay buffer unavailable; keeping it in memory"
+            ),
+        }
+    }
+    Arc::new(EncodedRing::new(window, c.fps, budget))
 }
 
 /// Encode size: target or native, `Fit` shrinks to fit keeping aspect,

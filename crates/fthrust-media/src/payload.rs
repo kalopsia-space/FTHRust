@@ -11,6 +11,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 /// Segment size used by the engine.
@@ -137,11 +138,16 @@ impl From<&[u8]> for Payload {
     }
 }
 
+static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(0);
+
 /// Writes payloads into rotating segment files in one private directory.
 #[derive(Debug)]
 pub struct SegmentStore {
     dir: PathBuf,
     segment_bytes: u64,
+    /// Distinguishes this store's files from an earlier store's in the same
+    /// directory (a rebuilt ring while a save still reads the old one).
+    store_id: u64,
     next_index: u64,
     current: Option<(Arc<Segment>, u64)>,
     /// The segment closed before the current one, for page-cache release.
@@ -161,6 +167,7 @@ impl SegmentStore {
         Ok(Self {
             dir,
             segment_bytes: segment_bytes.max(1),
+            store_id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
             next_index: 0,
             current: None,
             previous: None,
@@ -194,7 +201,9 @@ impl SegmentStore {
     }
 
     fn rotate(&mut self) -> io::Result<()> {
-        let path = self.dir.join(format!("{:08}.seg", self.next_index));
+        let path = self
+            .dir
+            .join(format!("{:04}-{:08}.seg", self.store_id, self.next_index));
         self.next_index += 1;
         let file = OpenOptions::new()
             .read(true)

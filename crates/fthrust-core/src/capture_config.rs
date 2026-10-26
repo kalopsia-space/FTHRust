@@ -213,6 +213,35 @@ impl Codec {
     }
 }
 
+/// Where the engine keeps the replay buffer's video.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BufferLocation {
+    /// In RAM.
+    #[default]
+    Memory,
+    /// In segment files in the cache directory; only metadata in RAM.
+    Disk,
+}
+
+impl BufferLocation {
+    /// Parses the `replay_buffer_location` setting; unknown values fail
+    /// closed to `Memory`.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disk" => Self::Disk,
+            _ => Self::Memory,
+        }
+    }
+
+    /// The settings string for this location.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Disk => "disk",
+        }
+    }
+}
+
 /// How a scaled capture is fitted to the target size.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Scaling {
@@ -333,6 +362,9 @@ pub struct CaptureConfig {
     pub normal_clip_seconds: u32,
     /// Crop rectangle when a quick crop is active.
     pub crop: Option<CropRect>,
+    /// Where the replay buffer lives.
+    #[serde(default)]
+    pub buffer_location: BufferLocation,
 }
 
 impl CaptureConfig {
@@ -366,6 +398,9 @@ impl CaptureConfig {
             preset,
             monitor: s.get_str("capture_monitor").unwrap_or("").to_string(),
             scaling: Scaling::parse(s.get_str("scaling_mode").unwrap_or("stretch")),
+            buffer_location: BufferLocation::parse(
+                s.get_str("replay_buffer_location").unwrap_or("memory"),
+            ),
             audio_enabled: s.get_bool("audio_capture_enabled").unwrap_or(true),
             encoder: EncoderPref::parse(s.get_str("encoder_pref").unwrap_or("auto")),
             separate_audio_enabled: normalize_audio_capture_mode(

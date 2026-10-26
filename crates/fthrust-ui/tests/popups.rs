@@ -52,9 +52,11 @@ fn capture_popup_markers_match_qt() {
         },
     );
     let frame = r.marker("capture").unwrap();
+    // Qt's popup is 363 px tall; the "Replay buffer" row and its note (an
+    // FTHRust addition below every Qt widget) add 116 px.
     assert_eq!(
         frame.rect,
-        Rect::from_min_size(Pos2::ZERO, Vec2::new(460.0, 363.0)),
+        Rect::from_min_size(Pos2::ZERO, Vec2::new(460.0, 479.0)),
         "popup grows to its content"
     );
     assert_eq!(

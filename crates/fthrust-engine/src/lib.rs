@@ -13,6 +13,7 @@ pub mod devices;
 pub mod engine;
 pub mod policy;
 pub mod portal_backend;
+pub mod replay_dir;
 pub mod save;
 pub mod watchdog;
 pub mod zero_copy;

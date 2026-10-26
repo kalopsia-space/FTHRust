@@ -208,3 +208,18 @@ fn ring_window_is_clip_plus_gop_and_margin() {
     assert_eq!(fthrust_core::capture_config::ring_window_ms(45), 47_500);
     assert_eq!(fthrust_core::capture_config::ring_window_ms(30), 32_500);
 }
+
+#[test]
+fn buffer_location_parses_and_defaults_to_memory() {
+    use fthrust_core::capture_config::BufferLocation;
+    assert_eq!(BufferLocation::parse("disk"), BufferLocation::Disk);
+    assert_eq!(BufferLocation::parse(" Disk "), BufferLocation::Disk);
+    assert_eq!(BufferLocation::parse("memory"), BufferLocation::Memory);
+    assert_eq!(BufferLocation::parse("ssd"), BufferLocation::Memory);
+    assert_eq!(BufferLocation::default(), BufferLocation::Memory);
+    // An engine config from an older UI has no field: memory.
+    let mut v = serde_json::to_value(CaptureConfig::default()).unwrap();
+    v.as_object_mut().unwrap().remove("buffer_location");
+    let c: CaptureConfig = serde_json::from_value(v).unwrap();
+    assert_eq!(c.buffer_location, BufferLocation::Memory);
+}
