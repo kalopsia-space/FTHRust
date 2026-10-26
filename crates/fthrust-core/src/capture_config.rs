@@ -92,6 +92,13 @@ fn total_memory_mb() -> u64 {
         .unwrap_or(0)
 }
 
+/// How much capture time the encoded ring keeps, in milliseconds: the clip
+/// plus one GOP (`2 × fps` frames), so a clip can start on a keyframe, plus
+/// half a second of margin.
+pub fn ring_window_ms(buffer_seconds: u32) -> u64 {
+    (u64::from(buffer_seconds) + 2) * 1000 + 500
+}
+
 /// Byte budget in MiB for the Linux engine's encoded replay ring.
 ///
 /// Sized for the configured bitrate over `buffer_seconds + 5` with 25 %
@@ -151,6 +158,33 @@ impl BitrateLevel {
     }
 }
 
+/// AV1 presets as a percentage of the H.264 preset, per level (low, medium,
+/// high): the lowest AV1 VA-API bitrate whose VMAF matched H.264 VA-API on
+/// three 1080p120 game clips (`tools/bitrate-match`).
+pub const AV1_PRESET_PERCENT: [u32; 3] = [55, 70, 90];
+
+/// `kbps` (an H.264 preset at `level`) scaled to the matched AV1 bitrate.
+pub fn av1_preset_kbps(kbps: u32, level: BitrateLevel) -> u32 {
+    let percent = match level {
+        BitrateLevel::Low => AV1_PRESET_PERCENT[0],
+        BitrateLevel::Medium => AV1_PRESET_PERCENT[1],
+        BitrateLevel::High => AV1_PRESET_PERCENT[2],
+        BitrateLevel::Custom => 100,
+    };
+    kbps * percent / 100
+}
+
+/// The preset for `codec`: H.264's for every codec but AV1, which uses the
+/// VMAF-matched [`AV1_PRESET_PERCENT`] of it.
+pub fn codec_preset_kbps(resolution: &str, level: BitrateLevel, codec: Codec) -> Option<u32> {
+    let kbps = bitrate_preset_kbps(resolution, level)?;
+    Some(if codec == Codec::Av1 {
+        av1_preset_kbps(kbps, level)
+    } else {
+        kbps
+    })
+}
+
 /// Preset bitrate in kbps for a resolution and level; `None` for an unknown
 /// resolution or the custom level.
 pub fn bitrate_preset_kbps(resolution: &str, level: BitrateLevel) -> Option<u32> {
@@ -202,6 +236,35 @@ impl Codec {
             Self::H264 => "h264",
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+        }
+    }
+}
+
+/// Where the engine keeps the replay buffer's video.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BufferLocation {
+    /// In RAM.
+    #[default]
+    Memory,
+    /// In segment files in the cache directory; only metadata in RAM.
+    Disk,
+}
+
+impl BufferLocation {
+    /// Parses the `replay_buffer_location` setting; unknown values fail
+    /// closed to `Memory`.
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disk" => Self::Disk,
+            _ => Self::Memory,
+        }
+    }
+
+    /// The settings string for this location.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Disk => "disk",
         }
     }
 }
@@ -326,6 +389,9 @@ pub struct CaptureConfig {
     pub normal_clip_seconds: u32,
     /// Crop rectangle when a quick crop is active.
     pub crop: Option<CropRect>,
+    /// Where the replay buffer lives.
+    #[serde(default)]
+    pub buffer_location: BufferLocation,
 }
 
 impl CaptureConfig {
@@ -342,10 +408,11 @@ impl CaptureConfig {
         let resolution = s.get_str("resolution").unwrap_or("source").to_string();
         let (width, height) = resolution_dims(&resolution).unwrap_or((0, 0));
         let level = BitrateLevel::parse(s.get_str("bitrate_level").unwrap_or("medium"));
+        let codec = Codec::parse(s.get_str("codec_pref").unwrap_or("auto"));
         let bitrate_kbps = if level == BitrateLevel::Custom {
             validate_custom_bitrate_kbps(s.get_i64("custom_bitrate_kbps").unwrap_or(25_000))?
         } else {
-            bitrate_preset_kbps(&resolution, level).unwrap_or(25_000)
+            codec_preset_kbps(&resolution, level, codec).unwrap_or(25_000)
         };
         let preset = validate_encoder_preset(s.get_i64("encoder_preset").unwrap_or(4))?;
         let crop = s.get("quick_crop").and_then(crop_from_quick_crop);
@@ -355,10 +422,13 @@ impl CaptureConfig {
             width,
             height,
             bitrate_kbps,
-            codec: Codec::parse(s.get_str("codec_pref").unwrap_or("auto")),
+            codec,
             preset,
             monitor: s.get_str("capture_monitor").unwrap_or("").to_string(),
             scaling: Scaling::parse(s.get_str("scaling_mode").unwrap_or("stretch")),
+            buffer_location: BufferLocation::parse(
+                s.get_str("replay_buffer_location").unwrap_or("memory"),
+            ),
             audio_enabled: s.get_bool("audio_capture_enabled").unwrap_or(true),
             encoder: EncoderPref::parse(s.get_str("encoder_pref").unwrap_or("auto")),
             separate_audio_enabled: normalize_audio_capture_mode(

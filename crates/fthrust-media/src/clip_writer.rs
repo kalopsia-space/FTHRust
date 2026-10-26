@@ -148,24 +148,33 @@ fn write_temporary(
     mux.write_header()?;
 
     let mut bytes_out = 0u64;
+    let mut scratch = Vec::new();
     for p in &snapshot.packets {
         if p.data.is_empty() {
             continue;
         }
-        mux.write_packet(
-            video_index,
-            &p.data,
-            p.pts - snapshot.presentation_start_pts,
-            p.dts - snapshot.presentation_start_pts,
-            1,
-            p.keyframe,
-            (1, fps as i32),
-        )
-        .map_err(|e| {
-            crate::MediaError::Invalid(format!(
-                "Failed while writing video packets to the temporary clip: {e}"
-            ))
-        })?;
+        p.data
+            .with_bytes(&mut scratch, |bytes| {
+                mux.write_packet(
+                    video_index,
+                    bytes,
+                    p.pts - snapshot.presentation_start_pts,
+                    p.dts - snapshot.presentation_start_pts,
+                    1,
+                    p.keyframe,
+                    (1, fps as i32),
+                )
+            })
+            .map_err(|e| {
+                crate::MediaError::Invalid(format!(
+                    "Failed while reading the replay buffer from disk: {e}"
+                ))
+            })?
+            .map_err(|e| {
+                crate::MediaError::Invalid(format!(
+                    "Failed while writing video packets to the temporary clip: {e}"
+                ))
+            })?;
         bytes_out += p.data.len() as u64;
         if let Some(cb) = progress {
             cb(bytes_out);

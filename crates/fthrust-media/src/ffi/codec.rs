@@ -253,6 +253,14 @@ impl RawEncoder {
         }
     }
 
+    /// Converts a VA-API capture surface into `out` on the GPU.
+    pub(crate) fn convert_surface(&mut self, src: &OwnedFrame, out: &mut OwnedFrame) -> Result<()> {
+        match &mut self.converter {
+            Some(c) => c.convert_surface(src, out),
+            None => Err(MediaError::Invalid("no GPU converter".into())),
+        }
+    }
+
     /// The pixel format of frames to feed the encoder (NV12 for VA-API,
     /// else the context's format).
     pub fn input_format(&self) -> ffi::AVPixelFormat {

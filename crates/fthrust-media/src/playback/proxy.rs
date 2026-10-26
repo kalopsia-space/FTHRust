@@ -346,7 +346,7 @@ impl ProxyMux {
             }
             m.write_packet(
                 *index,
-                &p.data,
+                &p.data.bytes()?,
                 p.pts,
                 p.dts,
                 1,

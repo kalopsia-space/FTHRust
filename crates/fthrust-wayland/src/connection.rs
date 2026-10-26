@@ -7,6 +7,7 @@ use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1;
 
 use crate::dispatch::{WaitResult, WaylandOps, wait_for_event};
 use crate::outputs::OutputTracker;
@@ -287,6 +288,33 @@ impl AsRef<CoreState> for CoreStateOnly {
     fn as_ref(&self) -> &CoreState {
         &self.0
     }
+}
+
+/// Lowest `zwp_linux_dmabuf_v1` version bound (v4 drops the format and
+/// modifier event flood; `create_immed` exists since v2).
+pub const LINUX_DMABUF_MIN_VERSION: u32 = 4;
+
+/// Binds `zwp_linux_dmabuf_v1` at version 4 when `core` saw it advertised
+/// at version 4 or later.
+pub fn bind_linux_dmabuf<S>(
+    core: &CoreState,
+    registry: &wl_registry::WlRegistry,
+    qh: &QueueHandle<S>,
+) -> Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>
+where
+    S: Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> + 'static,
+{
+    let global = core
+        .global("zwp_linux_dmabuf_v1")
+        .filter(|g| g.version >= LINUX_DMABUF_MIN_VERSION)?;
+    Some(
+        registry.bind::<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, _, S>(
+            global.name,
+            LINUX_DMABUF_MIN_VERSION,
+            qh,
+            (),
+        ),
+    )
 }
 
 /// Connects to `WAYLAND_DISPLAY` (errors without one).

@@ -98,7 +98,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use fthrust_wayland::backend::{CaptureFailure, monotonic_ns};
-use fthrust_wayland::frame::{FrameView, OutputTransform};
+use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform};
 use pipewire as pw;
 use pw::spa::param::video::VideoFormat;
 
@@ -349,6 +349,8 @@ impl PipeWireVideoStream {
             y_invert: false,
             transform: OutputTransform::Normal,
             timestamp_ns: ts,
+            repeated: !fresh,
+            source: FrameSource::Shm,
         })
     }
 

@@ -278,7 +278,10 @@ fn snapshot_shares_payloads_with_the_ring() {
     let data = p.data.clone();
     ring.push(p);
     let snap = ring.snapshot(1_000, 0, 0).unwrap();
-    assert!(Arc::ptr_eq(&snap.packets[0].data, &data));
+    assert!(Arc::ptr_eq(
+        snap.packets[0].data.as_mem().unwrap(),
+        data.as_mem().unwrap()
+    ));
 }
 
 #[test]
@@ -292,4 +295,28 @@ fn snapshot_survives_the_ring_trimming_its_packets() {
         ring.push(sized(i, i * 33_333_333, i % 10 == 0, 100));
     }
     assert!(snap.packets.iter().all(|p| p.data.len() == 100));
+}
+
+#[test]
+fn clip_length_snapshot_starts_on_a_keyframe_within_the_window() {
+    // 180 fps with a keyframe every 360 frames (2 s), the engine's GOP. For
+    // every phase of the GOP at save time, a 45 s clip must still find a
+    // keyframe at or before its start inside the ring's window.
+    let fps = 180i64;
+    let window = fthrust_core::capture_config::ring_window_ms(45);
+    for extra in (0..360).step_by(17) {
+        let ring = EncodedRing::new(window, fps as u32, 0);
+        let frames = 60 * fps + extra;
+        for frame in 0..=frames {
+            ring.push(packet(frame, frame * SECOND / fps, frame % 360 == 0));
+        }
+        let end = frames * SECOND / fps;
+        let s = ring.snapshot(45_000, end, 0).unwrap();
+        assert!(s.full_history, "phase {extra}: the clip was cut short");
+        assert!(s.packets[0].keyframe, "phase {extra}");
+        assert!(
+            s.packets[0].wall_time_ns <= end - 45 * SECOND,
+            "phase {extra}"
+        );
+    }
 }

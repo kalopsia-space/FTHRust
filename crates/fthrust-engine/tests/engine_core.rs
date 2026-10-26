@@ -2,11 +2,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "../../fthrust-media/tests/support/decode.rs"]
+mod decode;
+
 use fthrust_core::capture_config::{CaptureConfig, Codec, EncoderPref, Scaling};
 use fthrust_core::capture_health::flags;
 use fthrust_engine::audio::SyntheticAudio;
 use fthrust_engine::backend::{
     CaptureError, FailureKind, KindScript, RealFactory, SyntheticFactory, SyntheticScript,
+    solid_grey,
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
@@ -584,4 +588,184 @@ fn startup_failure_is_reported_even_when_instant() {
         );
         h.engine.shutdown();
     }
+}
+
+#[test]
+fn static_screen_repeats_do_not_convert() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut script = wlr_ok(320, 180);
+    script.static_after = Some(1);
+    let mut h = harness(config(|_| {}), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    let before = h.engine.encoder_conversions();
+    let frames = h.engine.status().frames_captured;
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= frames + 30
+    });
+    assert_eq!(h.engine.encoder_conversions(), before);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}
+
+#[test]
+fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Frames arrive about eight times per encoded frame, then the screen
+    // goes static: the repeats must show the last fresh frame even though
+    // pacing never encoded it.
+    const LAST_FRESH: u64 = 60;
+    let mut script = wlr_ok(160, 90);
+    script.frame_interval = Duration::from_millis(4);
+    script.solid = true;
+    script.static_after = Some(LAST_FRESH + 1);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    h.engine.set_packet_tap(Some(tx));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(20), |s| {
+        s.frames_captured >= 30
+    });
+    h.engine.shutdown();
+    let packets: Vec<_> = rx.try_iter().collect();
+    let extradata = h.engine.encoder_snapshot().map(|s| s.extradata);
+    let extradata = extradata.unwrap_or_else(|| {
+        panic!("no encoder snapshot after shutdown");
+    });
+    let (rgb, ..) = decode::decode_frame_rgb(&extradata, &packets, packets.len() - 1);
+    let expected = i32::from(solid_grey(LAST_FRESH));
+    let got = i32::from(rgb[rgb.len() / 2]);
+    assert!(
+        (got - expected).abs() <= 8,
+        "last picture is grey {got}, the last fresh frame is grey {expected}"
+    );
+}
+
+#[test]
+fn static_black_rotated_stream_is_still_flagged() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut script = wlr_ok(320, 180);
+    script.black = true;
+    script.static_after = Some(1);
+    script.transform = fthrust_wayland::frame::OutputTransform::Rot90;
+    script.frame_interval = Duration::from_millis(1);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(60), |s| {
+        s.content_suspicious_streak >= 12
+    });
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0);
+    assert!(
+        h.engine.normalized_frames() < 100,
+        "repeats should skip normalize"
+    );
+    h.engine.shutdown();
+}
+
+/// Constraints that accept exactly what this machine's VA-API encoder
+/// exports, or `None` without VA-API.
+fn vaapi_dmabuf_constraints(
+    width: u32,
+    height: u32,
+) -> Option<fthrust_wayland::dmabuf::DmabufConstraints> {
+    use fthrust_media::encoder::{Encoder, EncoderConfig};
+    fthrust_media::init().ok()?;
+    if !fthrust_media::vaapi::vaapi_available() {
+        return None;
+    }
+    let mut enc = Encoder::open(&EncoderConfig {
+        src_width: width,
+        src_height: height,
+        enc_width: width,
+        enc_height: height,
+        fps: 30,
+        bitrate_kbps: 2000,
+        codec: Codec::H264,
+        encoder: EncoderPref::Vaapi,
+        preset: 1,
+    })
+    .ok()?;
+    let image = enc
+        .dmabuf_targets(width, height, 1)
+        .ok()?
+        .into_iter()
+        .next()?;
+    let device = fthrust_media::vaapi::render_node_dev(enc.render_node()?)?;
+    Some(fthrust_wayland::dmabuf::DmabufConstraints {
+        device,
+        formats: vec![(image.fourcc, vec![image.modifier])],
+    })
+}
+
+fn ext_dmabuf(
+    width: u32,
+    height: u32,
+    constraints: fthrust_wayland::dmabuf::DmabufConstraints,
+) -> SyntheticScript {
+    let mut s = SyntheticScript::new(width, height);
+    s.kinds
+        .insert(BackendKind::ExtImageCopy, KindScript::default());
+    s.dmabuf = Some(constraints);
+    s
+}
+
+fn vaapi_config() -> EngineConfig {
+    config(|c| c.encoder = EncoderPref::Vaapi)
+}
+
+#[test]
+fn zero_copy_capture_encodes_dmabuf_frames() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 30
+    });
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
+    assert_eq!(h.engine.normalized_frames(), 0);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}
+
+#[test]
+fn dmabuf_geometry_change_reallocates_or_falls_back() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    let mut script = ext_dmabuf(320, 180, c);
+    script.dmabuf_invalidate_after = Some(10);
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 40
+    });
+    assert_eq!(s.capture_generation, 1, "no generation restart");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 2, "reallocated once");
+    h.engine.shutdown();
+}
+
+#[test]
+fn zero_copy_off_for_another_gpu_copies_frames() {
+    let Some(mut c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    c.device = u64::MAX;
+    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 30
+    });
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 0);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
 }

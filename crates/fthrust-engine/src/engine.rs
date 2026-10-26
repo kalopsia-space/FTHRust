@@ -11,17 +11,18 @@ use fthrust_core::capture_health::flags;
 use fthrust_ipc::{
     AudioStatus, BackendKind, EngineConfig, RecordingState, SourceStatus, StatusSnapshot,
 };
-use fthrust_media::encoder::{Encoder, EncoderConfig};
+use fthrust_media::encoder::{Conversion, Encoder, EncoderConfig};
 use fthrust_media::ring::{EncodedPacket, EncodedRing};
-use fthrust_wayland::frame::{BgraFrame, normalize};
+use fthrust_wayland::frame::{BgraFrame, FrameSource, OutputTransform, normalize};
 
 use crate::audio::{AudioConfig, AudioProvider, AudioTarget};
-use crate::backend::{BackendFactory, BackendFailure, CaptureError, FailureKind};
+use crate::backend::{BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind};
 use crate::policy::{
     CaptureRecoveryPolicy, EncodeFailurePolicy, next_encode_deadline, recovery_order,
     wait_for_recovery_backoff,
 };
 use crate::watchdog::ContentWatchdog;
+use crate::zero_copy::{self, ZeroCopy, zero_copy_plan};
 
 /// Capture could not start.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,6 +142,7 @@ struct Inner {
     keyframe_request: AtomicBool,
     record_overflow: AtomicBool,
     normalized_frames: AtomicU64,
+    encoder_conversions: AtomicU64,
 }
 
 impl Inner {
@@ -196,6 +198,7 @@ impl CaptureEngine {
             keyframe_request: AtomicBool::new(false),
             record_overflow: AtomicBool::new(false),
             normalized_frames: AtomicU64::new(0),
+            encoder_conversions: AtomicU64::new(0),
         });
         Self {
             config,
@@ -373,6 +376,12 @@ impl CaptureEngine {
     /// Frames that needed a `normalize` copy before encoding.
     pub fn normalized_frames(&self) -> u64 {
         self.inner.normalized_frames.load(Ordering::Relaxed)
+    }
+
+    /// Colour conversions the current encoder has run (tests).
+    #[doc(hidden)]
+    pub fn encoder_conversions(&self) -> u64 {
+        self.inner.encoder_conversions.load(Ordering::Relaxed)
     }
 
     /// The encoded ring.
@@ -578,12 +587,40 @@ fn report_first(inner: &Inner, outcome: FirstOutcome) {
 }
 
 fn make_ring(config: &EngineConfig) -> Arc<EncodedRing> {
+    match crate::replay_dir::replay_root() {
+        Some(root) => make_ring_in(config, &root),
+        // No cache directory: an empty root path fails to create, so disk
+        // mode logs and stays in memory.
+        None => make_ring_in(config, std::path::Path::new("")),
+    }
+}
+
+/// The ring for `config`; in disk mode its segments go under `root`
+/// (normally [`crate::replay_dir::replay_root`]). If the directory can't be
+/// used the ring stays in memory.
+pub fn make_ring_in(config: &EngineConfig, root: &std::path::Path) -> Arc<EncodedRing> {
     let c = &config.capture;
-    Arc::new(EncodedRing::new(
-        (u64::from(c.buffer_seconds) + 5) * 1000,
-        c.fps,
-        u64::from(config.max_buffer_mb) * 1024 * 1024,
-    ))
+    let window = fthrust_core::capture_config::ring_window_ms(c.buffer_seconds);
+    let budget = u64::from(config.max_buffer_mb) * 1024 * 1024;
+    if c.buffer_location == fthrust_core::capture_config::BufferLocation::Disk {
+        let store = crate::replay_dir::create_own_in(root).and_then(|dir| {
+            if crate::replay_dir::on_tmpfs(&dir) {
+                tracing::info!("replay buffer directory is on tmpfs; disk mode saves no memory");
+            }
+            fthrust_media::payload::SegmentStore::new(
+                dir,
+                fthrust_media::payload::DEFAULT_SEGMENT_BYTES,
+            )
+        });
+        match store {
+            Ok(store) => return Arc::new(EncodedRing::new_on_disk(window, c.fps, budget, store)),
+            Err(e) => tracing::info!(
+                reason = %e,
+                "disk replay buffer unavailable; keeping it in memory"
+            ),
+        }
+    }
+    Arc::new(EncodedRing::new(window, c.fps, budget))
 }
 
 /// Encode size: target or native, `Fit` shrinks to fit keeping aspect,
@@ -657,6 +694,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     let mut ever_produced = false;
     let mut first_reported = false;
     let mut bgra = BgraFrame::default();
+    // The zero-copy fallback line is logged once per capture start.
+    let mut zero_copy_logged = false;
+    let mut surface_pixels = Vec::new();
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -837,12 +877,31 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             report_first(&inner, FirstOutcome::Started);
         }
 
+        // Zero copy: the compositor renders into the encoder's surfaces.
+        let buffer = backend.buffer_size().unwrap_or(native);
+        let mut zero_copy_active = match start_zero_copy(backend.as_mut(), enc, buffer) {
+            Ok(()) => {
+                tracing::info!("zero-copy capture in use");
+                true
+            }
+            Err(reason) => {
+                log_zero_copy_off(&mut zero_copy_logged, &reason);
+                false
+            }
+        };
+        let mut surface_proven = false;
+        let mut realloc_tried = false;
+        let mut dmabuf_invalidated = false;
+
         // Frame loop.
         let frame_ns = 1_000_000_000i64 / i64::from(fps.max(1));
         let mut next_encode_ns = 0i64;
         let mut produced: u64 = 0;
         let mut encode_failures = EncodeFailurePolicy::new(fps);
         let mut watchdog = ContentWatchdog::new(fps);
+        // Whether the latest fresh (non-repeated) view is what the encoder
+        // last took, so a repeat may re-send it.
+        let mut last_fresh_encoded = false;
         let mut packets = Vec::new();
         let end = loop {
             if !inner.running.load(Ordering::Relaxed) {
@@ -867,9 +926,41 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     inner.notify(EngineNotice::StatusChanged);
                 }
             }
+            if std::mem::take(&mut dmabuf_invalidated) {
+                // New buffer constraints or a new size: reallocate once,
+                // otherwise copy frames.
+                let retry = zero_copy_active && !realloc_tried;
+                zero_copy_active = false;
+                surface_proven = false;
+                last_fresh_encoded = false;
+                if retry {
+                    realloc_tried = true;
+                    let size = backend
+                        .buffer_size()
+                        .unwrap_or_else(|| backend.native_size());
+                    match start_zero_copy(backend.as_mut(), enc, size) {
+                        Ok(()) => zero_copy_active = true,
+                        Err(reason) => {
+                            backend.use_shm();
+                            log_zero_copy_off(&mut zero_copy_logged, &reason);
+                        }
+                    }
+                } else {
+                    backend.use_shm();
+                    enc.release_dmabuf_targets();
+                    log_zero_copy_off(
+                        &mut zero_copy_logged,
+                        "the dmabuf capture buffers no longer fit the session",
+                    );
+                }
+            }
             let view = match backend.capture() {
                 Ok(v) => v,
                 Err(CaptureError::Cancelled) => break GenerationEnd::Stop,
+                Err(CaptureError::DmabufInvalidated) => {
+                    dmabuf_invalidated = true;
+                    continue;
+                }
                 Err(CaptureError::Disconnected) => {
                     break GenerationEnd::BackendFailed {
                         transient: true,
@@ -885,6 +976,11 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             };
             let ts = view.timestamp_ns;
             if ts < next_encode_ns {
+                // A fresh frame the encoder never saw: the last encoded
+                // surface is stale for any repeat that follows.
+                if !view.repeated {
+                    last_fresh_encoded = false;
+                }
                 continue;
             }
             next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
@@ -901,52 +997,145 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     }
                 });
             };
-            let encoded = if view.is_encodable_as_is() {
-                if let Some(m) = watchdog.observe_raw(
-                    view.data,
-                    view.width as usize,
-                    view.height as usize,
-                    view.stride,
-                ) {
-                    update_content(m);
-                }
+            let encoded = if let FrameSource::Dmabuf(index) = view.source {
+                let (w, h) = (view.width as usize, view.height as usize);
+                let upright = view.transform == OutputTransform::Normal && !view.y_invert;
+                let is_repeat = view.repeated;
                 packets.clear();
-                if inner.keyframe_request.swap(false, Ordering::SeqCst) {
-                    enc.request_keyframe();
+                let result = if !upright {
+                    Err("the output is rotated or flipped".to_string())
+                } else {
+                    if watchdog.tick()
+                        && let Ok(stride) = enc.download_surface(index, &mut surface_pixels)
+                        && let Some(m) = watchdog.sample_raw(&surface_pixels, w, h, stride)
+                    {
+                        update_content(m);
+                    }
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
+                    let repeated = if is_repeat && last_fresh_encoded {
+                        enc.encode_repeat(ts, &mut packets)
+                    } else {
+                        Ok(false)
+                    };
+                    match repeated {
+                        Ok(true) => Ok(()),
+                        Ok(false) => enc.encode_surface(index, ts, &mut packets),
+                        Err(e) => Err(e),
+                    }
+                    .map_err(|e| e.to_string())
+                };
+                if let Err(reason) = &result
+                    && !surface_proven
+                {
+                    // The first surface frame failed: copy frames from now
+                    // on (this frame is dropped, its pixels never left the GPU).
+                    backend.use_shm();
+                    enc.release_dmabuf_targets();
+                    zero_copy_active = false;
+                    last_fresh_encoded = false;
+                    log_zero_copy_off(&mut zero_copy_logged, reason);
+                    continue;
                 }
-                enc.encode(
-                    view.data,
-                    view.stride,
-                    view.width,
-                    view.height,
-                    ts,
-                    &mut packets,
-                )
-                .map_err(|e| e.to_string())
+                if result.is_ok() {
+                    surface_proven = true;
+                    realloc_tried = false;
+                }
+                result
             } else {
-                inner.normalized_frames.fetch_add(1, Ordering::Relaxed);
-                match normalize(&view, &mut bgra) {
-                    Ok(()) => {
-                        if let Some(m) = watchdog.observe(&bgra) {
+                // A repeated frame on a static screen re-sends the last encoded
+                // surface; without one (first frame, size change) it encodes.
+                let repeated = if view.repeated && last_fresh_encoded {
+                    packets.clear();
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
+                    match enc.encode_repeat(ts, &mut packets) {
+                        Ok(true) => Some(Ok(())),
+                        Ok(false) => None,
+                        Err(e) => Some(Err(e.to_string())),
+                    }
+                } else {
+                    None
+                };
+                if let Some(result) = repeated {
+                    if view.is_encodable_as_is() {
+                        if let Some(m) = watchdog.observe_raw(
+                            view.data,
+                            view.width as usize,
+                            view.height as usize,
+                            view.stride,
+                        ) {
                             update_content(m);
                         }
-                        packets.clear();
-                        if inner.keyframe_request.swap(false, Ordering::SeqCst) {
-                            enc.request_keyframe();
+                    } else if watchdog.tick() {
+                        // The cadence advances on every frame; only a due
+                        // sample pays for the normalize copy.
+                        inner.normalized_frames.fetch_add(1, Ordering::Relaxed);
+                        if normalize(&view, &mut bgra).is_ok()
+                            && let Some(m) = watchdog.sample_raw(
+                                &bgra.data,
+                                bgra.width as usize,
+                                bgra.height as usize,
+                                bgra.stride,
+                            )
+                        {
+                            update_content(m);
                         }
-                        enc.encode(
-                            &bgra.data,
-                            bgra.stride,
-                            bgra.width,
-                            bgra.height,
-                            ts,
-                            &mut packets,
-                        )
-                        .map_err(|e| e.to_string())
                     }
-                    Err(e) => Err(e.to_string()),
+                    result
+                } else if view.is_encodable_as_is() {
+                    if let Some(m) = watchdog.observe_raw(
+                        view.data,
+                        view.width as usize,
+                        view.height as usize,
+                        view.stride,
+                    ) {
+                        update_content(m);
+                    }
+                    packets.clear();
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
+                    enc.encode(
+                        view.data,
+                        view.stride,
+                        view.width,
+                        view.height,
+                        ts,
+                        &mut packets,
+                    )
+                    .map_err(|e| e.to_string())
+                } else {
+                    inner.normalized_frames.fetch_add(1, Ordering::Relaxed);
+                    match normalize(&view, &mut bgra) {
+                        Ok(()) => {
+                            if let Some(m) = watchdog.observe(&bgra) {
+                                update_content(m);
+                            }
+                            packets.clear();
+                            if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                                enc.request_keyframe();
+                            }
+                            enc.encode(
+                                &bgra.data,
+                                bgra.stride,
+                                bgra.width,
+                                bgra.height,
+                                ts,
+                                &mut packets,
+                            )
+                            .map_err(|e| e.to_string())
+                        }
+                        Err(e) => Err(e.to_string()),
+                    }
                 }
             };
+            inner
+                .encoder_conversions
+                .store(enc.conversions(), Ordering::Relaxed);
+            last_fresh_encoded = encoded.is_ok();
             match encoded {
                 Ok(()) => {
                     encode_failures.on_encode_result(true);
@@ -1120,4 +1309,62 @@ fn wait_recovering(inner: &Inner, backoff: Duration, reason: &str) -> bool {
     });
     let running = || inner.running.load(Ordering::Relaxed);
     (inner.backoff)(backoff, &running)
+}
+
+/// Hands the compositor the encoder's surfaces when zero copy applies, or
+/// says why not.
+fn start_zero_copy(
+    backend: &mut dyn CaptureBackend,
+    enc: &mut Encoder,
+    (width, height): (u32, u32),
+) -> Result<(), String> {
+    let constraints = backend.dmabuf_constraints();
+    let gpu_conversion = enc.conversion() == Conversion::Gpu;
+    let env_disabled = zero_copy::env_disabled();
+    let encoder_gpu = enc
+        .render_node()
+        .and_then(fthrust_media::vaapi::render_node_dev);
+    if env_disabled || !gpu_conversion || constraints.is_none() {
+        // Nothing to allocate surfaces for.
+        return match zero_copy_plan(
+            constraints.as_ref(),
+            encoder_gpu,
+            gpu_conversion,
+            None,
+            env_disabled,
+        ) {
+            ZeroCopy::Off(reason) => Err(reason.into()),
+            ZeroCopy::Use => unreachable!("no image to offer"),
+        };
+    }
+    let images = enc
+        .dmabuf_targets(width, height, ZERO_COPY_SURFACES)
+        .map_err(|e| e.to_string())?;
+    let image = images.first().map(|i| (i.fourcc, i.modifier));
+    let result = match zero_copy_plan(
+        constraints.as_ref(),
+        encoder_gpu,
+        gpu_conversion,
+        image,
+        env_disabled,
+    ) {
+        ZeroCopy::Use => backend
+            .use_dmabuf(images.into_iter().map(zero_copy::to_dmabuf_image).collect())
+            .map_err(|e| e.to_string()),
+        ZeroCopy::Off(reason) => Err(reason.into()),
+    };
+    if result.is_err() {
+        enc.release_dmabuf_targets();
+    }
+    result
+}
+
+/// Capture surfaces handed to the compositor, used round-robin: the one the
+/// encoder may still be reading is never the next one written.
+const ZERO_COPY_SURFACES: usize = 4;
+
+fn log_zero_copy_off(logged: &mut bool, reason: &str) {
+    if !std::mem::replace(logged, true) {
+        tracing::info!(reason, "zero-copy capture unavailable; copying frames");
+    }
 }

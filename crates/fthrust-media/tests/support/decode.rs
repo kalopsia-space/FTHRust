@@ -4,10 +4,31 @@
 /// Decodes H.264 `packets` (with `extradata` as the codec's global header)
 /// up to and including output frame `index`, returning packed RGB24 and its
 /// size.
+#[allow(dead_code)] // not every test that includes this file uses it
 pub fn decode_frame_rgb(
     extradata: &[u8],
     packets: &[fthrust_media::ring::EncodedPacket],
     index: usize,
+) -> (Vec<u8>, u32, u32) {
+    decode_frame_rgb_with(extradata, packets, index, false)
+}
+
+/// [`decode_frame_rgb`] converting to RGB with the BT.709 limited-range
+/// matrix the encoder signals (swscale defaults to BT.601).
+#[allow(dead_code)] // not every test that includes this file uses it
+pub fn decode_frame_rgb_bt709(
+    extradata: &[u8],
+    packets: &[fthrust_media::ring::EncodedPacket],
+    index: usize,
+) -> (Vec<u8>, u32, u32) {
+    decode_frame_rgb_with(extradata, packets, index, true)
+}
+
+fn decode_frame_rgb_with(
+    extradata: &[u8],
+    packets: &[fthrust_media::ring::EncodedPacket],
+    index: usize,
+    bt709: bool,
 ) -> (Vec<u8>, u32, u32) {
     use ffmpeg_next::format::Pixel;
     use ffmpeg_next::software::scaling;
@@ -38,6 +59,22 @@ pub fn decode_frame_rgb(
             scaling::Flags::BILINEAR,
         )
         .expect("sws");
+        if bt709 {
+            // SAFETY: the context is live; the coefficient table is static.
+            unsafe {
+                let table = ffmpeg_next::ffi::sws_getCoefficients(ffmpeg_next::ffi::SWS_CS_ITU709);
+                ffmpeg_next::ffi::sws_setColorspaceDetails(
+                    sws.as_mut_ptr(),
+                    table,
+                    0,
+                    table,
+                    1,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                );
+            }
+        }
         sws.run(frame, &mut rgb).expect("sws run");
         let (w, h) = (frame.width(), frame.height());
         let mut out = Vec::with_capacity((w * h * 3) as usize);
@@ -47,7 +84,7 @@ pub fn decode_frame_rgb(
         (out, w, h)
     };
     for p in packets {
-        let pkt = ffmpeg_next::Packet::copy(&p.data);
+        let pkt = ffmpeg_next::Packet::copy(&p.data.bytes().unwrap());
         decoder.send_packet(&pkt).expect("send packet");
         while decoder.receive_frame(&mut frame).is_ok() {
             if decoded == index {

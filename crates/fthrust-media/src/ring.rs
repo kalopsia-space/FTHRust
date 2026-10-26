@@ -11,13 +11,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
+use crate::payload::{Payload, SegmentStore};
 use crate::replay_interval::{self, Sample};
 
 /// One encoded packet with its capture time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedPacket {
     /// Compressed payload.
-    pub data: std::sync::Arc<[u8]>,
+    pub data: Payload,
     /// Presentation timestamp in `1/fps` ticks.
     pub pts: i64,
     /// Decode timestamp in `1/fps` ticks.
@@ -73,6 +74,8 @@ struct Inner {
     keyframes: usize,
     budget_trims: u64,
     budget_logged: bool,
+    /// Where payloads go in disk mode; `None` keeps them in memory.
+    store: Option<SegmentStore>,
 }
 
 impl Inner {
@@ -108,8 +111,28 @@ impl EncodedRing {
     /// A ring holding at most `max_duration_ms` of capture time and, when
     /// `max_bytes` is non-zero, at most that many payload bytes.
     pub fn new(max_duration_ms: u64, fps: u32, max_bytes: u64) -> Self {
+        Self::with_inner(max_duration_ms, fps, max_bytes, Inner::default())
+    }
+
+    /// As [`EncodedRing::new`], but payloads live in `store`'s segment
+    /// files and only packet metadata stays in memory. If a write fails the
+    /// ring logs once and keeps payloads in memory from then on.
+    pub fn new_on_disk(
+        max_duration_ms: u64,
+        fps: u32,
+        max_bytes: u64,
+        store: SegmentStore,
+    ) -> Self {
+        let inner = Inner {
+            store: Some(store),
+            ..Inner::default()
+        };
+        Self::with_inner(max_duration_ms, fps, max_bytes, inner)
+    }
+
+    fn with_inner(max_duration_ms: u64, fps: u32, max_bytes: u64, inner: Inner) -> Self {
         Self {
-            inner: Mutex::new(Inner::default()),
+            inner: Mutex::new(inner),
             published: Condvar::new(),
             max_duration_ms,
             fps,
@@ -123,9 +146,23 @@ impl EncodedRing {
     }
 
     /// Appends a packet, trimming by time and then by byte budget.
-    pub fn push(&self, packet: EncodedPacket) {
+    pub fn push(&self, mut packet: EncodedPacket) {
         {
             let mut inner = self.lock();
+            if let Some(store) = inner.store.as_mut()
+                && let Payload::Mem(bytes) = &packet.data
+            {
+                match store.store(bytes) {
+                    Ok(r) => packet.data = r.into_payload(),
+                    Err(e) => {
+                        tracing::info!(
+                            reason = %e,
+                            "disk replay buffer unavailable; keeping it in memory"
+                        );
+                        inner.store = None;
+                    }
+                }
+            }
             inner.bytes += packet.data.len() as u64;
             if packet.keyframe {
                 inner.keyframes += 1;

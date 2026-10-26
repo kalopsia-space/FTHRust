@@ -132,6 +132,66 @@ impl VaapiConverter {
         }
     }
 
+    /// Writes the rows straight into a mapped surface of the pool. False
+    /// when mapping is unavailable, which also disables it for good.
+    fn upload_mapped(&mut self, bgra: &[u8], stride: usize, row: usize, h: usize) -> bool {
+        if !self.pool.mapped_upload() {
+            return false;
+        }
+        let result = self.pool.get_surface(&mut self.hw).and_then(|()| {
+            let mapped = self.pool.map_for_write(&self.hw)?;
+            // SAFETY: the mapped frame owns h rows of linesize[0] >= row
+            // bytes; the source length was checked by the caller.
+            unsafe {
+                let f = mapped.as_ptr();
+                if (*f).data[0].is_null() || ((*f).linesize[0] as usize) < row {
+                    return Err(MediaError::Invalid(
+                        "mapped surface has no usable plane".into(),
+                    ));
+                }
+                super::hw::copy_rows(
+                    bgra.as_ptr(),
+                    stride,
+                    (*f).data[0],
+                    (*f).linesize[0] as usize,
+                    row,
+                    h,
+                );
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.hw.set_pts(0);
+                true
+            }
+            Err(e) => {
+                self.pool.mapped_unavailable(&e);
+                false
+            }
+        }
+    }
+
+    /// The staging-frame path: copy into system memory, then transfer.
+    fn upload_transfer(&mut self, bgra: &[u8], stride: usize, row: usize, h: usize) -> Result<()> {
+        self.staging.make_writable()?;
+        // SAFETY: the staging frame owns h rows of linesize[0] >= row bytes;
+        // the source length was checked by the caller.
+        unsafe {
+            let f = self.staging.as_ptr();
+            super::hw::copy_rows(
+                bgra.as_ptr(),
+                stride,
+                (*f).data[0],
+                (*f).linesize[0] as usize,
+                row,
+                h,
+            );
+            (*f).pts = 0;
+        }
+        self.pool.upload_transfer(&mut self.hw, &self.staging)
+    }
+
     /// Uploads `bgra` (`stride` bytes per row) and converts it into `out`,
     /// an NV12 VA-API frame of the destination size. pts is left to the caller.
     pub(crate) fn convert(
@@ -154,33 +214,49 @@ impl VaapiConverter {
                 bgra.len()
             )));
         }
-        self.staging.make_writable()?;
-        // SAFETY: the staging frame owns h rows of linesize[0] >= row bytes;
-        // the source length was checked above.
-        unsafe {
-            let f = self.staging.as_ptr();
-            let dst = (*f).data[0];
-            let dst_stride = (*f).linesize[0] as usize;
-            for y in 0..h {
-                ptr::copy_nonoverlapping(
-                    bgra.as_ptr().add(y * stride),
-                    dst.add(y * dst_stride),
-                    row,
-                );
-            }
-            (*f).pts = 0;
+        if !self.upload_mapped(bgra, stride, row, h) {
+            self.upload_transfer(bgra, stride, row, h)?;
         }
-        self.pool.upload(&mut self.hw, &self.staging)?;
+        Self::run_graph(self.src, self.sink, &self.hw, out)
+    }
+
+    /// Converts `src`, a BGR0 VA-API surface of the source size on this
+    /// device (a capture surface), into `out` without any upload. `src` is
+    /// only referenced for the conversion; pts is left to the caller.
+    pub(crate) fn convert_surface(&mut self, src: &OwnedFrame, out: &mut OwnedFrame) -> Result<()> {
+        // SAFETY: src is a valid frame; only its header fields are read.
+        let (format, w, h) = unsafe {
+            let f = src.as_ptr();
+            ((*f).format, (*f).width, (*f).height)
+        };
+        if format != ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32
+            || (w, h) != (self.src_w as i32, self.src_h as i32)
+        {
+            return Err(MediaError::Invalid(format!(
+                "surface is {w}x{h} (format {format}), converter expects {}x{} VA-API",
+                self.src_w, self.src_h
+            )));
+        }
+        Self::run_graph(self.src, self.sink, src, out)
+    }
+
+    /// Pushes `input` through the graph into `out`.
+    fn run_graph(
+        src: *mut ffi::AVFilterContext,
+        sink: *mut ffi::AVFilterContext,
+        input: &OwnedFrame,
+        out: &mut OwnedFrame,
+    ) -> Result<()> {
         out.unref();
-        // SAFETY: src/sink belong to the graph owned by self; the frames are
-        // valid. KEEP_REF leaves the hardware frame intact for reuse.
+        // SAFETY: src/sink belong to the graph owned by the caller's self; the
+        // frames are valid. KEEP_REF leaves the input frame intact for reuse.
         unsafe {
             super::check(ffi::av_buffersrc_add_frame_flags(
-                self.src,
-                self.hw.as_ptr(),
+                src,
+                input.as_ptr(),
                 ffi::AV_BUFFERSRC_FLAG_KEEP_REF as i32,
             ))?;
-            super::check(ffi::av_buffersink_get_frame(self.sink, out.as_ptr()))?;
+            super::check(ffi::av_buffersink_get_frame(sink, out.as_ptr()))?;
         }
         Ok(())
     }
@@ -218,8 +294,26 @@ pub fn gpu_convert_rgb_with_stride(
     stride: usize,
     bgra: &[u8],
 ) -> Result<Vec<u8>> {
+    gpu_convert_rgb_with_upload(src_w, src_h, dst_w, dst_h, stride, bgra, false)
+}
+
+/// [`gpu_convert_rgb_with_stride`] with the upload path chosen: mapped
+/// surface writes, or (`force_transfer`) the staging frame and transfer.
+#[doc(hidden)]
+pub fn gpu_convert_rgb_with_upload(
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+    stride: usize,
+    bgra: &[u8],
+    force_transfer: bool,
+) -> Result<Vec<u8>> {
     crate::init()?;
     let device = VaapiFrames::create(64, 64)?;
+    if force_transfer {
+        device.force_transfer_upload();
+    }
     let mut conv = VaapiConverter::new(&device, src_w, src_h, dst_w, dst_h)?;
     let mut hw = OwnedFrame::empty()?;
     conv.convert(bgra, stride, &mut hw)?;

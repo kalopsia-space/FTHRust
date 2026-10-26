@@ -8,9 +8,10 @@ use ffmpeg_next::ffi;
 use fthrust_core::capture_config::{Codec, EncoderPref};
 
 use crate::encoder_policy::{encoder_candidates, preset_options};
+use crate::ffi::capture_surfaces::{CaptureSurfaces, ExportedImage};
 use crate::ffi::codec::{HwInput, OpenParams, RawEncoder};
 use crate::ffi::frame::OwnedFrame;
-use crate::ffi::hw::{VaapiFrames, candidate_devices};
+use crate::ffi::hw::{POOL_SURFACES, VaapiFrames, candidate_devices};
 use crate::ffi::scaler::Scaler;
 use crate::ffi::vpp::VaapiConverter;
 use crate::ring::EncodedPacket;
@@ -99,6 +100,11 @@ pub struct Encoder {
     gpu_proven: bool,
     inject_convert_failure: bool,
     hw_frame: Option<OwnedFrame>,
+    /// Scratch frame holding a fresh reference to the last frame for repeats.
+    repeat_frame: OwnedFrame,
+    /// Whether the last frame handed to the codec can be sent again.
+    last_frame_valid: bool,
+    conversions: u64,
     cfg: EncoderConfig,
     pts_epoch_ns: Option<i64>,
     last_input_pts: i64,
@@ -108,6 +114,8 @@ pub struct Encoder {
     generation: u64,
     /// Forced keyframe interval in frames (two seconds unless overridden).
     forced_keyframe_interval: i64,
+    /// Exported capture surfaces, after [`Encoder::dmabuf_targets`].
+    surfaces: Option<CaptureSurfaces>,
 }
 
 /// Whether this FFmpeg build has the named encoder (tests skip on `false`).
@@ -141,6 +149,15 @@ impl Encoder {
     pub fn open_forcing_cpu_conversion(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
         Self::open_inner(cfg, &candidate_devices(), None, true, None)
+    }
+
+    /// Makes frame uploads use the staging copy and `av_hwframe_transfer_data`
+    /// instead of writing into mapped surfaces (the throughput comparison).
+    #[doc(hidden)]
+    pub fn force_transfer_upload(&mut self) {
+        if let Some(hw) = self.raw.vaapi() {
+            hw.force_transfer_upload();
+        }
     }
 
     /// [`Encoder::open`] with an explicit keyframe interval in frames
@@ -314,6 +331,9 @@ impl Encoder {
             gpu_proven: false,
             inject_convert_failure: false,
             hw_frame,
+            repeat_frame: OwnedFrame::empty()?,
+            last_frame_valid: false,
+            conversions: 0,
             cfg: cfg.clone(),
             pts_epoch_ns: None,
             last_input_pts: -1,
@@ -322,6 +342,7 @@ impl Encoder {
             pending: VecDeque::new(),
             generation: 0,
             forced_keyframe_interval: i64::from(gop.unwrap_or(cfg.fps * 2).max(1)),
+            surfaces: None,
         })
     }
 
@@ -398,6 +419,149 @@ impl Encoder {
         self.raw.vaapi().map(|v| v.device_path.as_str())
     }
 
+    /// The render node the encoder (and its capture surfaces) live on.
+    pub fn render_node(&self) -> Option<&str> {
+        self.vaapi_device()
+    }
+
+    /// Frees the capture surfaces from [`Encoder::dmabuf_targets`] once the
+    /// compositor no longer writes into them (zero copy fell back to shm).
+    pub fn release_dmabuf_targets(&mut self) {
+        self.surfaces = None;
+    }
+
+    /// Allocates `count` `width`×`height` BGRX VA surfaces on the encoder's
+    /// device, exported as dmabufs the compositor can copy captures into,
+    /// and rebuilds the GPU converter for that source size. Replaces any
+    /// earlier set. Errors unless conversion is on the GPU.
+    pub fn dmabuf_targets(
+        &mut self,
+        width: u32,
+        height: u32,
+        count: usize,
+    ) -> Result<Vec<ExportedImage>> {
+        if self.conversion() != Conversion::Gpu {
+            return Err(MediaError::Invalid(
+                "dmabuf capture needs GPU colour conversion".into(),
+            ));
+        }
+        if count == 0 || count > POOL_SURFACES {
+            return Err(MediaError::Invalid(format!(
+                "dmabuf targets: count must be 1 to {POOL_SURFACES}, got {count}"
+            )));
+        }
+        self.surfaces = None;
+        if self.raw.converter_source_size() != Some((width, height)) {
+            self.raw.rebuild_converter(width, height)?;
+            self.gpu_proven = false;
+        }
+        let device = self
+            .raw
+            .vaapi()
+            .ok_or_else(|| MediaError::Invalid("no VA-API device".into()))?;
+        let surfaces = CaptureSurfaces::new(device, width, height, count)?;
+        let images = surfaces.images()?;
+        self.surfaces = Some(surfaces);
+        Ok(images)
+    }
+
+    fn capture_surfaces(&self) -> Result<&CaptureSurfaces> {
+        self.surfaces
+            .as_ref()
+            .ok_or_else(|| MediaError::Invalid("no dmabuf targets allocated".into()))
+    }
+
+    /// Downloads capture surface `index` as BGRX rows into `out` and returns
+    /// their stride (the watchdog's fallback frame).
+    pub fn download_surface(&self, index: usize, out: &mut Vec<u8>) -> Result<usize> {
+        self.capture_surfaces()?.download(index, out)
+    }
+
+    /// Writes BGRA rows into capture surface `index` through a mapping, in
+    /// place of the compositor (tests).
+    #[doc(hidden)]
+    pub fn write_surface(&self, index: usize, bgra: &[u8], stride: usize) -> Result<()> {
+        self.capture_surfaces()?.write(index, bgra, stride)
+    }
+
+    /// Encodes capture surface `index`, captured at `wall_time_ns`, converting
+    /// it on the GPU with no upload. pts, keyframes, the repeat frame and
+    /// packet timing follow [`Encoder::encode`]. A failure (on the first
+    /// surface frame or later) returns `Err` with nothing sent and the
+    /// clock restored; the engine then drops that frame and captures through
+    /// shared memory.
+    pub fn encode_surface(
+        &mut self,
+        index: usize,
+        wall_time_ns: i64,
+        out: &mut Vec<EncodedPacket>,
+    ) -> Result<()> {
+        let Some(surfaces) = &self.surfaces else {
+            return Err(MediaError::Invalid("no dmabuf targets allocated".into()));
+        };
+        if index >= surfaces.len() {
+            return Err(MediaError::Invalid(format!(
+                "surface {index} out of range ({} surfaces)",
+                surfaces.len()
+            )));
+        }
+        if self.cpu.is_some() {
+            return Err(MediaError::Invalid(
+                "dmabuf capture needs GPU colour conversion".into(),
+            ));
+        }
+        self.last_frame_valid = false;
+        self.repeat_frame.unref();
+        let size = surfaces.size();
+        if self.raw.converter_source_size() != Some(size) {
+            self.raw.rebuild_converter(size.0, size.1)?;
+            self.gpu_proven = false;
+        }
+        // Nothing reaches the codec on a failure: restore the clock state
+        // so the caller's retry through `encode` gets this frame's pts and
+        // keyframe.
+        let saved = (
+            self.pts_epoch_ns,
+            self.last_input_pts,
+            self.keyframe_requested,
+        );
+        let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
+        if let Err(e) = self.convert_surface_and_send(index, frame_pts, force_key) {
+            (
+                self.pts_epoch_ns,
+                self.last_input_pts,
+                self.keyframe_requested,
+            ) = saved;
+            tracing::debug!(reason = %e, "encoding from the capture surface failed");
+            return Err(e);
+        }
+        self.gpu_proven = true;
+        self.last_frame_valid = true;
+        self.pending.push_back(FrameTiming {
+            pts: frame_pts,
+            wall_time_ns,
+        });
+        if force_key {
+            self.last_forced_keyframe_pts = frame_pts;
+        }
+        self.drain(wall_time_ns, out)
+    }
+
+    fn convert_surface_and_send(&mut self, index: usize, pts: i64, force_key: bool) -> Result<()> {
+        if std::mem::take(&mut self.inject_convert_failure) {
+            return Err(MediaError::Invalid("injected GPU convert failure".into()));
+        }
+        let (Some(surfaces), Some(hw_frame)) = (&self.surfaces, self.hw_frame.as_mut()) else {
+            return Err(MediaError::Invalid("GPU conversion without a frame".into()));
+        };
+        self.raw
+            .convert_surface(surfaces.surface(index), hw_frame)?;
+        self.conversions += 1;
+        hw_frame.set_pts(pts);
+        hw_frame.set_forced_keyframe(force_key);
+        self.raw.send_frame(Some(hw_frame))
+    }
+
     /// Makes the next frame an IDR frame (a recording can start at once
     /// instead of waiting for the next scheduled keyframe).
     pub fn request_keyframe(&mut self) {
@@ -445,6 +609,10 @@ impl Encoder {
                 "frame buffer is shorter than its declared geometry".into(),
             ));
         }
+        // The new frame replaces the last one: drop the repeat reference so
+        // it pins no surface through the rebuild or the next convert.
+        self.last_frame_valid = false;
+        self.repeat_frame.unref();
         if self.cpu.is_none() && self.raw.converter_source_size() != Some((width, height)) {
             tracing::info!(
                 width,
@@ -467,6 +635,33 @@ impl Encoder {
             }
         }
 
+        let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
+
+        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
+        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        if first_gpu && let Err(e) = &sent {
+            log_gpu_fallback(e);
+            self.switch_to_cpu(width, height)?;
+            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        }
+        sent?;
+        if self.cpu.is_none() {
+            self.gpu_proven = true;
+        }
+        self.last_frame_valid = true;
+        self.pending.push_back(FrameTiming {
+            pts: frame_pts,
+            wall_time_ns,
+        });
+        if force_key {
+            self.last_forced_keyframe_pts = frame_pts;
+        }
+        self.drain(wall_time_ns, out)
+    }
+
+    /// The pts for a frame captured at `wall_time_ns` and whether it is a
+    /// forced keyframe; consumes a pending keyframe request.
+    fn next_pts_and_key(&mut self, wall_time_ns: i64) -> (i64, bool) {
         let fps = i64::from(self.cfg.fps);
         let frame_pts = match self.pts_epoch_ns {
             None => {
@@ -485,26 +680,52 @@ impl Encoder {
         let force_key = self.last_forced_keyframe_pts < 0
             || frame_pts - self.last_forced_keyframe_pts >= self.forced_keyframe_interval
             || std::mem::take(&mut self.keyframe_requested);
+        (frame_pts, force_key)
+    }
 
-        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
-        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
-        if first_gpu && let Err(e) = &sent {
-            log_gpu_fallback(e);
-            self.switch_to_cpu(width, height)?;
-            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+    /// Sends the last frame handed to the codec again, stamped for
+    /// `wall_time_ns`: a new reference to its surface, no conversion. The pts
+    /// and keyframe follow the same rules as [`Encoder::encode`]. Returns
+    /// `Ok(false)`, sending nothing, when there is no previous frame to
+    /// repeat; the caller then uses `encode`.
+    pub fn encode_repeat(
+        &mut self,
+        wall_time_ns: i64,
+        out: &mut Vec<EncodedPacket>,
+    ) -> Result<bool> {
+        if !self.last_frame_valid || self.pts_epoch_ns.is_none() {
+            return Ok(false);
         }
-        sent?;
-        if self.cpu.is_none() {
-            self.gpu_proven = true;
-        }
-        self.pending.push_back(FrameTiming {
-            pts: frame_pts,
-            wall_time_ns,
-        });
+        // Both VA-API paths hand the codec `hw_frame`; software encoders
+        // take the scaler's output.
+        let last = match (&self.hw_frame, &self.cpu) {
+            (Some(hw), _) => hw,
+            (None, Some(cpu)) => &cpu.sw_frame,
+            (None, None) => return Ok(false),
+        };
+        self.repeat_frame.reference(last)?;
+        let (pts, force_key) = self.next_pts_and_key(wall_time_ns);
+        self.repeat_frame.set_pts(pts);
+        self.repeat_frame.set_forced_keyframe(force_key);
+        self.raw.send_frame(Some(&self.repeat_frame))?;
+        self.pending.push_back(FrameTiming { pts, wall_time_ns });
         if force_key {
-            self.last_forced_keyframe_pts = frame_pts;
+            self.last_forced_keyframe_pts = pts;
         }
-        self.drain(wall_time_ns, out)
+        self.drain(wall_time_ns, out)?;
+        Ok(true)
+    }
+
+    /// Whether a repeat still holds a reference to an old surface (tests).
+    #[doc(hidden)]
+    pub fn holds_repeat_reference(&self) -> bool {
+        self.repeat_frame.is_referenced()
+    }
+
+    /// How many BGRA frames have been converted (tests).
+    #[doc(hidden)]
+    pub fn conversions(&self) -> u64 {
+        self.conversions
     }
 
     fn switch_to_cpu(&mut self, width: u32, height: u32) -> Result<()> {
@@ -536,6 +757,7 @@ impl Encoder {
             cpu.sw_frame.make_writable()?;
             cpu.scaler
                 .scale_bgra(bgra, stride, height, &mut cpu.sw_frame)?;
+            self.conversions += 1;
             cpu.sw_frame.set_pts(pts);
             cpu.sw_frame.set_forced_keyframe(force_key);
             match (self.raw.vaapi(), self.hw_frame.as_mut()) {
@@ -550,6 +772,7 @@ impl Encoder {
                 return Err(MediaError::Invalid("injected GPU convert failure".into()));
             }
             self.raw.convert(bgra, stride, hw_frame)?;
+            self.conversions += 1;
             hw_frame.set_pts(pts);
             hw_frame.set_forced_keyframe(force_key);
             self.raw.send_frame(Some(hw_frame))
@@ -568,7 +791,7 @@ impl Encoder {
                 pending.drain(..=pos);
             }
             out.push(EncodedPacket {
-                data: p.data,
+                data: p.data.into(),
                 pts: p.pts,
                 dts: p.dts,
                 keyframe: p.keyframe,

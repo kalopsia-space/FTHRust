@@ -75,6 +75,20 @@ impl OwnedFrame {
         }
     }
 
+    /// Makes this frame a new reference to `src`'s buffers (`av_frame_ref`),
+    /// dropping whatever it held. Pixel data is shared, not copied.
+    pub fn reference(&mut self, src: &OwnedFrame) -> Result<()> {
+        self.unref();
+        // SAFETY: both pointers are valid frames; self was just unreferenced.
+        unsafe { super::check(ffi::av_frame_ref(self.0, src.0)).map(|_| ()) }
+    }
+
+    /// Whether the frame holds buffers.
+    pub fn is_referenced(&self) -> bool {
+        // SAFETY: valid frame pointer.
+        unsafe { !(*self.0).data[0].is_null() || !(*self.0).buf[0].is_null() }
+    }
+
     /// Copies timestamps and metadata from `src`.
     pub fn copy_props_from(&mut self, src: &OwnedFrame) -> Result<()> {
         // SAFETY: both pointers are valid frames.

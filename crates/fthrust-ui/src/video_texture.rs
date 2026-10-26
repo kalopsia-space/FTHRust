@@ -75,16 +75,20 @@ impl VideoTexture {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.view_unorm = Some(texture.create_view(&wgpu::TextureViewDescriptor {
+            // egui samples textures as gamma-encoded `Rgba8Unorm` and blends
+            // in gamma space; registering the sRGB view would linearise the
+            // frame on sampling and show it with gamma applied twice (dark
+            // midtones).
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(wgpu::TextureFormat::Rgba8Unorm),
                 ..Default::default()
-            }));
+            });
             let id = rs.renderer.write().register_native_texture(
                 &rs.device,
                 &view,
                 wgpu::FilterMode::Linear,
             );
+            self.view_unorm = Some(view);
             self.texture = Some(texture);
             self.id = Some(id);
             self.size = Some((frame.width, frame.height));

@@ -2,7 +2,7 @@
 //! lengths, framerate, resolution, quality, custom bitrate and Apply.
 
 use egui::{Pos2, Rect, Ui, Vec2};
-use fthrust_core::capture_config::{CLIP_LENGTHS, FPS_VALUES, custom_clip_lengths};
+use fthrust_core::capture_config::{BufferLocation, CLIP_LENGTHS, FPS_VALUES, custom_clip_lengths};
 use serde_json::json;
 
 use super::labelled_row;
@@ -292,6 +292,34 @@ fn clips_fields(body: &mut Ui, state: &mut AppState) {
         "custom_bitrate_kbps",
         &cur_res,
         cur_qual == "custom",
+    );
+    // Below every Qt-reference widget: an FTHRust addition.
+    let disk = BufferLocation::parse(
+        state
+            .settings
+            .get_str("replay_buffer_location")
+            .unwrap_or("memory"),
+    ) == BufferLocation::Disk;
+    if let Some(i) = combo_row(
+        body,
+        state,
+        "Replay buffer",
+        vec!["Memory".to_string(), "Disk".to_string()],
+        usize::from(disk),
+    ) {
+        let location = [BufferLocation::Memory, BufferLocation::Disk][i];
+        state.set_setting("replay_buffer_location", json!(location.as_str()));
+        state.restart_pending = true;
+    }
+    section::label_wrapped(
+        body,
+        &t,
+        "Disk keeps the replay buffer in your cache folder instead of RAM. It uses much less memory but writes to your drive continuously.",
+        size::MICRO,
+        Weight::W400,
+        Color::TextMuted,
+        w,
+        0.0,
     );
 }
 

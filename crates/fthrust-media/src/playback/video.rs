@@ -45,6 +45,11 @@ pub struct VideoDecoder {
     time_base: f64,
     decoder: codec::decoder::Video,
     scaler: Option<SendScaler>,
+    /// The colour space and range the scaler was configured for.
+    scaler_colour: Option<(
+        ffmpeg_next::util::color::Space,
+        ffmpeg_next::util::color::Range,
+    )>,
     rgba: Option<frame::Video>,
     info: VideoInfo,
     /// After a seek: frames before this time are skipped.
@@ -98,6 +103,7 @@ impl VideoDecoder {
             time_base,
             decoder,
             scaler: None,
+            scaler_colour: None,
             rgba: None,
             info,
             target_ms: None,
@@ -141,11 +147,13 @@ impl VideoDecoder {
 
     fn convert(&mut self, decoded: &frame::Video) -> Result<Frame> {
         let (w, h) = (decoded.width(), decoded.height());
-        let needs_new = self.scaler.as_ref().is_none_or(|s| {
-            s.0.input().width != w
-                || s.0.input().height != h
-                || s.0.input().format != decoded.format()
-        });
+        let colour = (decoded.color_space(), decoded.color_range());
+        let needs_new = self.scaler_colour != Some(colour)
+            || self.scaler.as_ref().is_none_or(|s| {
+                s.0.input().width != w
+                    || s.0.input().height != h
+                    || s.0.input().format != decoded.format()
+            });
         if needs_new {
             self.scaler = Some(SendScaler(Scaler::get(
                 decoded.format(),
@@ -156,6 +164,10 @@ impl VideoDecoder {
                 h,
                 Flags::BILINEAR,
             )?));
+            if let Some(s) = self.scaler.as_mut() {
+                crate::ffi::scaler::match_source_colorspace(&mut s.0, decoded);
+            }
+            self.scaler_colour = Some(colour);
         }
         let out = self
             .rgba

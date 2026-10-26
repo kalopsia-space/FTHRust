@@ -202,3 +202,75 @@ fn failed_restart_keeps_previous_active_config() {
     assert!(empty.begin_apply().is_err());
     assert!(empty.succeed().is_err());
 }
+
+#[test]
+fn ring_window_is_clip_plus_gop_and_margin() {
+    assert_eq!(fthrust_core::capture_config::ring_window_ms(45), 47_500);
+    assert_eq!(fthrust_core::capture_config::ring_window_ms(30), 32_500);
+}
+
+#[test]
+fn buffer_location_parses_and_defaults_to_memory() {
+    use fthrust_core::capture_config::BufferLocation;
+    assert_eq!(BufferLocation::parse("disk"), BufferLocation::Disk);
+    assert_eq!(BufferLocation::parse(" Disk "), BufferLocation::Disk);
+    assert_eq!(BufferLocation::parse("memory"), BufferLocation::Memory);
+    assert_eq!(BufferLocation::parse("ssd"), BufferLocation::Memory);
+    assert_eq!(BufferLocation::default(), BufferLocation::Memory);
+    // An engine config from an older UI has no field: memory.
+    let mut v = serde_json::to_value(CaptureConfig::default()).unwrap();
+    v.as_object_mut().unwrap().remove("buffer_location");
+    let c: CaptureConfig = serde_json::from_value(v).unwrap();
+    assert_eq!(c.buffer_location, BufferLocation::Memory);
+}
+
+#[test]
+fn av1_presets_use_the_matched_table() {
+    use fthrust_core::capture_config::{BitrateLevel, Codec, codec_preset_kbps};
+    let av1 = |l| codec_preset_kbps("1080p", l, Codec::Av1);
+    assert_eq!(av1(BitrateLevel::Low), Some(5_500));
+    assert_eq!(av1(BitrateLevel::Medium), Some(17_500));
+    assert_eq!(av1(BitrateLevel::High), Some(45_000));
+    assert_eq!(
+        codec_preset_kbps("source", BitrateLevel::High, Codec::Av1),
+        Some(45_000)
+    );
+}
+
+#[test]
+fn h264_presets_are_unchanged() {
+    use fthrust_core::capture_config::{
+        BitrateLevel, Codec, bitrate_preset_kbps, codec_preset_kbps,
+    };
+    for codec in [Codec::Auto, Codec::H264, Codec::Hevc] {
+        for level in [BitrateLevel::Low, BitrateLevel::Medium, BitrateLevel::High] {
+            for res in ["480p", "720p", "1080p", "1440p", "source"] {
+                assert_eq!(
+                    codec_preset_kbps(res, level, codec),
+                    bitrate_preset_kbps(res, level)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn custom_bitrate_ignores_codec() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store =
+        fthrust_core::settings::SettingsStore::load(fthrust_core::FthrPaths::new(tmp.path()))
+            .unwrap();
+    store.set("codec_pref", json!("av1"));
+    store.set("bitrate_level", json!("custom"));
+    store.set("custom_bitrate_kbps", json!(33_000));
+    assert_eq!(
+        CaptureConfig::from_settings(&store).unwrap().bitrate_kbps,
+        33_000
+    );
+    store.set("bitrate_level", json!("high"));
+    store.set("resolution", json!("1080p"));
+    assert_eq!(
+        CaptureConfig::from_settings(&store).unwrap().bitrate_kbps,
+        45_000
+    );
+}

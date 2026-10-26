@@ -18,7 +18,7 @@ use crate::backend::{
 };
 use crate::connection::{CoreState, bounded_roundtrip, connect_display};
 use crate::dispatch::{WaitResult, WaylandOps, wait_for_event};
-use crate::frame::{FrameView, OutputTransform, PixelLayout};
+use crate::frame::{FrameSource, FrameView, OutputTransform, PixelLayout};
 use crate::shm::{BufferGeometry, MemfdPool};
 
 /// Time allowed for the whole open sequence.
@@ -292,7 +292,7 @@ impl WlrScreencopy {
         let timestamp_ns = monotonic_ns().max(self.last_timestamp_ns + 1);
         self.last_timestamp_ns = timestamp_ns;
         Ok(FrameView {
-            data: self.pool.data(),
+            data: self.pool.data(0),
             stride: geometry.stride as usize,
             width: geometry.width,
             height: geometry.height,
@@ -300,6 +300,8 @@ impl WlrScreencopy {
             y_invert,
             transform,
             timestamp_ns,
+            repeated: false,
+            source: FrameSource::Shm,
         })
     }
 
@@ -338,7 +340,7 @@ impl WlrScreencopy {
         let qh = self.ops.queue().handle();
         let buffer = self
             .pool
-            .ensure(&qh, geometry)
+            .ensure(&qh, geometry, 0)
             .map_err(|e| CaptureFailure::Failed(e.to_string()))?;
         frame.copy(buffer);
         self.wait_until(deadline, |p| p.ready || p.failed)?;
