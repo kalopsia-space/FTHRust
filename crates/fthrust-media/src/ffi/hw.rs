@@ -186,7 +186,7 @@ impl VaapiFrames {
     /// Records that mapping failed and transfers are used from now on.
     pub(crate) fn mapped_unavailable(&self, err: &MediaError) {
         if self.mapped.swap(false, Ordering::Relaxed) {
-            tracing::warn!(error = %err, "mapped upload unavailable; using transfer");
+            tracing::info!(reason = %err, "mapped upload unavailable; using transfer");
         }
     }
 
@@ -221,13 +221,22 @@ impl VaapiFrames {
             let (m, s) = (mapped.as_ptr(), sw.as_ptr());
             let w = (*s).width as usize;
             let h = (*s).height as usize;
-            for (plane, rows) in [(0usize, h), (1, h.div_ceil(2))] {
+            for (plane, rows, row) in [(0usize, h, w), (1, h.div_ceil(2), w.next_multiple_of(2))] {
+                if (*m).data[plane].is_null()
+                    || (*s).data[plane].is_null()
+                    || ((*m).linesize[plane] as usize) < row
+                    || ((*s).linesize[plane] as usize) < row
+                {
+                    return Err(MediaError::Invalid(
+                        "mapped surface has no usable plane".into(),
+                    ));
+                }
                 copy_rows(
                     (*s).data[plane],
                     (*s).linesize[plane] as usize,
                     (*m).data[plane],
                     (*m).linesize[plane] as usize,
-                    w,
+                    row,
                     rows,
                 );
             }
