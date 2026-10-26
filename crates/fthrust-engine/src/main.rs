@@ -29,17 +29,21 @@ fn main() -> ExitCode {
                 .and_then(|v| BackendKind::parse_override(&v));
             let paths = fthrust_core::FthrPaths::from_env().ok();
             let replay_root = fthrust_engine::replay_dir::replay_root();
-            fthrust_engine::replay_dir::remove_stale(
-                &replay_root,
-                fthrust_engine::replay_dir::pid_alive,
-            );
-            fthrust_engine::replay_dir::remove_own(&replay_root);
+            if let Some(root) = &replay_root {
+                fthrust_engine::replay_dir::remove_stale(
+                    root,
+                    fthrust_engine::replay_dir::pid_alive,
+                );
+                fthrust_engine::replay_dir::remove_own(root);
+            }
             let served = fthrust_engine::daemon::serve(
                 socket,
                 fthrust_engine::daemon::production_deps(paths),
                 default_override,
             );
-            fthrust_engine::replay_dir::remove_own(&replay_root);
+            if let Some(root) = &replay_root {
+                fthrust_engine::replay_dir::remove_own(root);
+            }
             match served {
                 Ok(code) => code,
                 Err(e) => {

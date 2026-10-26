@@ -347,6 +347,13 @@ impl ExtImageCopy {
         Ok(this)
     }
 
+    /// The buffer size the compositor currently asks for (it changes with
+    /// the output's mode), if announced.
+    pub fn buffer_size(&self) -> Option<(u32, u32)> {
+        let s = &self.ops.state().session;
+        (s.width > 0 && s.height > 0).then_some((s.width, s.height))
+    }
+
     /// Source size learned from the session's buffer constraints, upright
     /// (a 90°/270° transform swaps the buffer's axes).
     pub fn native_size(&self) -> (u32, u32) {

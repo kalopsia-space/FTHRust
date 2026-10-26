@@ -8,14 +8,19 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-/// The parent of every engine's replay directory.
-pub fn replay_root() -> PathBuf {
+/// The parent of every engine's replay directory; `None` without
+/// `XDG_CACHE_HOME` or `HOME` (a shared fallback such as `/tmp` could be
+/// pre-created by another user, so disk mode then stays in memory).
+pub fn replay_root() -> Option<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir);
-    cache.join("fthrust").join("replay")
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|v| !v.is_empty())
+                .map(|h| PathBuf::from(h).join(".cache"))
+        })?;
+    Some(cache.join("fthrust").join("replay"))
 }
 
 /// This engine's directory under `root`.

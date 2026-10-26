@@ -587,7 +587,12 @@ fn report_first(inner: &Inner, outcome: FirstOutcome) {
 }
 
 fn make_ring(config: &EngineConfig) -> Arc<EncodedRing> {
-    make_ring_in(config, &crate::replay_dir::replay_root())
+    match crate::replay_dir::replay_root() {
+        Some(root) => make_ring_in(config, &root),
+        // No cache directory: an empty root path fails to create, so disk
+        // mode logs and stays in memory.
+        None => make_ring_in(config, std::path::Path::new("")),
+    }
 }
 
 /// The ring for `config`; in disk mode its segments go under `root`
@@ -873,7 +878,8 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         }
 
         // Zero copy: the compositor renders into the encoder's surfaces.
-        let mut zero_copy_active = match start_zero_copy(backend.as_mut(), enc, native) {
+        let buffer = backend.buffer_size().unwrap_or(native);
+        let mut zero_copy_active = match start_zero_copy(backend.as_mut(), enc, buffer) {
             Ok(()) => {
                 tracing::info!("zero-copy capture in use");
                 true
@@ -929,7 +935,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 last_fresh_encoded = false;
                 if retry {
                     realloc_tried = true;
-                    let size = backend.native_size();
+                    let size = backend
+                        .buffer_size()
+                        .unwrap_or_else(|| backend.native_size());
                     match start_zero_copy(backend.as_mut(), enc, size) {
                         Ok(()) => zero_copy_active = true,
                         Err(reason) => {
@@ -939,6 +947,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     }
                 } else {
                     backend.use_shm();
+                    enc.release_dmabuf_targets();
                     log_zero_copy_off(
                         &mut zero_copy_logged,
                         "the dmabuf capture buffers no longer fit the session",
@@ -1023,6 +1032,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     // The first surface frame failed: copy frames from now
                     // on (this frame is dropped, its pixels never left the GPU).
                     backend.use_shm();
+                    enc.release_dmabuf_targets();
                     zero_copy_active = false;
                     last_fresh_encoded = false;
                     log_zero_copy_off(&mut zero_copy_logged, reason);
@@ -1331,7 +1341,7 @@ fn start_zero_copy(
         .dmabuf_targets(width, height, ZERO_COPY_SURFACES)
         .map_err(|e| e.to_string())?;
     let image = images.first().map(|i| (i.fourcc, i.modifier));
-    match zero_copy_plan(
+    let result = match zero_copy_plan(
         constraints.as_ref(),
         encoder_gpu,
         gpu_conversion,
@@ -1342,7 +1352,11 @@ fn start_zero_copy(
             .use_dmabuf(images.into_iter().map(zero_copy::to_dmabuf_image).collect())
             .map_err(|e| e.to_string()),
         ZeroCopy::Off(reason) => Err(reason.into()),
+    };
+    if result.is_err() {
+        enc.release_dmabuf_targets();
     }
+    result
 }
 
 /// Capture surfaces handed to the compositor, used round-robin: the one the

@@ -424,6 +424,12 @@ impl Encoder {
         self.vaapi_device()
     }
 
+    /// Frees the capture surfaces from [`Encoder::dmabuf_targets`] once the
+    /// compositor no longer writes into them (zero copy fell back to shm).
+    pub fn release_dmabuf_targets(&mut self) {
+        self.surfaces = None;
+    }
+
     /// Allocates `count` `width`×`height` BGRX VA surfaces on the encoder's
     /// device, exported as dmabufs the compositor can copy captures into,
     /// and rebuilds the GPU converter for that source size. Replaces any
@@ -481,8 +487,9 @@ impl Encoder {
     /// Encodes capture surface `index`, captured at `wall_time_ns`, converting
     /// it on the GPU with no upload. pts, keyframes, the repeat frame and
     /// packet timing follow [`Encoder::encode`]. A failure (on the first
-    /// surface frame or later) returns `Err` with nothing sent; the caller
-    /// falls back to [`Encoder::encode`], which keeps its own CPU fallback.
+    /// surface frame or later) returns `Err` with nothing sent and the
+    /// clock restored; the engine then drops that frame and captures through
+    /// shared memory.
     pub fn encode_surface(
         &mut self,
         index: usize,

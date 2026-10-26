@@ -49,6 +49,10 @@ pub trait CaptureBackend: Send {
     fn last_frame_available(&self) -> bool {
         false
     }
+    /// The compositor's current buffer size, where the protocol says it.
+    fn buffer_size(&self) -> Option<(u32, u32)> {
+        None
+    }
     /// What the compositor accepts for dmabuf capture buffers, if anything.
     fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
         None
@@ -187,6 +191,9 @@ impl CaptureBackend for ExtAdapter {
     }
     fn last_frame_available(&self) -> bool {
         self.0.last_frame_available()
+    }
+    fn buffer_size(&self) -> Option<(u32, u32)> {
+        self.0.buffer_size()
     }
     fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
         self.0.dmabuf_constraints()
@@ -493,6 +500,10 @@ impl CaptureBackend for SyntheticBackend {
 
     fn selected_output(&self) -> String {
         self.selected.clone()
+    }
+
+    fn buffer_size(&self) -> Option<(u32, u32)> {
+        Some((self.width, self.height))
     }
 
     fn dmabuf_constraints(&self) -> Option<DmabufConstraints> {
