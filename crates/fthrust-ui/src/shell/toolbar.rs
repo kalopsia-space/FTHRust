@@ -129,7 +129,16 @@ pub fn clip_bitrate(settings: &SettingsStore) -> i64 {
             .filter(|v| (500..=200_000).contains(v))
             .unwrap_or(fallback)
     } else {
-        preset_bitrate(&res, &quality)
+        let kbps = preset_bitrate(&res, &quality);
+        if settings.get_str("codec_pref") == Some("av1") {
+            let level = fthrust_core::capture_config::BitrateLevel::parse(&quality);
+            i64::from(fthrust_core::capture_config::av1_preset_kbps(
+                kbps as u32,
+                level,
+            ))
+        } else {
+            kbps
+        }
     }
 }
 

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 
 use fthrust_core::capture_config::{
-    BitrateLevel, CaptureConfig, bitrate_preset_kbps, resolution_dims,
-    validate_custom_bitrate_kbps, validate_fps,
+    BitrateLevel, CaptureConfig, codec_preset_kbps, resolution_dims, validate_custom_bitrate_kbps,
+    validate_fps,
 };
 use fthrust_core::clip_files::{recording_path, unique_path};
 use fthrust_ipc::{Command, EngineConfig, Event as IpcEvent};
@@ -114,7 +114,7 @@ pub fn recording_config(state: &AppState) -> Result<EngineConfig, String> {
         validate_custom_bitrate_kbps(s.get_i64("recording_custom_bitrate_kbps").unwrap_or(25_000))
             .map_err(|e| e.to_string())?
     } else {
-        bitrate_preset_kbps(&resolution, level).unwrap_or(25_000)
+        codec_preset_kbps(&resolution, level, config.capture.codec).unwrap_or(25_000)
     };
     config.capture.bitrate_kbps = config.capture.bitrate_kbps.clamp(500, 200_000);
     Ok(config)
