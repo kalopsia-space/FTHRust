@@ -275,7 +275,11 @@ impl Drop for VaapiFrames {
     }
 }
 
-/// Allocates and initialises an 8-surface pool on `device`.
+/// Surfaces in every VA-API pool (fixed size: `av_hwframe_get_buffer`
+/// fails once all are taken).
+pub(crate) const POOL_SURFACES: usize = 8;
+
+/// Allocates and initialises a [`POOL_SURFACES`]-surface pool on `device`.
 fn alloc_pool(
     device: *mut ffi::AVBufferRef,
     width: u32,
@@ -294,7 +298,7 @@ fn alloc_pool(
         (*ctx).sw_format = sw_format;
         (*ctx).width = width as i32;
         (*ctx).height = height as i32;
-        (*ctx).initial_pool_size = 8;
+        (*ctx).initial_pool_size = POOL_SURFACES as i32;
         let ret = ffi::av_hwframe_ctx_init(frames);
         if ret < 0 {
             let mut frames = frames;

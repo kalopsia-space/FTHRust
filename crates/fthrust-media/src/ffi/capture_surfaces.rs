@@ -6,11 +6,14 @@ use std::os::fd::{BorrowedFd, OwnedFd};
 use ffmpeg_next::ffi;
 
 use super::frame::OwnedFrame;
-use super::hw::{VaapiFrames, copy_rows};
+use super::hw::{POOL_SURFACES, VaapiFrames, copy_rows};
 use crate::{MediaError, Result};
 
 /// `DRM_FORMAT_XRGB8888` (`'XR24'`): B, G, R, X bytes in memory.
 pub const DRM_FORMAT_XRGB8888: u32 = 0x3432_5258;
+
+/// `DRM_FORMAT_ARGB8888` (`'AR24'`): B, G, R, A bytes in memory.
+const DRM_FORMAT_ARGB8888: u32 = 0x3432_5241;
 
 /// One exported surface as a dmabuf: the media-side mirror of the Wayland
 /// crate's `DmabufImage`.
@@ -75,9 +78,14 @@ impl CaptureSurfaces {
     /// Allocates `count` `width`×`height` BGR0 surfaces on `device`'s
     /// VADisplay and exports each as a dmabuf.
     pub(crate) fn new(device: &VaapiFrames, width: u32, height: u32, count: usize) -> Result<Self> {
-        if width == 0 || height == 0 || count == 0 {
+        if width == 0 || height == 0 {
             return Err(MediaError::Invalid(format!(
-                "cannot export {count} surfaces of {width}x{height}"
+                "cannot export surfaces of {width}x{height}"
+            )));
+        }
+        if count == 0 || count > POOL_SURFACES {
+            return Err(MediaError::Invalid(format!(
+                "dmabuf targets: count must be 1 to {POOL_SURFACES}, got {count}"
             )));
         }
         let pool = device.pool_on(width, height, ffi::AVPixelFormat::AV_PIX_FMT_BGR0)?;
@@ -231,6 +239,12 @@ fn export(surface: &OwnedFrame, width: u32, height: u32) -> Result<ExportedImage
             )));
         }
         let layer = &desc.layers[0];
+        if layer.format != DRM_FORMAT_XRGB8888 && layer.format != DRM_FORMAT_ARGB8888 {
+            return Err(MediaError::Invalid(format!(
+                "exported surface has DRM format {:#010x}, not XRGB8888/ARGB8888",
+                layer.format
+            )));
+        }
         let nb_objects = desc.nb_objects.clamp(0, desc.objects.len() as i32) as usize;
         let nb_planes = layer.nb_planes.clamp(0, layer.planes.len() as i32) as usize;
         let mut planes = Vec::with_capacity(nb_planes);

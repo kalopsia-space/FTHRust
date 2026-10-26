@@ -142,3 +142,47 @@ fn dmabuf_targets_require_gpu_conversion() {
     assert_eq!(enc.conversion(), Conversion::Cpu);
     assert!(enc.dmabuf_targets(320, 180, 4).is_err());
 }
+
+#[test]
+fn a_failed_surface_encode_leaves_the_timestamps_untouched() {
+    let (w, h) = (320u32, 180u32);
+    let Some(mut enc) = open_gpu(w, h) else {
+        return;
+    };
+    let mut plain = open_gpu(w, h).unwrap();
+    let red = solid(w, h, [0, 0, 255, 255]);
+    let ts = 5 * 1_000_000_000;
+    let mut want = Vec::new();
+    plain
+        .encode(&red, w as usize * 4, w, h, ts, &mut want)
+        .unwrap();
+    plain.flush(&mut want).unwrap();
+
+    enc.dmabuf_targets(w, h, 4).unwrap();
+    enc.inject_gpu_convert_failure();
+    let mut out = Vec::new();
+    assert!(enc.encode_surface(0, ts, &mut out).is_err());
+    assert!(out.is_empty());
+    enc.encode(&red, w as usize * 4, w, h, ts, &mut out)
+        .unwrap();
+    enc.flush(&mut out).unwrap();
+    assert_eq!(out[0].pts, want[0].pts);
+    assert_eq!(out[0].pts, 0);
+    assert!(out[0].keyframe);
+}
+
+#[test]
+fn dmabuf_targets_reject_bad_counts() {
+    let Some(mut enc) = open_gpu(320, 180) else {
+        return;
+    };
+    for count in [0, 9] {
+        match enc.dmabuf_targets(320, 180, count) {
+            Err(fthrust_media::MediaError::Invalid(msg)) => {
+                assert!(msg.contains("1 to 8"), "{msg}")
+            }
+            other => panic!("count {count}: {other:?}"),
+        }
+    }
+    assert_eq!(enc.dmabuf_targets(320, 180, 8).unwrap().len(), 8);
+}

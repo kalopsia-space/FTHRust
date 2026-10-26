@@ -11,7 +11,7 @@ use crate::encoder_policy::{encoder_candidates, preset_options};
 use crate::ffi::capture_surfaces::{CaptureSurfaces, ExportedImage};
 use crate::ffi::codec::{HwInput, OpenParams, RawEncoder};
 use crate::ffi::frame::OwnedFrame;
-use crate::ffi::hw::{VaapiFrames, candidate_devices};
+use crate::ffi::hw::{POOL_SURFACES, VaapiFrames, candidate_devices};
 use crate::ffi::scaler::Scaler;
 use crate::ffi::vpp::VaapiConverter;
 use crate::ring::EncodedPacket;
@@ -439,6 +439,11 @@ impl Encoder {
                 "dmabuf capture needs GPU colour conversion".into(),
             ));
         }
+        if count == 0 || count > POOL_SURFACES {
+            return Err(MediaError::Invalid(format!(
+                "dmabuf targets: count must be 1 to {POOL_SURFACES}, got {count}"
+            )));
+        }
         self.surfaces = None;
         if self.raw.converter_source_size() != Some((width, height)) {
             self.raw.rebuild_converter(width, height)?;
@@ -505,16 +510,22 @@ impl Encoder {
             self.raw.rebuild_converter(size.0, size.1)?;
             self.gpu_proven = false;
         }
-        let first_gpu = !self.gpu_proven;
-        let requested = self.keyframe_requested;
+        // Nothing reaches the codec on a failure: restore the clock state
+        // so the caller's retry through `encode` gets this frame's pts and
+        // keyframe.
+        let saved = (
+            self.pts_epoch_ns,
+            self.last_input_pts,
+            self.keyframe_requested,
+        );
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
         if let Err(e) = self.convert_surface_and_send(index, frame_pts, force_key) {
-            // Nothing reached the codec: keep a keyframe request for the
-            // frame that does.
-            self.keyframe_requested = requested;
-            if first_gpu {
-                log_gpu_fallback(&e);
-            }
+            (
+                self.pts_epoch_ns,
+                self.last_input_pts,
+                self.keyframe_requested,
+            ) = saved;
+            tracing::debug!(reason = %e, "encoding from the capture surface failed");
             return Err(e);
         }
         self.gpu_proven = true;
