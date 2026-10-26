@@ -381,7 +381,7 @@ fn write_h264(
         .map(|s| s.time_base())
         .unwrap_or(ff::Rational::new(1, fps as i32));
     for p in packets.drain(..) {
-        let mut pkt = ff::Packet::copy(&p.data);
+        let mut pkt = ff::Packet::copy(&p.data.bytes()?);
         pkt.set_pts(Some(p.pts));
         pkt.set_dts(Some(p.dts));
         pkt.set_duration(1);

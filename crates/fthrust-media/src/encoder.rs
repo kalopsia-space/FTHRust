@@ -784,7 +784,7 @@ impl Encoder {
                 pending.drain(..=pos);
             }
             out.push(EncodedPacket {
-                data: p.data,
+                data: p.data.into(),
                 pts: p.pts,
                 dts: p.dts,
                 keyframe: p.keyframe,

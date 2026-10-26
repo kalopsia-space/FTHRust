@@ -84,7 +84,7 @@ fn decode_frame_rgb_with(
         (out, w, h)
     };
     for p in packets {
-        let pkt = ffmpeg_next::Packet::copy(&p.data);
+        let pkt = ffmpeg_next::Packet::copy(&p.data.bytes().unwrap());
         decoder.send_packet(&pkt).expect("send packet");
         while decoder.receive_frame(&mut frame).is_ok() {
             if decoded == index {

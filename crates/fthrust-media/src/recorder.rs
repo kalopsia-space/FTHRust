@@ -155,7 +155,8 @@ impl Recorder {
         let pts = packet.pts - first;
         let fps = self.fps as i32;
         let index = self.video_index;
-        self.guard(|m| m.write_packet(index, &packet.data, pts, pts, 1, packet.keyframe, (1, fps)))
+        let bytes = packet.data.bytes()?;
+        self.guard(|m| m.write_packet(index, &bytes, pts, pts, 1, packet.keyframe, (1, fps)))
             .map_err(|e| {
                 MediaError::Invalid(format!(
                     "The recording file could not be written; completed fragments already on disk remain playable: {e}"

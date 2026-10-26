@@ -278,7 +278,10 @@ fn snapshot_shares_payloads_with_the_ring() {
     let data = p.data.clone();
     ring.push(p);
     let snap = ring.snapshot(1_000, 0, 0).unwrap();
-    assert!(Arc::ptr_eq(&snap.packets[0].data, &data));
+    assert!(Arc::ptr_eq(
+        snap.packets[0].data.as_mem().unwrap(),
+        data.as_mem().unwrap()
+    ));
 }
 
 #[test]
@@ -311,6 +314,9 @@ fn clip_length_snapshot_starts_on_a_keyframe_within_the_window() {
         let s = ring.snapshot(45_000, end, 0).unwrap();
         assert!(s.full_history, "phase {extra}: the clip was cut short");
         assert!(s.packets[0].keyframe, "phase {extra}");
-        assert!(s.packets[0].wall_time_ns <= end - 45 * SECOND, "phase {extra}");
+        assert!(
+            s.packets[0].wall_time_ns <= end - 45 * SECOND,
+            "phase {extra}"
+        );
     }
 }

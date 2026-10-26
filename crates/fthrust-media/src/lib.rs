@@ -33,6 +33,7 @@ pub mod encoder;
 pub mod encoder_policy;
 pub mod export;
 pub(crate) mod ffi;
+pub mod payload;
 pub mod playback;
 pub mod probe;
 pub mod recorder;

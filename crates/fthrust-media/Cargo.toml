@@ -6,6 +6,7 @@ license.workspace = true
 description = "FFmpeg-backed encode, replay ring, clip save and probe layer for FTHRust"
 
 [dependencies]
+libc.workspace = true
 sha2.workspace = true
 fthrust-core = { path = "../fthrust-core" }
 ffmpeg-next.workspace = true
@@ -20,4 +21,3 @@ time.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-libc.workspace = true
