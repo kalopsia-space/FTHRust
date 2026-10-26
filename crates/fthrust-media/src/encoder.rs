@@ -143,6 +143,15 @@ impl Encoder {
         Self::open_inner(cfg, &candidate_devices(), None, true, None)
     }
 
+    /// Makes frame uploads use the staging copy and `av_hwframe_transfer_data`
+    /// instead of writing into mapped surfaces (the throughput comparison).
+    #[doc(hidden)]
+    pub fn force_transfer_upload(&mut self) {
+        if let Some(hw) = self.raw.vaapi() {
+            hw.force_transfer_upload();
+        }
+    }
+
     /// [`Encoder::open`] with an explicit keyframe interval in frames
     /// (playback proxies and tests; capture keeps the two-second default).
     pub fn open_with_gop(cfg: &EncoderConfig, gop_frames: u32) -> Result<Self> {

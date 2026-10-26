@@ -2,6 +2,8 @@
 
 use std::ffi::CString;
 use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ffmpeg_next::ffi;
 
@@ -46,6 +48,9 @@ pub struct VaapiFrames {
     frames: *mut ffi::AVBufferRef,
     /// The device path that opened.
     pub device_path: String,
+    /// Whether uploads write into mapped surfaces; shared with every pool
+    /// made from this device, cleared on the first mapping failure.
+    mapped: Arc<AtomicBool>,
 }
 
 // SAFETY: the buffer refs are exclusively owned here.
@@ -96,6 +101,7 @@ impl VaapiFrames {
                 device,
                 frames,
                 device_path: path.to_string(),
+                mapped: Arc::new(AtomicBool::new(true)),
             }),
             Err(e) => {
                 // SAFETY: device is an owned ref.
@@ -126,6 +132,7 @@ impl VaapiFrames {
             device,
             frames,
             device_path: self.device_path.clone(),
+            mapped: Arc::clone(&self.mapped),
         })
     }
 
@@ -140,15 +147,112 @@ impl VaapiFrames {
         }
     }
 
+    /// Makes every upload go through `av_hwframe_transfer_data` (tests and
+    /// the throughput comparison).
+    pub fn force_transfer_upload(&self) {
+        self.mapped.store(false, Ordering::Relaxed);
+    }
+
+    /// Whether uploads currently write into mapped surfaces.
+    pub(crate) fn mapped_upload(&self) -> bool {
+        self.mapped.load(Ordering::Relaxed)
+    }
+
+    /// Takes a fresh surface from the pool into `hw`.
+    pub(crate) fn get_surface(&self, hw: &mut OwnedFrame) -> Result<()> {
+        hw.unref();
+        // SAFETY: frames ref and the frame pointer are valid.
+        unsafe { super::check(ffi::av_hwframe_get_buffer(self.frames, hw.as_ptr(), 0)).map(|_| ()) }
+    }
+
+    /// Maps the surface in `hw` for overwriting. The returned frame's planes
+    /// are writable; dropping it unmaps and flushes the writes.
+    pub(crate) fn map_for_write(&self, hw: &OwnedFrame) -> Result<OwnedFrame> {
+        let mapped = OwnedFrame::empty()?;
+        // SAFETY: both frames are valid; the format is set so the mapping
+        // exposes the pool's software layout.
+        unsafe {
+            let sw_format = (*((*self.frames).data as *mut ffi::AVHWFramesContext)).sw_format;
+            (*mapped.as_ptr()).format = sw_format as i32;
+            super::check(ffi::av_hwframe_map(
+                mapped.as_ptr(),
+                hw.as_ptr(),
+                ffi::AV_HWFRAME_MAP_WRITE as i32 | ffi::AV_HWFRAME_MAP_OVERWRITE as i32,
+            ))?;
+        }
+        Ok(mapped)
+    }
+
+    /// Records that mapping failed and transfers are used from now on.
+    pub(crate) fn mapped_unavailable(&self, err: &MediaError) {
+        if self.mapped.swap(false, Ordering::Relaxed) {
+            tracing::warn!(error = %err, "mapped upload unavailable; using transfer");
+        }
+    }
+
     /// Uploads a software NV12 frame into a fresh hardware surface in `hw`.
     pub fn upload(&self, hw: &mut OwnedFrame, sw: &OwnedFrame) -> Result<()> {
-        hw.unref();
-        // SAFETY: frames ref and both frame pointers are valid.
+        if self.mapped_upload() {
+            self.get_surface(hw)?;
+            match self.copy_into_mapped(hw, sw) {
+                Ok(()) => return hw.copy_props_from(sw),
+                Err(e) => self.mapped_unavailable(&e),
+            }
+        }
+        self.upload_transfer(hw, sw)
+    }
+
+    /// [`Self::upload`] through `av_hwframe_transfer_data` only.
+    pub(crate) fn upload_transfer(&self, hw: &mut OwnedFrame, sw: &OwnedFrame) -> Result<()> {
+        self.get_surface(hw)?;
+        // SAFETY: both frame pointers are valid.
         unsafe {
-            super::check(ffi::av_hwframe_get_buffer(self.frames, hw.as_ptr(), 0))?;
             super::check(ffi::av_hwframe_transfer_data(hw.as_ptr(), sw.as_ptr(), 0))?;
         }
         hw.copy_props_from(sw)
+    }
+
+    /// Copies the NV12 planes of `sw` into the mapped surface of `hw`.
+    fn copy_into_mapped(&self, hw: &OwnedFrame, sw: &OwnedFrame) -> Result<()> {
+        let mapped = self.map_for_write(hw)?;
+        // SAFETY: both frames hold NV12 planes of the same size; the mapped
+        // frame stays alive for the copy.
+        unsafe {
+            let (m, s) = (mapped.as_ptr(), sw.as_ptr());
+            let w = (*s).width as usize;
+            let h = (*s).height as usize;
+            for (plane, rows) in [(0usize, h), (1, h.div_ceil(2))] {
+                copy_rows(
+                    (*s).data[plane],
+                    (*s).linesize[plane] as usize,
+                    (*m).data[plane],
+                    (*m).linesize[plane] as usize,
+                    w,
+                    rows,
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Copies `rows` rows of `row_bytes` between planes with their own strides.
+///
+/// # Safety
+/// Both pointers must cover `rows` rows at their stride, without overlap.
+pub(crate) unsafe fn copy_rows(
+    src: *const u8,
+    src_stride: usize,
+    dst: *mut u8,
+    dst_stride: usize,
+    row_bytes: usize,
+    rows: usize,
+) {
+    for y in 0..rows {
+        // SAFETY: the caller guarantees both planes cover these rows.
+        unsafe {
+            ptr::copy_nonoverlapping(src.add(y * src_stride), dst.add(y * dst_stride), row_bytes)
+        };
     }
 }
 

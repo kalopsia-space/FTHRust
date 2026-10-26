@@ -56,9 +56,13 @@ fn gpu_conversion_uses_less_cpu_than_cpu_conversion() {
         encoder: EncoderPref::Vaapi,
         preset: 4,
     };
+    let mut transfer = Encoder::open(&cfg).unwrap();
+    transfer.force_transfer_upload();
     let gpu = Encoder::open(&cfg).unwrap();
     assert_eq!(gpu.conversion(), Conversion::Gpu);
     println!("gpu: {:.2} ms CPU/frame", measure(gpu));
+    assert_eq!(transfer.conversion(), Conversion::Gpu);
+    println!("gpu-transfer: {:.2} ms CPU/frame", measure(transfer));
     let cpu = Encoder::open_forcing_cpu_conversion(&cfg).unwrap();
     assert_eq!(cpu.conversion(), Conversion::Cpu);
     println!("cpu: {:.2} ms CPU/frame", measure(cpu));

@@ -45,7 +45,9 @@ pub mod transactional_save;
 pub mod vaapi {
     pub use crate::ffi::hw::{DEFAULT_DEVICE, candidate_devices, vaapi_available};
     #[doc(hidden)]
-    pub use crate::ffi::vpp::{gpu_convert_rgb, gpu_convert_rgb_with_stride};
+    pub use crate::ffi::vpp::{
+        gpu_convert_rgb, gpu_convert_rgb_with_stride, gpu_convert_rgb_with_upload,
+    };
 }
 
 use std::sync::OnceLock;
