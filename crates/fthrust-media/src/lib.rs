@@ -43,7 +43,10 @@ pub mod transactional_save;
 
 /// VA-API device discovery (the safe surface of the private `ffi::hw`).
 pub mod vaapi {
-    pub use crate::ffi::hw::{DEFAULT_DEVICE, candidate_devices, vaapi_available};
+    pub use crate::ffi::capture_surfaces::{DRM_FORMAT_XRGB8888, ExportedImage};
+    pub use crate::ffi::hw::{
+        DEFAULT_DEVICE, candidate_devices, render_node_dev, same_gpu, vaapi_available,
+    };
     #[doc(hidden)]
     pub use crate::ffi::vpp::{
         gpu_convert_rgb, gpu_convert_rgb_with_stride, gpu_convert_rgb_with_upload,

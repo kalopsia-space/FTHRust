@@ -8,6 +8,7 @@ use ffmpeg_next::ffi;
 use fthrust_core::capture_config::{Codec, EncoderPref};
 
 use crate::encoder_policy::{encoder_candidates, preset_options};
+use crate::ffi::capture_surfaces::{CaptureSurfaces, ExportedImage};
 use crate::ffi::codec::{HwInput, OpenParams, RawEncoder};
 use crate::ffi::frame::OwnedFrame;
 use crate::ffi::hw::{VaapiFrames, candidate_devices};
@@ -113,6 +114,8 @@ pub struct Encoder {
     generation: u64,
     /// Forced keyframe interval in frames (two seconds unless overridden).
     forced_keyframe_interval: i64,
+    /// Exported capture surfaces, after [`Encoder::dmabuf_targets`].
+    surfaces: Option<CaptureSurfaces>,
 }
 
 /// Whether this FFmpeg build has the named encoder (tests skip on `false`).
@@ -339,6 +342,7 @@ impl Encoder {
             pending: VecDeque::new(),
             generation: 0,
             forced_keyframe_interval: i64::from(gop.unwrap_or(cfg.fps * 2).max(1)),
+            surfaces: None,
         })
     }
 
@@ -413,6 +417,131 @@ impl Encoder {
     /// The render node in use, when the VA-API path is active.
     pub fn vaapi_device(&self) -> Option<&str> {
         self.raw.vaapi().map(|v| v.device_path.as_str())
+    }
+
+    /// The render node the encoder (and its capture surfaces) live on.
+    pub fn render_node(&self) -> Option<&str> {
+        self.vaapi_device()
+    }
+
+    /// Allocates `count` `width`×`height` BGRX VA surfaces on the encoder's
+    /// device, exported as dmabufs the compositor can copy captures into,
+    /// and rebuilds the GPU converter for that source size. Replaces any
+    /// earlier set. Errors unless conversion is on the GPU.
+    pub fn dmabuf_targets(
+        &mut self,
+        width: u32,
+        height: u32,
+        count: usize,
+    ) -> Result<Vec<ExportedImage>> {
+        if self.conversion() != Conversion::Gpu {
+            return Err(MediaError::Invalid(
+                "dmabuf capture needs GPU colour conversion".into(),
+            ));
+        }
+        self.surfaces = None;
+        if self.raw.converter_source_size() != Some((width, height)) {
+            self.raw.rebuild_converter(width, height)?;
+            self.gpu_proven = false;
+        }
+        let device = self
+            .raw
+            .vaapi()
+            .ok_or_else(|| MediaError::Invalid("no VA-API device".into()))?;
+        let surfaces = CaptureSurfaces::new(device, width, height, count)?;
+        let images = surfaces.images()?;
+        self.surfaces = Some(surfaces);
+        Ok(images)
+    }
+
+    fn capture_surfaces(&self) -> Result<&CaptureSurfaces> {
+        self.surfaces
+            .as_ref()
+            .ok_or_else(|| MediaError::Invalid("no dmabuf targets allocated".into()))
+    }
+
+    /// Downloads capture surface `index` as BGRX rows into `out` and returns
+    /// their stride (the watchdog's fallback frame).
+    pub fn download_surface(&self, index: usize, out: &mut Vec<u8>) -> Result<usize> {
+        self.capture_surfaces()?.download(index, out)
+    }
+
+    /// Writes BGRA rows into capture surface `index` through a mapping, in
+    /// place of the compositor (tests).
+    #[doc(hidden)]
+    pub fn write_surface(&self, index: usize, bgra: &[u8], stride: usize) -> Result<()> {
+        self.capture_surfaces()?.write(index, bgra, stride)
+    }
+
+    /// Encodes capture surface `index`, captured at `wall_time_ns`, converting
+    /// it on the GPU with no upload. pts, keyframes, the repeat frame and
+    /// packet timing follow [`Encoder::encode`]. A failure (on the first
+    /// surface frame or later) returns `Err` with nothing sent; the caller
+    /// falls back to [`Encoder::encode`], which keeps its own CPU fallback.
+    pub fn encode_surface(
+        &mut self,
+        index: usize,
+        wall_time_ns: i64,
+        out: &mut Vec<EncodedPacket>,
+    ) -> Result<()> {
+        let Some(surfaces) = &self.surfaces else {
+            return Err(MediaError::Invalid("no dmabuf targets allocated".into()));
+        };
+        if index >= surfaces.len() {
+            return Err(MediaError::Invalid(format!(
+                "surface {index} out of range ({} surfaces)",
+                surfaces.len()
+            )));
+        }
+        if self.cpu.is_some() {
+            return Err(MediaError::Invalid(
+                "dmabuf capture needs GPU colour conversion".into(),
+            ));
+        }
+        self.last_frame_valid = false;
+        self.repeat_frame.unref();
+        let size = surfaces.size();
+        if self.raw.converter_source_size() != Some(size) {
+            self.raw.rebuild_converter(size.0, size.1)?;
+            self.gpu_proven = false;
+        }
+        let first_gpu = !self.gpu_proven;
+        let requested = self.keyframe_requested;
+        let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
+        if let Err(e) = self.convert_surface_and_send(index, frame_pts, force_key) {
+            // Nothing reached the codec: keep a keyframe request for the
+            // frame that does.
+            self.keyframe_requested = requested;
+            if first_gpu {
+                log_gpu_fallback(&e);
+            }
+            return Err(e);
+        }
+        self.gpu_proven = true;
+        self.last_frame_valid = true;
+        self.pending.push_back(FrameTiming {
+            pts: frame_pts,
+            wall_time_ns,
+        });
+        if force_key {
+            self.last_forced_keyframe_pts = frame_pts;
+        }
+        self.drain(wall_time_ns, out)
+    }
+
+    fn convert_surface_and_send(&mut self, index: usize, pts: i64, force_key: bool) -> Result<()> {
+        if std::mem::take(&mut self.inject_convert_failure) {
+            return Err(MediaError::Invalid("injected GPU convert failure".into()));
+        }
+        let (Some(surfaces), Some(hw_frame)) = (&self.surfaces, self.hw_frame.as_mut()) else {
+            return Err(MediaError::Invalid("GPU conversion without a frame".into()));
+        };
+        self.raw
+            .convert_surface(surfaces.surface(index), hw_frame)?;
+        self.conversions += 1;
+        hw_frame.set_pts(pts);
+        hw_frame.set_forced_keyframe(force_key);
+        self.raw.send_frame(Some(hw_frame))
     }
 
     /// Makes the next frame an IDR frame (a recording can start at once

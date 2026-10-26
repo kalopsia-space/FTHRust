@@ -217,16 +217,46 @@ impl VaapiConverter {
         if !self.upload_mapped(bgra, stride, row, h) {
             self.upload_transfer(bgra, stride, row, h)?;
         }
+        Self::run_graph(self.src, self.sink, &self.hw, out)
+    }
+
+    /// Converts `src`, a BGR0 VA-API surface of the source size on this
+    /// device (a capture surface), into `out` without any upload. `src` is
+    /// only referenced for the conversion; pts is left to the caller.
+    pub(crate) fn convert_surface(&mut self, src: &OwnedFrame, out: &mut OwnedFrame) -> Result<()> {
+        // SAFETY: src is a valid frame; only its header fields are read.
+        let (format, w, h) = unsafe {
+            let f = src.as_ptr();
+            ((*f).format, (*f).width, (*f).height)
+        };
+        if format != ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32
+            || (w, h) != (self.src_w as i32, self.src_h as i32)
+        {
+            return Err(MediaError::Invalid(format!(
+                "surface is {w}x{h} (format {format}), converter expects {}x{} VA-API",
+                self.src_w, self.src_h
+            )));
+        }
+        Self::run_graph(self.src, self.sink, src, out)
+    }
+
+    /// Pushes `input` through the graph into `out`.
+    fn run_graph(
+        src: *mut ffi::AVFilterContext,
+        sink: *mut ffi::AVFilterContext,
+        input: &OwnedFrame,
+        out: &mut OwnedFrame,
+    ) -> Result<()> {
         out.unref();
-        // SAFETY: src/sink belong to the graph owned by self; the frames are
-        // valid. KEEP_REF leaves the hardware frame intact for reuse.
+        // SAFETY: src/sink belong to the graph owned by the caller's self; the
+        // frames are valid. KEEP_REF leaves the input frame intact for reuse.
         unsafe {
             super::check(ffi::av_buffersrc_add_frame_flags(
-                self.src,
-                self.hw.as_ptr(),
+                src,
+                input.as_ptr(),
                 ffi::AV_BUFFERSRC_FLAG_KEEP_REF as i32,
             ))?;
-            super::check(ffi::av_buffersink_get_frame(self.sink, out.as_ptr()))?;
+            super::check(ffi::av_buffersink_get_frame(sink, out.as_ptr()))?;
         }
         Ok(())
     }

@@ -5,6 +5,7 @@
 #![allow(unsafe_code)]
 
 pub mod aac;
+pub mod capture_surfaces;
 pub mod codec;
 pub mod device;
 pub mod export;

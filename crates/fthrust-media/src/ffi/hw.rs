@@ -309,3 +309,31 @@ fn alloc_pool(
 pub fn vaapi_available() -> bool {
     crate::init().is_ok() && VaapiFrames::create(64, 64).is_ok()
 }
+
+/// The device number (`st_rdev`) of the character device at `path`.
+pub fn render_node_dev(path: &str) -> Option<u64> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let meta = std::fs::metadata(path).ok()?;
+    meta.file_type().is_char_device().then(|| meta.rdev())
+}
+
+/// Whether two DRM device numbers belong to one GPU: equal, or the same
+/// `/sys/dev/char/<maj>:<min>/device`, so a primary node (`card1`) and its
+/// render node (`renderD128`) match.
+pub fn same_gpu(a: u64, b: u64) -> bool {
+    if a == b {
+        return true;
+    }
+    let device = |dev: u64| {
+        let (major, minor) = split_dev(dev);
+        std::fs::canonicalize(format!("/sys/dev/char/{major}:{minor}/device")).ok()
+    };
+    matches!((device(a), device(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// glibc's `major`/`minor` split of a Linux `dev_t`.
+fn split_dev(dev: u64) -> (u64, u64) {
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    (major, minor)
+}
