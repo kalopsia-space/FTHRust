@@ -188,37 +188,36 @@ fn mixer_eof_returns_none() {
     assert!(m.pull(10, &[1.0], 1.0).unwrap().is_none(), "stays at EOF");
 }
 
-/// A track that ends before the others (a short mic track) must not make a
-/// seek or pull decode the rest of the file into the other tracks' buffers.
-#[test]
-fn short_track_does_not_unbound_the_others() {
+/// Saves `path` through the engine's clip writer: `seconds` of video at
+/// `fps` plus one sine track per `(seconds, hz, title)`. `None` when no
+/// software H.264 encoder is available.
+fn write_av_clip(
+    path: &std::path::Path,
+    fps: u32,
+    seconds: u32,
+    tones: &[(u64, f32, &'static str)],
+) -> Option<fthrust_media::clip_writer::ClipWriteResult> {
     use fthrust_core::capture_config::{Codec, EncoderPref};
     use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
     use fthrust_media::encoder::{Encoder, EncoderConfig};
     use fthrust_media::ring::EncodedRing;
-    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
-        return;
-    }
-    let d = tempfile::tempdir().unwrap();
-    let clip = d.path().join("uneven.mp4");
-    const FPS: u32 = 30;
+    support::skip_unless_encoder(&["libopenh264", "libx264"])?;
     const SECOND: i64 = 1_000_000_000;
-    let seconds = 8u32;
     let cfg = EncoderConfig {
         src_width: 160,
         src_height: 90,
         enc_width: 160,
         enc_height: 90,
-        fps: FPS,
+        fps,
         bitrate_kbps: 300,
         codec: Codec::H264,
         encoder: EncoderPref::Software,
         preset: 1,
     };
     let mut encoder = Encoder::open(&cfg).unwrap();
-    let ring = EncodedRing::new(u64::from(seconds) * 1000 + 5000, FPS, 0);
+    let ring = EncodedRing::new(u64::from(seconds) * 1000 + 5000, fps, 0);
     let mut out = Vec::new();
-    for i in 0..seconds * FPS {
+    for i in 0..seconds * fps {
         let bgra = support::synthetic_bgra(160, 90, i);
         encoder
             .encode(
@@ -226,7 +225,7 @@ fn short_track_does_not_unbound_the_others() {
                 160 * 4,
                 160,
                 90,
-                i64::from(i) * SECOND / i64::from(FPS),
+                i64::from(i) * SECOND / i64::from(fps),
                 &mut out,
             )
             .unwrap();
@@ -247,31 +246,39 @@ fn short_track_does_not_unbound_the_others() {
         bitrate_kbps: 300,
         separate_audio: true,
     };
-    let tone = |secs: u64, hz: f32| -> Vec<f32> {
-        (0..secs * 48_000)
-            .flat_map(|i| {
-                let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
-                [v, v]
-            })
-            .collect()
+    let samples: Vec<Vec<f32>> = tones
+        .iter()
+        .map(|&(secs, hz, _)| {
+            (0..secs * 48_000)
+                .flat_map(|i| {
+                    let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
+                    [v, v]
+                })
+                .collect()
+        })
+        .collect();
+    let tracks: Vec<ClipAudio<'_>> = tones
+        .iter()
+        .zip(&samples)
+        .map(|(&(_, _, title), samples)| ClipAudio {
+            samples,
+            sample_rate: 48_000,
+            channels: 2,
+            title,
+        })
+        .collect();
+    Some(write_clip(path, &video, &tracks, None).unwrap())
+}
+
+/// A track that ends before the others (a short mic track) must not make a
+/// seek or pull decode the rest of the file into the other tracks' buffers.
+#[test]
+fn short_track_does_not_unbound_the_others() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("uneven.mp4");
+    let Some(result) = write_av_clip(&clip, 30, 8, &[(8, 440.0, "Game"), (1, 880.0, "Mic")]) else {
+        return;
     };
-    let long = tone(8, 440.0);
-    let short = tone(1, 880.0);
-    let tracks = [
-        ClipAudio {
-            samples: &long,
-            sample_rate: 48_000,
-            channels: 2,
-            title: "Game",
-        },
-        ClipAudio {
-            samples: &short,
-            sample_rate: 48_000,
-            channels: 2,
-            title: "Mic",
-        },
-    ];
-    let result = write_clip(&clip, &video, &tracks, None).unwrap();
     assert_eq!(result.audio_tracks.len(), 2, "{result:?}");
     let specs = [
         SourceSpec {
@@ -299,5 +306,66 @@ fn short_track_does_not_unbound_the_others() {
         mixer.pending_frames() <= 2 * 48_000,
         "decoded ahead by {} frames; the short track must count as ended",
         mixer.pending_frames()
+    );
+}
+
+/// Copies `src` to `dst` with every packet of each stream stored after
+/// all of the previous stream's: the layout of clips saved before the clip
+/// writer interleaved its audio.
+fn remux_stream_after_stream(src: &std::path::Path, dst: &std::path::Path) {
+    let mut ictx = ffmpeg_next::format::input(src).unwrap();
+    let mut octx = ffmpeg_next::format::output(dst).unwrap();
+    let mut time_bases = Vec::new();
+    for stream in ictx.streams() {
+        let mut out = octx
+            .add_stream(ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::None))
+            .unwrap();
+        out.set_parameters(stream.parameters());
+        time_bases.push(stream.time_base());
+    }
+    octx.write_header().unwrap();
+    let mut by_stream: Vec<Vec<ffmpeg_next::Packet>> = vec![Vec::new(); time_bases.len()];
+    for (stream, packet) in ictx.packets() {
+        by_stream[stream.index()].push(packet);
+    }
+    for (index, packets) in by_stream.into_iter().enumerate() {
+        let out_tb = octx.stream(index).unwrap().time_base();
+        for mut packet in packets {
+            packet.rescale_ts(time_bases[index], out_tb);
+            packet.set_stream(index);
+            packet.set_position(-1);
+            packet.write(&mut octx).unwrap();
+        }
+    }
+    octx.write_trailer().unwrap();
+}
+
+/// A clip longer than the muxer's interleave window (10 s) plays its audio
+/// from the first pull, even stored with all its audio after all its video
+/// (as clips were saved before the writer interleaved them). It played
+/// silent: the audio track counted as ended before its first packet was
+/// demuxed.
+#[test]
+fn stream_after_stream_clip_plays_audio_from_the_start() {
+    let d = tempfile::tempdir().unwrap();
+    let saved = d.path().join("long.mp4");
+    let Some(result) = write_av_clip(&saved, 60, 12, &[(12, 440.0, "Game")]) else {
+        return;
+    };
+    assert_eq!(result.audio_tracks.len(), 1, "{result:?}");
+    let clip = d.path().join("flat.mp4");
+    remux_stream_after_stream(&saved, &clip);
+    let specs = [SourceSpec {
+        source_id: "game".into(),
+        container_index: 1,
+    }];
+    let mut mixer = Mixer::open(&clip, &specs).unwrap();
+    let block = mixer
+        .pull(4800, &[1.0], 1.0)
+        .unwrap()
+        .expect("audio at the start of the clip");
+    assert!(
+        support::tone_power(&block, 440.0, 48_000.0) > 0.01,
+        "the tone is audible"
     );
 }

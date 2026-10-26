@@ -183,3 +183,18 @@ pub fn video_packet_timing(path: &Path, max_packets: usize) -> Result<Vec<Packet
     }
     Ok(out)
 }
+
+/// Makes `ictx` demux only stream `index`: the others are discarded, so the
+/// demuxer neither reads nor returns their packets.
+pub fn keep_only_stream(ictx: &mut ffmpeg_next::format::context::Input, index: usize) {
+    for stream in ictx.streams() {
+        if stream.index() != index {
+            // SAFETY: the stream pointer belongs to `ictx`, which we borrow
+            // mutably for the whole loop; `discard` is a plain field FFmpeg
+            // reads on the next `av_read_frame`.
+            unsafe {
+                (*(stream.as_ptr() as *mut ffi::AVStream)).discard = ffi::AVDiscard::AVDISCARD_ALL;
+            }
+        }
+    }
+}

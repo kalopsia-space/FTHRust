@@ -1,5 +1,5 @@
-//! The in-process mixer: one decoder per track, resampled to 48 kHz stereo
-//! f32, scaled by per-track gains and the master gain, optionally rate
+//! The in-process mixer: one demuxer and decoder per track, resampled to
+//! 48 kHz stereo f32, scaled by per-track gains and the master gain, optionally rate
 //! changed with pitch preservation through a chain of `atempo` filters.
 
 use std::collections::VecDeque;
@@ -90,6 +90,9 @@ impl Resampler {
 }
 
 struct Track {
+    /// This track's own demuxer, reading only its stream: tracks never wait
+    /// on each other or on the video, however the file is interleaved.
+    ictx: format::context::Input,
     index: usize,
     decoder: codec::decoder::Audio,
     time_base: f64,
@@ -99,16 +102,7 @@ struct Track {
     /// Frames to drop after a seek (the decoded audio before the target).
     skip_frames: usize,
     eof: bool,
-    /// Demux time of this track's newest packet (s); `None` since the seek
-    /// (the landing point then stands in).
-    last_packet_s: Option<f64>,
-    /// No packet for over `ENDED_GAP_S` while the demuxer moved on: the
-    /// track is treated as finished (silence) until a packet arrives.
-    ended: bool,
 }
-
-/// A track with no packets this far behind the demuxer has ended.
-const ENDED_GAP_S: f64 = 1.0;
 
 struct Tempo {
     graph: filter::Graph,
@@ -118,18 +112,11 @@ struct Tempo {
 
 /// The mixer.
 pub struct Mixer {
-    ictx: format::context::Input,
     tracks: Vec<Track>,
     failed: Vec<usize>,
     /// Canonical frames consumed since `seek_base_ms`.
     consumed_frames: u64,
     seek_base_ms: u64,
-    demux_eof: bool,
-    /// Demux time of the newest packet from any stream (s); `None` right
-    /// after a seek until the first packet shows where it landed.
-    demux_pos_s: Option<f64>,
-    /// Where the last seek landed (the first packet's time).
-    landing_s: f64,
     rate: f32,
     preserve_pitch: bool,
     tempo: Option<Tempo>,
@@ -142,10 +129,10 @@ impl Mixer {
     /// reported by [`Mixer::failed_sources`] and mixed as silence.
     pub fn open(path: &Path, sources: &[SourceSpec]) -> Result<Mixer> {
         crate::init()?;
-        let ictx = format::input(path)?;
         let mut tracks = Vec::new();
         let mut failed = Vec::new();
         for (i, spec) in sources.iter().enumerate() {
+            let mut ictx = format::input(path)?;
             let opened = ictx.stream(spec.container_index).and_then(|stream| {
                 if stream.parameters().medium() != Type::Audio {
                     return None;
@@ -153,17 +140,23 @@ impl Mixer {
                 let ctx = codec::context::Context::from_parameters(stream.parameters()).ok()?;
                 let decoder = ctx.decoder().audio().ok()?;
                 let tb = stream.time_base();
-                Some(Track {
+                Some((
+                    decoder,
+                    f64::from(tb.numerator()) / f64::from(tb.denominator()),
+                ))
+            });
+            let opened = opened.map(|(decoder, time_base)| {
+                crate::ffi::probe::keep_only_stream(&mut ictx, spec.container_index);
+                Track {
+                    ictx,
                     index: spec.container_index,
                     decoder,
-                    time_base: f64::from(tb.numerator()) / f64::from(tb.denominator()),
+                    time_base,
                     resampler: None,
                     pending: VecDeque::new(),
                     skip_frames: 0,
                     eof: false,
-                    last_packet_s: None,
-                    ended: false,
-                })
+                }
             });
             match opened {
                 Some(t) => tracks.push(t),
@@ -178,14 +171,10 @@ impl Mixer {
         // Keep the gains array aligned with `sources`: failed slots stay as
         // placeholders by index.
         let mixer = Mixer {
-            ictx,
             tracks,
             failed,
             consumed_frames: 0,
             seek_base_ms: 0,
-            demux_eof: false,
-            demux_pos_s: None,
-            landing_s: 0.0,
             rate: 1.0,
             preserve_pitch: true,
             tempo: None,
@@ -229,23 +218,19 @@ impl Mixer {
     /// Moves to `position_ms`.
     pub fn seek(&mut self, position_ms: u64) -> Result<()> {
         let ts = (position_ms as i64) * i64::from(ffmpeg_next::ffi::AV_TIME_BASE) / 1000;
-        if let Err(e) = self.ictx.seek(ts, ..ts) {
-            tracing::debug!("audio seek failed, decoding from the start: {e}");
-            let _ = self.ictx.seek(0, ..0);
-        }
         for t in &mut self.tracks {
+            if let Err(e) = t.ictx.seek(ts, ..ts) {
+                tracing::debug!("audio seek failed, decoding from the start: {e}");
+                let _ = t.ictx.seek(0, ..0);
+            }
             t.decoder.flush();
             t.pending.clear();
             t.eof = false;
-            t.ended = false;
-            t.last_packet_s = None;
             t.skip_frames = 0;
             if let Some(r) = t.resampler.as_mut() {
                 r.reset();
             }
         }
-        self.demux_eof = false;
-        self.demux_pos_s = None;
         self.seek_base_ms = position_ms;
         self.consumed_frames = 0;
         if let Some(t) = &self.tempo {
@@ -260,79 +245,16 @@ impl Mixer {
         // Each track learns its first decoded pts after the seek and drops
         // the frames before the target.
         let target_s = position_ms as f64 / 1000.0;
-        loop {
-            let need_more = self
-                .tracks
-                .iter()
-                .any(|t| !t.eof && !t.ended && t.pending.is_empty());
-            if !need_more {
-                return Ok(());
-            }
-            if self.demux_eof {
-                for t in &mut self.tracks {
-                    t.eof = true;
-                }
-                return Ok(());
-            }
-            self.decode_some(Some(target_s))?;
-        }
-    }
-
-    /// Demuxes one packet and decodes it into its track's pending buffer.
-    /// With `trim_before`, decoded audio before that time is dropped.
-    fn decode_some(&mut self, trim_before: Option<f64>) -> Result<()> {
-        let Some((stream, packet)) = self.ictx.packets().next() else {
-            self.demux_eof = true;
-            for t in &mut self.tracks {
-                let _ = t.decoder.send_eof();
-                drain(t, trim_before)?;
-                t.eof = true;
-            }
-            return Ok(());
-        };
-        let tb = stream.time_base();
-        let packet_s = packet
-            .pts()
-            .or(packet.dts())
-            .map(|p| p as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()));
-        if let Some(p) = packet_s {
-            match self.demux_pos_s {
-                None => {
-                    self.demux_pos_s = Some(p);
-                    self.landing_s = p;
-                }
-                Some(cur) if p > cur => self.demux_pos_s = Some(p),
-                _ => {}
+        for t in &mut self.tracks {
+            while !t.eof && t.pending.is_empty() {
+                decode_some(t, Some(target_s))?;
             }
         }
-        let pos = self.demux_pos_s.unwrap_or(self.landing_s);
-        let Some(t) = self.tracks.iter_mut().find(|t| t.index == stream.index()) else {
-            self.mark_ended(pos);
-            return Ok(());
-        };
-        t.last_packet_s = Some(packet_s.unwrap_or(pos));
-        t.ended = false;
-        if t.decoder.send_packet(&packet).is_err() {
-            self.mark_ended(pos);
-            return Ok(());
-        }
-        drain(t, trim_before)?;
-        self.mark_ended(pos);
         Ok(())
     }
 
-    /// Tracks the demuxer has left behind by `ENDED_GAP_S` count as ended.
-    fn mark_ended(&mut self, pos: f64) {
-        for t in &mut self.tracks {
-            let reference = t.last_packet_s.unwrap_or(self.landing_s);
-            if !t.eof && !t.ended && pos - reference > ENDED_GAP_S {
-                t.ended = true;
-            }
-        }
-    }
-
     /// The largest decoded-but-unmixed buffer across tracks, in frames
-    /// (bounded by the ended-track rule; for tests).
+    /// (for tests).
     pub fn pending_frames(&self) -> usize {
         self.tracks
             .iter()
@@ -344,18 +266,10 @@ impl Mixer {
     /// Produces `frames` mixed canonical frames at the source rate (no tempo).
     fn mix_block(&mut self, frames: usize, gains: &[f32], master: f32) -> Result<Option<Vec<f32>>> {
         // Fill every live track up to `frames`.
-        loop {
-            let short = self
-                .tracks
-                .iter()
-                .any(|t| !t.eof && !t.ended && t.pending.len() < frames * CANONICAL_CHANNELS);
-            if !short {
-                break;
+        for t in &mut self.tracks {
+            while !t.eof && t.pending.len() < frames * CANONICAL_CHANNELS {
+                decode_some(t, None)?;
             }
-            if self.demux_eof {
-                break;
-            }
-            self.decode_some(None)?;
         }
         let available = self
             .tracks
@@ -431,6 +345,22 @@ impl Mixer {
         self.consumed_frames += (out_frames * f64::from(self.rate)).round() as u64;
         Ok(Some(out))
     }
+}
+
+/// Demuxes one of `t`'s packets and decodes it into its pending buffer.
+/// With `trim_before`, decoded audio before that time is dropped.
+fn decode_some(t: &mut Track, trim_before: Option<f64>) -> Result<()> {
+    let next = t.ictx.packets().next().map(|(s, p)| (s.index(), p));
+    let Some((index, packet)) = next else {
+        let _ = t.decoder.send_eof();
+        drain(t, trim_before)?;
+        t.eof = true;
+        return Ok(());
+    };
+    if index != t.index || t.decoder.send_packet(&packet).is_err() {
+        return Ok(());
+    }
+    drain(t, trim_before)
 }
 
 fn drain(t: &mut Track, trim_before: Option<f64>) -> Result<()> {

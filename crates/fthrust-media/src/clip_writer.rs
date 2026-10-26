@@ -145,13 +145,55 @@ fn write_temporary(
         outcome.audio_error = Some(errors.join("; "));
     }
 
+    // Audio is encoded up front (AAC is small: about 1.5 MB a minute) so it
+    // can be written interleaved with the video by decode time. Written
+    // after the video, a clip longer than the muxer's 10 s interleave window
+    // had all its audio at the end of the file.
+    let mut audio: Vec<(usize, i32, Vec<crate::ffi::codec::RawPacket>)> = Vec::new();
+    for (mut enc, index, track) in encoders {
+        let rate = enc.sample_rate() as i32;
+        let mut packets = Vec::new();
+        enc.encode(track.samples, |pkt| packets.push(pkt))
+            .map_err(|e| {
+                crate::MediaError::Invalid(format!(
+                    "Failed while encoding audio for the temporary clip: {e}"
+                ))
+            })?;
+        enc.flush(|pkt| packets.push(pkt)).map_err(|e| {
+            crate::MediaError::Invalid(format!(
+                "Failed while finalizing audio for the temporary clip: {e}"
+            ))
+        })?;
+        audio.push((index, rate, packets));
+        outcome.audio_tracks.push(track.title.to_string());
+    }
+    outcome.audio_included = !audio.is_empty();
+
     mux.write_header()?;
 
+    let audio_write_err = |e: crate::MediaError| {
+        crate::MediaError::Invalid(format!(
+            "Failed while writing audio packets to the temporary clip: {e}"
+        ))
+    };
+    // Next unwritten packet per audio track.
+    let mut next = vec![0usize; audio.len()];
     let mut bytes_out = 0u64;
     let mut scratch = Vec::new();
     for p in &snapshot.packets {
         if p.data.is_empty() {
             continue;
+        }
+        let dts = p.dts - snapshot.presentation_start_pts;
+        // Audio due at or before this video packet goes first.
+        for ((index, rate, packets), n) in audio.iter().zip(next.iter_mut()) {
+            while let Some(a) = packets.get(*n)
+                && i128::from(a.dts) * i128::from(fps) <= i128::from(dts) * i128::from(*rate)
+            {
+                mux.write_packet(*index, &a.data, a.pts, a.dts, 0, true, (1, *rate))
+                    .map_err(audio_write_err)?;
+                *n += 1;
+            }
         }
         p.data
             .with_bytes(&mut scratch, |bytes| {
@@ -159,7 +201,7 @@ fn write_temporary(
                     video_index,
                     bytes,
                     p.pts - snapshot.presentation_start_pts,
-                    p.dts - snapshot.presentation_start_pts,
+                    dts,
                     1,
                     p.keyframe,
                     (1, fps as i32),
@@ -181,35 +223,12 @@ fn write_temporary(
         }
     }
     outcome.bytes_written = bytes_out;
-
-    for (mut enc, index, track) in encoders {
-        let rate = enc.sample_rate() as i32;
-        let mut write_err: Option<crate::MediaError> = None;
-        let mut sink = |pkt: crate::ffi::codec::RawPacket| {
-            if write_err.is_none()
-                && let Err(e) =
-                    mux.write_packet(index, &pkt.data, pkt.pts, pkt.dts, 0, true, (1, rate))
-            {
-                write_err = Some(e);
-            }
-        };
-        enc.encode(track.samples, &mut sink).map_err(|e| {
-            crate::MediaError::Invalid(format!(
-                "Failed while encoding audio for the temporary clip: {e}"
-            ))
-        })?;
-        enc.flush(&mut sink).map_err(|e| {
-            crate::MediaError::Invalid(format!(
-                "Failed while finalizing audio for the temporary clip: {e}"
-            ))
-        })?;
-        if let Some(e) = write_err {
-            return Err(crate::MediaError::Invalid(format!(
-                "Failed while writing audio packets to the temporary clip: {e}"
-            )));
+    // The audio that runs past the last video packet.
+    for ((index, rate, packets), n) in audio.iter().zip(&next) {
+        for a in &packets[*n..] {
+            mux.write_packet(*index, &a.data, a.pts, a.dts, 0, true, (1, *rate))
+                .map_err(audio_write_err)?;
         }
-        outcome.audio_included = true;
-        outcome.audio_tracks.push(track.title.to_string());
     }
 
     mux.finish()?;
