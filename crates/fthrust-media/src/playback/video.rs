@@ -12,6 +12,10 @@ use ffmpeg_next::{codec, format, frame};
 use crate::ffi::scaler::SendScaler;
 use crate::{MediaError, Result};
 
+/// Decoder threads in the UI process: 1080p180 H.264 decodes at about 2.6x
+/// real time with four (1.7x with one), for some 27 MB more than one thread;
+/// FFmpeg's automatic count is faster still but holds twice the frames.
+const PLAYBACK_DECODE_THREADS: usize = 4;
 /// What the stream says about itself.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VideoInfo {
@@ -81,7 +85,8 @@ impl VideoDecoder {
         } else {
             0.0
         };
-        let ctx = codec::context::Context::from_parameters(stream.parameters())?;
+        let mut ctx = codec::context::Context::from_parameters(stream.parameters())?;
+        ctx.set_threading(crate::frame_threads(PLAYBACK_DECODE_THREADS));
         let decoder = ctx.decoder().video()?;
         let duration_ms = if ictx.duration() > 0 {
             (ictx.duration() as f64 * 1000.0 / f64::from(ffmpeg_next::ffi::AV_TIME_BASE)).round()

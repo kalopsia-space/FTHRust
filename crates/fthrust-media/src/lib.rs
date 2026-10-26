@@ -81,6 +81,16 @@ pub type Result<T> = std::result::Result<T, MediaError>;
 
 static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
+/// Frame-threaded decoding with `count` threads (`0`: FFmpeg's automatic
+/// count, one per core plus one). Our encoders write one slice per frame, so
+/// slice threads would leave decoding on a single core.
+pub(crate) fn frame_threads(count: usize) -> ffmpeg_next::codec::threading::Config {
+    ffmpeg_next::codec::threading::Config {
+        kind: ffmpeg_next::codec::threading::Type::Frame,
+        count,
+    }
+}
+
 /// Initialises FFmpeg once per process. Safe to call repeatedly.
 pub fn init() -> Result<()> {
     INIT.get_or_init(|| ffmpeg_next::init().map_err(|e| e.to_string()))

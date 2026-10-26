@@ -126,8 +126,7 @@ fn split_shared_inputs(graph: &str, uses: &BTreeMap<String, usize>) -> String {
     }
 }
 
-/// Slice threads with FFmpeg's automatic count (frame threads delay
-/// frames past the graph's end-of-range handling).
+/// Slice threads with FFmpeg's automatic count, for the audio decoders.
 fn decoder_threads() -> ff::codec::threading::Config {
     ff::codec::threading::Config {
         kind: ff::codec::threading::Type::Slice,
@@ -272,7 +271,9 @@ fn build_graph(
                 .stream(index)
                 .ok_or(Stop::Failed("video stream missing".into()))?;
             let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
-            ctx.set_threading(decoder_threads());
+            // Frame threads, automatic count: our clips have one slice per
+            // frame, which slice threads cannot split.
+            ctx.set_threading(crate::frame_threads(0));
             let dec = ctx.decoder().video()?;
             let tb = stream.time_base();
             let sar = dec.aspect_ratio();
