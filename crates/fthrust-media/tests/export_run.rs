@@ -710,3 +710,206 @@ fn camera_movie_overlay_burns() {
         40
     ));
 }
+
+/// A 2 s 320×180 video-only clip of one solid colour.
+fn solid_clip(dir: &Path, name: &str, rgb: [u8; 3]) -> Option<PathBuf> {
+    use fthrust_core::capture_config::{Codec, EncoderPref};
+    use fthrust_media::clip_writer::{ClipVideo, write_clip};
+    use fthrust_media::encoder::{Encoder, EncoderConfig};
+    use fthrust_media::ring::EncodedRing;
+    support::skip_unless_encoder(&["libopenh264", "libx264"])?;
+    const FPS: u32 = 30;
+    const SECOND: i64 = 1_000_000_000;
+    let (w, h) = (320u32, 180u32);
+    let cfg = EncoderConfig {
+        src_width: w,
+        src_height: h,
+        enc_width: w,
+        enc_height: h,
+        fps: FPS,
+        bitrate_kbps: 4000,
+        codec: Codec::H264,
+        encoder: EncoderPref::Software,
+        preset: 1,
+    };
+    let mut encoder = Encoder::open(&cfg).unwrap();
+    let bgra: Vec<u8> = (0..w * h)
+        .flat_map(|_| [rgb[2], rgb[1], rgb[0], 255])
+        .collect();
+    let mut out = Vec::new();
+    for i in 0..2 * FPS {
+        let ts = i64::from(i) * SECOND / i64::from(FPS);
+        encoder
+            .encode(&bgra, (w * 4) as usize, w, h, ts, &mut out)
+            .unwrap();
+    }
+    encoder.flush(&mut out).unwrap();
+    let ring = EncodedRing::new(10_000, FPS, 0);
+    for p in out {
+        ring.push(p);
+    }
+    let snapshot = ring.snapshot(2_000, 2 * SECOND, 0).unwrap();
+    let video = ClipVideo {
+        snapshot: &snapshot,
+        codec_id: encoder.codec_id(),
+        extradata: &encoder.extradata(),
+        width: w,
+        height: h,
+        bitrate_kbps: 4000,
+        separate_audio: false,
+    };
+    let path = dir.join(name);
+    write_clip(&path, &video, &[], None).unwrap();
+    Some(path)
+}
+
+/// The centre pixel of `path`'s first frame, decoded as BT.709 studio range.
+fn centre_rgb(path: &Path) -> [u8; 3] {
+    use ffmpeg_next::{format, frame, media, software::scaling};
+    let mut ictx = format::input(path).unwrap();
+    let st = ictx.streams().best(media::Type::Video).unwrap();
+    let index = st.index();
+    let ctx = ffmpeg_next::codec::Context::from_parameters(st.parameters()).unwrap();
+    let mut dec = ctx.decoder().video().unwrap();
+    let mut yuv = frame::Video::empty();
+    let mut got = false;
+    for (s, packet) in ictx.packets() {
+        if s.index() != index {
+            continue;
+        }
+        dec.send_packet(&packet).unwrap();
+        if dec.receive_frame(&mut yuv).is_ok() {
+            got = true;
+            break;
+        }
+    }
+    if !got {
+        dec.send_eof().unwrap();
+        dec.receive_frame(&mut yuv).unwrap();
+    }
+    let (w, h) = (yuv.width(), yuv.height());
+    let mut sws = scaling::Context::get(
+        yuv.format(),
+        w,
+        h,
+        ffmpeg_next::format::Pixel::RGB24,
+        w,
+        h,
+        scaling::Flags::BILINEAR,
+    )
+    .unwrap();
+    // SAFETY: a valid context; the coefficient table is static.
+    unsafe {
+        let c = ffmpeg_next::ffi::sws_getCoefficients(ffmpeg_next::ffi::SWS_CS_ITU709);
+        ffmpeg_next::ffi::sws_setColorspaceDetails(
+            sws.as_mut_ptr(),
+            c,
+            0,
+            c,
+            1,
+            0,
+            1 << 16,
+            1 << 16,
+        );
+    }
+    let mut rgb = frame::Video::empty();
+    sws.run(&yuv, &mut rgb).unwrap();
+    let i = (h as usize / 2) * rgb.stride(0) + (w as usize / 2) * 3;
+    let d = rgb.data(0);
+    [d[i], d[i + 1], d[i + 2]]
+}
+
+#[test]
+fn reencoded_export_keeps_the_source_colours() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (n, rgb) in [[200, 120, 60], [60, 120, 200], [230, 30, 30], [40, 200, 90]]
+        .into_iter()
+        .enumerate()
+    {
+        let Some(src) = solid_clip(tmp.path(), &format!("src{n}.mp4"), rgb) else {
+            return;
+        };
+        let mut s = spec(&[(0.0, 1.0)]);
+        s.has_audio = false;
+        s.force_video_encode = true;
+        let out = tmp.path().join(format!("out{n}.mp4"));
+        let (r, _, _) = run_job(&job(&src, out.clone(), &s, Quality::Quality));
+        assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+        let (a, b) = (centre_rgb(&src), centre_rgb(&out));
+        let worst = (0..3)
+            .map(|k| (i32::from(a[k]) - i32::from(b[k])).abs())
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 6,
+            "colour {rgb:?}: source decodes to {a:?}, export to {b:?}"
+        );
+        let tags = colour_tags(&out);
+        assert_eq!(
+            tags,
+            ["tv", "bt709", "bt709", "bt709"],
+            "export colour tags"
+        );
+    }
+}
+
+/// `[range, matrix, transfer, primaries]` of the first video stream.
+fn colour_tags(path: &Path) -> [String; 4] {
+    let ictx = ffmpeg_next::format::input(path).unwrap();
+    let st = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .unwrap();
+    // SAFETY: codecpar is valid while the input is open.
+    let par = unsafe { &*st.parameters().as_ptr() };
+    let name = |p: *const std::ffi::c_char| {
+        if p.is_null() {
+            "unknown".to_string()
+        } else {
+            // SAFETY: FFmpeg returns static C strings.
+            unsafe { std::ffi::CStr::from_ptr(p) }
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    // SAFETY: the av_color_*_name functions take enum values and return
+    // static strings or null.
+    unsafe {
+        [
+            name(ffmpeg_next::ffi::av_color_range_name(par.color_range)),
+            name(ffmpeg_next::ffi::av_color_space_name(par.color_space)),
+            name(ffmpeg_next::ffi::av_color_transfer_name(par.color_trc)),
+            name(ffmpeg_next::ffi::av_color_primaries_name(
+                par.color_primaries,
+            )),
+        ]
+    }
+}
+
+#[test]
+fn playback_decoder_uses_the_clips_bt709_matrix() {
+    // The editor's decoder and the export pipeline must agree on colour:
+    // swscale's default (BT.601) shifts BT.709 reds by about 20 levels.
+    let tmp = tempfile::tempdir().unwrap();
+    for (n, rgb) in [[230, 30, 30], [40, 200, 90], [60, 120, 200]]
+        .into_iter()
+        .enumerate()
+    {
+        let Some(src) = solid_clip(tmp.path(), &format!("p{n}.mp4"), rgb) else {
+            return;
+        };
+        let expected = centre_rgb(&src);
+        let mut dec = fthrust_media::playback::video::VideoDecoder::open(&src).unwrap();
+        let frame = dec.next_frame().unwrap().expect("a frame");
+        let i = ((frame.height / 2 * frame.width + frame.width / 2) * 4) as usize;
+        let got = [frame.rgba[i], frame.rgba[i + 1], frame.rgba[i + 2]];
+        let worst = (0..3)
+            .map(|k| (i32::from(got[k]) - i32::from(expected[k])).abs())
+            .max()
+            .unwrap();
+        assert!(
+            worst <= 3,
+            "colour {rgb:?}: BT.709 decode {expected:?}, viewer {got:?}"
+        );
+    }
+}

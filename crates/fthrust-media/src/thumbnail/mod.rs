@@ -99,6 +99,9 @@ pub fn extract_frame(
                 h,
                 Flags::BILINEAR,
             )?);
+            if let Some(s) = scaler.as_mut() {
+                crate::ffi::scaler::match_source_colorspace(s, decoded);
+            }
         }
         let out = rgba.get_or_insert_with(|| frame::Video::new(Pixel::RGBA, w, h));
         if out.width() != w || out.height() != h {

@@ -156,6 +156,9 @@ impl VideoDecoder {
                 h,
                 Flags::BILINEAR,
             )?));
+            if let Some(s) = self.scaler.as_mut() {
+                crate::ffi::scaler::match_source_colorspace(&mut s.0, decoded);
+            }
         }
         let out = self
             .rgba

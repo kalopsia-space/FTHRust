@@ -133,6 +133,42 @@ impl Drop for Scaler {
     }
 }
 
+/// Points a YUV-to-RGB `ctx` at `frame`'s own matrix and range, producing
+/// full-range RGB. Untagged frames use BT.709 from 720 lines up and BT.601
+/// below, FFmpeg's convention. Without this swscale assumes BT.601, which
+/// shifts the colours of BT.709 video.
+pub fn match_source_colorspace(
+    ctx: &mut ffmpeg_next::software::scaling::Context,
+    frame: &ffmpeg_next::frame::Video,
+) {
+    use ffmpeg_next::util::color::{Range, Space};
+    let matrix = match frame.color_space() {
+        Space::BT709 => ffi::SWS_CS_ITU709,
+        Space::BT470BG | Space::SMPTE170M => ffi::SWS_CS_ITU601,
+        Space::BT2020NCL | Space::BT2020CL => ffi::SWS_CS_BT2020,
+        _ if frame.height() >= 720 => ffi::SWS_CS_ITU709,
+        _ => ffi::SWS_CS_ITU601,
+    };
+    let full_range = i32::from(frame.color_range() == Range::JPEG);
+    // SAFETY: the context is valid for the borrow; the coefficient table is
+    // static. A failure leaves the context's previous (default) details.
+    unsafe {
+        let coefficients = ffi::sws_getCoefficients(matrix);
+        if !coefficients.is_null() {
+            ffi::sws_setColorspaceDetails(
+                ctx.as_mut_ptr(),
+                coefficients,
+                full_range,
+                coefficients,
+                1,
+                0,
+                1 << 16,
+                1 << 16,
+            );
+        }
+    }
+}
+
 /// An `ffmpeg_next` software scaler that may move to a worker thread. The
 /// wrapped `SwsContext` is only used through `&mut self` by one owner.
 pub struct SendScaler(pub ffmpeg_next::software::scaling::Context);
