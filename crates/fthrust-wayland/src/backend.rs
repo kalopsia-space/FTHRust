@@ -50,6 +50,9 @@ pub enum CaptureFailure {
     Disconnected,
     /// The compositor reported a failure, or a protocol error occurred.
     Failed(String),
+    /// The dmabuf images no longer fit the session (new buffer constraints
+    /// or a geometry change): the caller supplies new ones or uses shm.
+    DmabufInvalidated,
 }
 
 impl std::fmt::Display for CaptureFailure {
@@ -61,6 +64,9 @@ impl std::fmt::Display for CaptureFailure {
             CaptureFailure::Cancelled => f.write_str("capture cancelled"),
             CaptureFailure::Disconnected => f.write_str("the Wayland connection was lost"),
             CaptureFailure::Failed(reason) => f.write_str(reason),
+            CaptureFailure::DmabufInvalidated => {
+                f.write_str("the dmabuf capture buffers no longer fit the session")
+            }
         }
     }
 }
@@ -95,6 +101,10 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
         CaptureFailure::Failed(reason) => {
             BackendError::new(FailureKind::Error, format!("{step}: {reason}"))
         }
+        CaptureFailure::DmabufInvalidated => BackendError::new(
+            FailureKind::Error,
+            format!("{step}: {}", CaptureFailure::DmabufInvalidated),
+        ),
     }
 }
 
