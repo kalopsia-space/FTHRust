@@ -585,3 +585,25 @@ fn startup_failure_is_reported_even_when_instant() {
         h.engine.shutdown();
     }
 }
+
+#[test]
+fn static_screen_repeats_do_not_convert() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    let mut script = wlr_ok(320, 180);
+    script.static_after = Some(1);
+    let mut h = harness(config(|_| {}), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    let before = h.engine.encoder_conversions();
+    let frames = h.engine.status().frames_captured;
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= frames + 30
+    });
+    assert_eq!(h.engine.encoder_conversions(), before);
+    assert!(h.engine.ring().stats().packets > 0);
+    h.engine.shutdown();
+}

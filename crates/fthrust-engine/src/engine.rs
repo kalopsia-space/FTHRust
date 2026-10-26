@@ -141,6 +141,7 @@ struct Inner {
     keyframe_request: AtomicBool,
     record_overflow: AtomicBool,
     normalized_frames: AtomicU64,
+    encoder_conversions: AtomicU64,
 }
 
 impl Inner {
@@ -196,6 +197,7 @@ impl CaptureEngine {
             keyframe_request: AtomicBool::new(false),
             record_overflow: AtomicBool::new(false),
             normalized_frames: AtomicU64::new(0),
+            encoder_conversions: AtomicU64::new(0),
         });
         Self {
             config,
@@ -373,6 +375,12 @@ impl CaptureEngine {
     /// Frames that needed a `normalize` copy before encoding.
     pub fn normalized_frames(&self) -> u64 {
         self.inner.normalized_frames.load(Ordering::Relaxed)
+    }
+
+    /// Colour conversions the current encoder has run (tests).
+    #[doc(hidden)]
+    pub fn encoder_conversions(&self) -> u64 {
+        self.inner.encoder_conversions.load(Ordering::Relaxed)
     }
 
     /// The encoded ring.
@@ -901,7 +909,34 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     }
                 });
             };
-            let encoded = if view.is_encodable_as_is() {
+            // A repeated frame on a static screen re-sends the last encoded
+            // surface; without one (first frame, size change) it encodes.
+            let repeated = if view.repeated {
+                packets.clear();
+                if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                    enc.request_keyframe();
+                }
+                match enc.encode_repeat(ts, &mut packets) {
+                    Ok(true) => Some(Ok(())),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e.to_string())),
+                }
+            } else {
+                None
+            };
+            let encoded = if let Some(result) = repeated {
+                if view.is_encodable_as_is()
+                    && let Some(m) = watchdog.observe_raw(
+                        view.data,
+                        view.width as usize,
+                        view.height as usize,
+                        view.stride,
+                    )
+                {
+                    update_content(m);
+                }
+                result
+            } else if view.is_encodable_as_is() {
                 if let Some(m) = watchdog.observe_raw(
                     view.data,
                     view.width as usize,
@@ -947,6 +982,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     Err(e) => Err(e.to_string()),
                 }
             };
+            inner
+                .encoder_conversions
+                .store(enc.conversions(), Ordering::Relaxed);
             match encoded {
                 Ok(()) => {
                     encode_failures.on_encode_result(true);

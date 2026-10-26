@@ -209,6 +209,9 @@ pub struct SyntheticScript {
     /// Output transform the frames arrive with (the buffer is in output
     /// orientation; `native_size` reports the upright size).
     pub transform: OutputTransform,
+    /// After this many frames the screen goes static: the last frame is
+    /// delivered again, marked `repeated`.
+    pub static_after: Option<u64>,
 }
 
 impl SyntheticScript {
@@ -222,6 +225,7 @@ impl SyntheticScript {
             short_stride: false,
             black: false,
             transform: OutputTransform::Normal,
+            static_after: None,
         }
     }
 
@@ -353,10 +357,16 @@ impl CaptureBackend for SyntheticBackend {
             std::thread::sleep(self.next_at - now);
         }
         self.next_at = Instant::now() + interval;
+        let is_static = self
+            .script
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .static_after
+            .is_some_and(|n| self.frames >= n);
         let (w, h) = (self.width as usize, self.height as usize);
         let stride = if short_stride { w * 4 - 4 } else { w * 4 };
         self.buffer.resize(stride * h, 0);
-        if !short_stride {
+        if !short_stride && !is_static {
             let shift = (self.frames % 256) as u8;
             for y in 0..h {
                 for x in 0..w {
@@ -384,7 +394,7 @@ impl CaptureBackend for SyntheticBackend {
             y_invert: false,
             transform,
             timestamp_ns: ts,
-            repeated: false,
+            repeated: is_static,
             source: FrameSource::Shm,
         })
     }

@@ -398,3 +398,52 @@ fn first_send_after_a_size_change_can_fall_back_to_cpu() {
     let (_, w, h) = decode::decode_frame_rgb(&enc.extradata(), &out, 7);
     assert_eq!((w, h), (320, 180));
 }
+
+#[test]
+fn repeats_keep_pts_monotonic_and_keyframes() {
+    let Some(mut enc) = open_vaapi(320, 180, 320, 180) else {
+        return;
+    };
+    let mut out = encode_synthetic(&mut enc, 320, 180, 5, 0);
+    for i in 5..10 {
+        assert!(
+            enc.encode_repeat(i64::from(i) * SECOND / 30, &mut out)
+                .unwrap()
+        );
+    }
+    enc.request_keyframe();
+    assert!(enc.encode_repeat(10 * SECOND / 30, &mut out).unwrap());
+    out.extend(encode_synthetic(&mut enc, 320, 180, 5, 11));
+    enc.flush(&mut out).unwrap();
+    assert_eq!(out.len(), 16);
+    assert!(
+        out.windows(2).all(|w| w[0].pts < w[1].pts),
+        "pts not increasing"
+    );
+    let after_request = out.iter().find(|p| p.pts == 10).unwrap();
+    assert!(after_request.keyframe, "repeat after a keyframe request");
+    let (a, ..) = decode::decode_frame_rgb(&enc.extradata(), &out, 4);
+    let (b, ..) = decode::decode_frame_rgb(&enc.extradata(), &out, 7);
+    assert_eq!(a.len(), b.len());
+    let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+    let mean = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| u64::from(x.abs_diff(*y)))
+        .sum::<u64>() as f64
+        / a.len() as f64;
+    // The codec refines a still image over the repeats, so a few edge pixels
+    // move by more than 2; the picture as a whole must stay put.
+    assert!(mean <= 0.5 && worst <= 8, "mean {mean:.2}, worst {worst}");
+}
+
+#[test]
+fn repeat_without_previous_frame_returns_false() {
+    let Some(mut enc) = open_vaapi(320, 180, 320, 180) else {
+        return;
+    };
+    let mut out = Vec::new();
+    assert!(!enc.encode_repeat(0, &mut out).unwrap());
+    assert!(out.is_empty());
+    assert_eq!(enc.conversions(), 0);
+}

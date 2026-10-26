@@ -99,6 +99,11 @@ pub struct Encoder {
     gpu_proven: bool,
     inject_convert_failure: bool,
     hw_frame: Option<OwnedFrame>,
+    /// Scratch frame holding a fresh reference to the last frame for repeats.
+    repeat_frame: OwnedFrame,
+    /// Whether the last frame handed to the codec can be sent again.
+    last_frame_valid: bool,
+    conversions: u64,
     cfg: EncoderConfig,
     pts_epoch_ns: Option<i64>,
     last_input_pts: i64,
@@ -323,6 +328,9 @@ impl Encoder {
             gpu_proven: false,
             inject_convert_failure: false,
             hw_frame,
+            repeat_frame: OwnedFrame::empty()?,
+            last_frame_valid: false,
+            conversions: 0,
             cfg: cfg.clone(),
             pts_epoch_ns: None,
             last_input_pts: -1,
@@ -476,6 +484,34 @@ impl Encoder {
             }
         }
 
+        self.last_frame_valid = false;
+        let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
+
+        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
+        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        if first_gpu && let Err(e) = &sent {
+            log_gpu_fallback(e);
+            self.switch_to_cpu(width, height)?;
+            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        }
+        sent?;
+        if self.cpu.is_none() {
+            self.gpu_proven = true;
+        }
+        self.last_frame_valid = true;
+        self.pending.push_back(FrameTiming {
+            pts: frame_pts,
+            wall_time_ns,
+        });
+        if force_key {
+            self.last_forced_keyframe_pts = frame_pts;
+        }
+        self.drain(wall_time_ns, out)
+    }
+
+    /// The pts for a frame captured at `wall_time_ns` and whether it is a
+    /// forced keyframe; consumes a pending keyframe request.
+    fn next_pts_and_key(&mut self, wall_time_ns: i64) -> (i64, bool) {
         let fps = i64::from(self.cfg.fps);
         let frame_pts = match self.pts_epoch_ns {
             None => {
@@ -494,26 +530,46 @@ impl Encoder {
         let force_key = self.last_forced_keyframe_pts < 0
             || frame_pts - self.last_forced_keyframe_pts >= self.forced_keyframe_interval
             || std::mem::take(&mut self.keyframe_requested);
+        (frame_pts, force_key)
+    }
 
-        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
-        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
-        if first_gpu && let Err(e) = &sent {
-            log_gpu_fallback(e);
-            self.switch_to_cpu(width, height)?;
-            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+    /// Sends the last frame handed to the codec again, stamped for
+    /// `wall_time_ns`: a new reference to its surface, no conversion. The pts
+    /// and keyframe follow the same rules as [`Encoder::encode`]. Returns
+    /// `Ok(false)`, sending nothing, when there is no previous frame to
+    /// repeat; the caller then uses `encode`.
+    pub fn encode_repeat(
+        &mut self,
+        wall_time_ns: i64,
+        out: &mut Vec<EncodedPacket>,
+    ) -> Result<bool> {
+        if !self.last_frame_valid || self.pts_epoch_ns.is_none() {
+            return Ok(false);
         }
-        sent?;
-        if self.cpu.is_none() {
-            self.gpu_proven = true;
-        }
-        self.pending.push_back(FrameTiming {
-            pts: frame_pts,
-            wall_time_ns,
-        });
+        // Both VA-API paths hand the codec `hw_frame`; software encoders
+        // take the scaler's output.
+        let last = match (&self.hw_frame, &self.cpu) {
+            (Some(hw), _) => hw,
+            (None, Some(cpu)) => &cpu.sw_frame,
+            (None, None) => return Ok(false),
+        };
+        self.repeat_frame.reference(last)?;
+        let (pts, force_key) = self.next_pts_and_key(wall_time_ns);
+        self.repeat_frame.set_pts(pts);
+        self.repeat_frame.set_forced_keyframe(force_key);
+        self.raw.send_frame(Some(&self.repeat_frame))?;
+        self.pending.push_back(FrameTiming { pts, wall_time_ns });
         if force_key {
-            self.last_forced_keyframe_pts = frame_pts;
+            self.last_forced_keyframe_pts = pts;
         }
-        self.drain(wall_time_ns, out)
+        self.drain(wall_time_ns, out)?;
+        Ok(true)
+    }
+
+    /// How many BGRA frames have been converted (tests).
+    #[doc(hidden)]
+    pub fn conversions(&self) -> u64 {
+        self.conversions
     }
 
     fn switch_to_cpu(&mut self, width: u32, height: u32) -> Result<()> {
@@ -545,6 +601,7 @@ impl Encoder {
             cpu.sw_frame.make_writable()?;
             cpu.scaler
                 .scale_bgra(bgra, stride, height, &mut cpu.sw_frame)?;
+            self.conversions += 1;
             cpu.sw_frame.set_pts(pts);
             cpu.sw_frame.set_forced_keyframe(force_key);
             match (self.raw.vaapi(), self.hw_frame.as_mut()) {
@@ -559,6 +616,7 @@ impl Encoder {
                 return Err(MediaError::Invalid("injected GPU convert failure".into()));
             }
             self.raw.convert(bgra, stride, hw_frame)?;
+            self.conversions += 1;
             hw_frame.set_pts(pts);
             hw_frame.set_forced_keyframe(force_key);
             self.raw.send_frame(Some(hw_frame))
