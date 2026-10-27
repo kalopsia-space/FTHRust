@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-core"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "idna",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-engine"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "crossbeam-channel",
  "ffmpeg-next",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-ipc"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "fthrust-core",
  "serde",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-media"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "fast_image_resize",
  "ffmpeg-next",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-portal"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "ashpd",
  "fthrust-core",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-ui"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "ashpd",
  "egui",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-uploader"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "fthrust-wayland"
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 dependencies = [
  "libc",
  "memmap2",
