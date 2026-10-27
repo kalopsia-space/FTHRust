@@ -115,7 +115,7 @@ Uploading lives in a third program, `fthrust-uploader`, which the app runs once 
 
 ## Status
 
-FTHRust Clips is an **alpha** (`2.0.0-alpha.1`). The core loop of capture, save, edit, export and upload is complete and covered by about 930 tests plus scripted runs of the real app. Some features are still partly wired; [Capturing](docs/capturing.md#whats-not-there-yet) lists them honestly. Hyprland on x86_64 is the tested setup. Other Wayland desktops should work, with the gaps described in [Installing](docs/install.md#desktop-support).
+FTHRust Clips is an **alpha** (`2.0.0-alpha.2`). The core loop of capture, save, edit, export and upload is complete and covered by about 1000 tests plus scripted runs of the real app. Some features are still partly wired; [Capturing](docs/capturing.md#whats-not-there-yet) lists them honestly. Hyprland on x86_64 is the tested setup. Other Wayland desktops should work, with the gaps described in [Installing](docs/install.md#desktop-support).
 
 Found a bug? Export a diagnostic report (**Settings → General → Troubleshooting**) and [open an issue](https://github.com/kalopsia-space/FTHRust/issues).
 

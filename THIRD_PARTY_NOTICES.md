@@ -2517,14 +2517,14 @@ For these and/or other purposes and motivations, and without any expectation of 
 
 ### GNU General Public License v3.0 only
 
-- `fthrust-core` 2.0.0-alpha.1
-- `fthrust-engine` 2.0.0-alpha.1
-- `fthrust-ipc` 2.0.0-alpha.1
-- `fthrust-media` 2.0.0-alpha.1
-- `fthrust-portal` 2.0.0-alpha.1
-- `fthrust-ui` 2.0.0-alpha.1
-- `fthrust-uploader` 2.0.0-alpha.1
-- `fthrust-wayland` 2.0.0-alpha.1
+- `fthrust-core` 2.0.0-alpha.2
+- `fthrust-engine` 2.0.0-alpha.2
+- `fthrust-ipc` 2.0.0-alpha.2
+- `fthrust-media` 2.0.0-alpha.2
+- `fthrust-portal` 2.0.0-alpha.2
+- `fthrust-ui` 2.0.0-alpha.2
+- `fthrust-uploader` 2.0.0-alpha.2
+- `fthrust-wayland` 2.0.0-alpha.2
 
 ```text
 GNU GENERAL PUBLIC LICENSE
