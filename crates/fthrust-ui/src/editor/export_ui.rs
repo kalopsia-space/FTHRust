@@ -30,6 +30,9 @@ pub const STILL_LOADING: &str = "The clip is still loading. Try again in a momen
 /// Export or Share of a clip the player could not open.
 pub const NOT_OPENED: &str = "The clip could not be opened.";
 
+/// Export or Share of a clip whose length could not be read.
+pub const NO_LENGTH: &str = "The clip's length could not be read.";
+
 /// The `export_quality` setting as a runner quality.
 pub fn quality(state: &AppState) -> Quality {
     Quality::from_setting(normalize_quality(
@@ -78,6 +81,10 @@ pub fn spec_for(state: &AppState) -> Result<ExportSpec, String> {
             _ => STILL_LOADING,
         }
         .into());
+    }
+    if e.duration_unreadable() {
+        // A 1 ms range is not an export of the clip.
+        return Err(NO_LENGTH.into());
     }
     let duration_s = e.duration_ms() as f64 / 1000.0;
     let ranges_s: Vec<(f64, f64)> = e

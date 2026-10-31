@@ -109,7 +109,7 @@ pub fn share_action(d: &CardData) -> Option<ShareAction> {
         // offers to upload again.
         None if d.uploaded => ShareAction {
             label: "Upload clip",
-            tooltip: "Uploaded, but no link came back. Press to upload again.",
+            tooltip: "Uploaded, but no link came back. Press for the option to upload again.",
             enabled: d.ready && !d.uploading,
             link: false,
         },

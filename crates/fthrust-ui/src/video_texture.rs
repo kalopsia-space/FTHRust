@@ -82,20 +82,19 @@ impl VideoTexture {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // The frame's bytes are gamma-encoded, and egui samples them
+                // as such (`Rgba8Unorm`) and blends in gamma space; an sRGB
+                // view would linearise the frame on sampling and apply gamma
+                // twice (dark midtones). A plain `Rgba8Unorm` texture is read
+                // the same way and needs no extra view format, which the GL
+                // fallback lacks: it panicked here when the editor opened.
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                view_formats: &[],
             });
-            // egui samples textures as gamma-encoded `Rgba8Unorm` and blends
-            // in gamma space; registering the sRGB view would linearise the
-            // frame on sampling and show it with gamma applied twice (dark
-            // midtones).
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(wgpu::TextureFormat::Rgba8Unorm),
-                ..Default::default()
-            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let id = rs.renderer.write().register_native_texture(
                 &rs.device,
                 &view,

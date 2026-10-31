@@ -86,7 +86,7 @@ fn an_uploaded_clip_without_a_link_keeps_its_upload_button_and_says_what_a_press
     assert!(!a.link);
     assert_eq!(
         a.tooltip,
-        "Uploaded, but no link came back. Press to upload again."
+        "Uploaded, but no link came back. Press for the option to upload again."
     );
     assert!(
         menu_items(&d).contains(&MenuItem::Upload),

@@ -229,6 +229,9 @@ pub struct Editor {
     /// then `duration_ms` is a 1 ms placeholder; after it, whatever the player
     /// says is the length, even a 0 or 1 ms one.
     duration_loaded: bool,
+    /// The player loaded but reported no length (a container without a
+    /// duration): there is nothing an export could cut.
+    duration_unreadable: bool,
     src_size: (u32, u32),
 }
 
@@ -300,6 +303,9 @@ impl Editor {
             lifecycle,
             Lifecycle::Preparing | Lifecycle::PlayQueued | Lifecycle::Failed
         );
+        // A loaded fixture with no length stands for a clip whose container
+        // reports none.
+        e.duration_unreadable = e.duration_loaded && duration_ms == 0;
         e.status = match lifecycle {
             Lifecycle::PlayQueued => "Preparing · play queued".into(),
             Lifecycle::Preparing => "Preparing clip…".into(),
@@ -356,6 +362,7 @@ impl Editor {
             source_gains: Vec::new(),
             duration_ms,
             duration_loaded: false,
+            duration_unreadable: false,
             src_size: PLACEHOLDER_SIZE,
         }
     }
@@ -410,6 +417,11 @@ impl Editor {
     /// player has loaded, its length is known whatever it is.
     pub fn duration_known(&self) -> bool {
         self.duration_loaded
+    }
+
+    /// The player loaded but could not tell the clip's length.
+    pub fn duration_unreadable(&self) -> bool {
+        self.duration_unreadable
     }
 
     /// Source size (a 1920×1080 placeholder until loaded).
@@ -617,6 +629,7 @@ impl Editor {
             self.duration_ms = player.duration_ms().max(1);
             self.timeline.duration_ms = self.duration_ms;
         }
+        self.duration_unreadable = player.duration_ms() == 0;
         self.duration_loaded = true;
         player.set_master_percent(self.master_volume);
         player.set_rate(self.speed as f32, self.preserve_pitch);

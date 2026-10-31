@@ -624,3 +624,17 @@ fn several_ranges_decode_from_the_first() {
         job.decode_from_s
     );
 }
+
+/// Review of the audit fixes: a clip the player loaded without a length
+/// refuses Export and Share instead of exporting a 1 ms range.
+#[test]
+fn a_clip_without_a_readable_length_is_not_exported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("no_length.mp4"),
+        0,
+        Lifecycle::Paused,
+    ));
+    assert_eq!(export_ui::spec_for(&s).unwrap_err(), export_ui::NO_LENGTH);
+}
