@@ -707,6 +707,12 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             if !inner.running.load(Ordering::Relaxed) {
                 break 'generations;
             }
+            if *kind == BackendKind::PortalScreenCast && failures.iter().any(is_transient) {
+                // A Wayland backend is only waiting out a compositor that
+                // is not answering or an absent output: the portal's
+                // dialog would come up for nothing.
+                break;
+            }
             match inner
                 .backends
                 .create(*kind, cfg, strict_output, inner.cancel.clone())
@@ -740,12 +746,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             // answering, the selected output is absent) is waited out
             // without consuming the budget; only genuine errors everywhere
             // count toward it.
-            let transient = failures.iter().any(|f| {
-                matches!(
-                    f.kind,
-                    FailureKind::CompositorUnreachable | FailureKind::OutputAbsent
-                )
-            });
+            let transient = failures.iter().any(is_transient);
             let reason = failures
                 .iter()
                 .map(|f| f.reason.as_str())
@@ -1242,6 +1243,15 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     }
     drop(s);
     inner.notify(EngineNotice::StatusChanged);
+}
+
+/// The compositor is not answering or the selected output is absent: waited
+/// out, never counted against the retry budget.
+fn is_transient(f: &BackendFailure) -> bool {
+    matches!(
+        f.kind,
+        FailureKind::CompositorUnreachable | FailureKind::OutputAbsent
+    )
 }
 
 /// Hands one encoded frame's packets to the ring and the recording tap and

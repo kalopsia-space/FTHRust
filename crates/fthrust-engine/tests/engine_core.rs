@@ -331,6 +331,54 @@ fn transient_failures_wait_without_budget() {
 }
 
 #[test]
+fn a_transient_wayland_failure_at_startup_does_not_open_the_portal() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The compositor does not answer the first connection: ext and wlr are
+    // waited out instead of falling through to the portal, whose dialog
+    // would come up for nothing.
+    let mut script = SyntheticScript::new(320, 180);
+    for kind in [BackendKind::ExtImageCopy, BackendKind::WlrScreencopy] {
+        script.kinds.insert(
+            kind,
+            KindScript {
+                fail_inits: VecDeque::from(vec![FailureKind::CompositorUnreachable]),
+                ..KindScript::default()
+            },
+        );
+    }
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script,
+            candidates: vec![
+                BackendKind::ExtImageCopy,
+                BackendKind::WlrScreencopy,
+                BackendKind::PortalScreenCast,
+            ],
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    let mut engine = CaptureEngine::new(config(|_| {}), deps);
+    engine.start().unwrap();
+    let s = wait_for(&engine, Duration::from_secs(5), |s| s.frames_captured >= 1);
+    engine.shutdown();
+    assert_eq!(s.backend, Some(BackendKind::ExtImageCopy), "{s:?}");
+    assert_eq!(s.capture_generation, 1);
+    assert_eq!(*sleeps.lock().unwrap(), [2000], "one transient wait");
+}
+
+#[test]
 fn output_absent_waits_and_resumes_same_output() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");

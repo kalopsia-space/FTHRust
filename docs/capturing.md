@@ -114,7 +114,7 @@ The action names are `save_clip`, `save_screenshot`, `start_recording`, `stop_re
 
 The monitor list defaults to **First Screen (Default)**. Pick a specific output if you game on a second monitor.
 
-Behind the scenes the engine tries three ways of capturing, in order: `ext-image-copy-capture`, `wlr-screencopy`, then the desktop's ScreenCast portal. The first two need no permission dialog. The portal asks once, remembers your answer, and is never re-opened on its own while recovering from an error, so a dialog never pops up mid-game. The cursor is included in all three.
+Behind the scenes the engine tries three ways of capturing, in order: `ext-image-copy-capture`, `wlr-screencopy`, then the desktop's ScreenCast portal. The first two need no permission dialog. When one of them is only waiting for the compositor to answer, or for your monitor to come back, the engine waits instead of falling back to the portal. The portal asks once, remembers your answer, and is never re-opened on its own while recovering from an error, so a dialog never pops up mid-game. The cursor is included in all three.
 
 If capture stalls (a frozen or blank feed), the engine notices, recovers, and shows **RECOVERING CAPTURE** while it does.
 
