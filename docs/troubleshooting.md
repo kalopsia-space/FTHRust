@@ -96,7 +96,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **STOP RECORDING FIRST**, **WAIT FOR CLIP SAVE** | That action has to wait for the recording or save in progress. |
 | **CAMERA UNAVAILABLE**, **CAMERA OVERLAY FAILED** | The webcam overlay couldn't be used. Clips save without it. |
 | **LIMITED FEATURE SUPPORT** | Your desktop doesn't share its window list, so game detection and focus pause are off. Capture and hotkeys are unaffected. See [Desktop support](install.md#desktop-support). |
-| **STARTUP PROBLEM** | FTHRust couldn't read or write one of its own files while starting (`settings.json`, `theme.json`, the theme folders), for example on a full or read-only disk, and opened anyway with defaults. The message names the file. A file that couldn't be read is left as it is, so that session's changes aren't saved; a damaged one is kept as `<name>.corrupt`. |
+| **STARTUP PROBLEM** | FTHRust couldn't read or write one of its own files while starting (`settings.json`, `theme.json`, the theme folders), for example on a full or read-only disk, and opened anyway with defaults. The message names the file, and shows even if you turned error notifications off. A file that couldn't be read is left as it is, so that session's changes aren't saved; a damaged one is kept as `<name>.corrupt`. |
 
 ## Logs
 
