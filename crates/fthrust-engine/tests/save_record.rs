@@ -878,3 +878,47 @@ fn starting_a_recording_does_not_wait_on_the_engine() {
     assert!(path.exists());
     r.engine.shutdown();
 }
+
+fn record_for(r: &Rig, id: u64, path: &std::path::Path, seconds: Duration) -> Event {
+    r.record.start(id, path.to_path_buf());
+    next_event(
+        &r.events,
+        Duration::from_secs(10),
+        |e| matches!(e, Event::RecordingStarted { request_id, .. } if *request_id == id),
+    );
+    std::thread::sleep(seconds);
+    r.record.stop(id + 1);
+    next_event(&r.events, Duration::from_secs(10), |e| {
+        matches!(
+            e,
+            Event::RecordingStopped { .. } | Event::RecordingError { .. }
+        )
+    })
+}
+
+#[test]
+fn recordings_carry_the_microphone() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Clips get Default Mix and Microphone; recordings only ever wrote the
+    // desktop track.
+    let mut r = rig(
+        config(|_| {}),
+        SyntheticAudio::new(),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 30);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mic.mp4");
+    let e = record_for(&r, 61, &path, Duration::from_secs(2));
+    assert!(matches!(e, Event::RecordingStopped { .. }), "{e:?}");
+    let names: Vec<String> = fthrust_media::combined_audio::descriptors_from_file(&path)
+        .unwrap()
+        .into_iter()
+        .map(|d| d.handler_name.unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["Default Mix", "Microphone"]);
+    r.engine.shutdown();
+}

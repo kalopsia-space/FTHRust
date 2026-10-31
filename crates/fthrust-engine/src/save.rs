@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use fthrust_core::capture_health::flags;
-use fthrust_ipc::{Event, RecordingState, SavedClip, StatusSnapshot};
+use fthrust_ipc::{Event, RecordingState, SavedClip, SourceStatus, StatusSnapshot};
 use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
 use fthrust_media::recorder::{Recorder, RecorderAudio, RecorderConfig};
 use fthrust_media::ring::EncodedPacket;
@@ -480,6 +480,8 @@ impl RecordJob {
     }
 
     /// Admits the recording, opens the file and installs the packet tap.
+    /// The file gets one AAC track per capturing source, titled like a
+    /// clip's.
     fn open(&self) -> Result<Opened, String> {
         let status = self.engine.status();
         let Some(enc) = self.engine.encoder_snapshot() else {
@@ -491,7 +493,24 @@ impl RecordJob {
             );
         }
         let config = self.engine.config();
-        let with_audio = config.capture.audio_enabled;
+        let sources: Vec<(AudioSourceKind, &str)> = [
+            (
+                AudioSourceKind::System,
+                SYSTEM_TRACK,
+                config.capture.audio_enabled,
+                &status.audio.system,
+            ),
+            (
+                AudioSourceKind::Microphone,
+                MICROPHONE_TRACK,
+                !config.capture.microphone_endpoint_id.is_empty(),
+                &status.audio.microphone,
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, _, enabled, state)| *enabled && **state != SourceStatus::Disabled)
+        .map(|(kind, title, _, _)| (kind, title))
+        .collect();
         let rec_cfg = RecorderConfig {
             codec_id: enc.codec_id,
             extradata: enc.extradata.clone(),
@@ -499,10 +518,14 @@ impl RecordJob {
             height: enc.height,
             fps: enc.fps,
             bitrate_kbps: enc.bitrate_kbps,
-            audio: with_audio.then_some(RecorderAudio {
-                sample_rate: fthrust_media::audio_timing::SAMPLE_RATE,
-                channels: fthrust_media::audio_timing::CHANNELS as u32,
-            }),
+            audio: sources
+                .iter()
+                .map(|(_, title)| RecorderAudio {
+                    sample_rate: fthrust_media::audio_timing::SAMPLE_RATE,
+                    channels: fthrust_media::audio_timing::CHANNELS as u32,
+                    title: (*title).to_string(),
+                })
+                .collect(),
         };
         let recorder = Recorder::start(&self.path, &rec_cfg).map_err(|e| e.to_string())?;
         let capacity = (u64::from(enc.fps) * self.backlog_seconds) as usize;
@@ -511,7 +534,7 @@ impl RecordJob {
         Ok(Opened {
             recorder,
             rx,
-            with_audio,
+            sources: sources.into_iter().map(|(kind, _)| kind).collect(),
             generation: enc.generation,
         })
     }
@@ -520,7 +543,7 @@ impl RecordJob {
         let Opened {
             mut recorder,
             rx,
-            with_audio,
+            sources,
             generation,
         } = opened;
         {
@@ -541,7 +564,7 @@ impl RecordJob {
         let mut audio_cursor_ns = monotonic_ns() - RECORD_AUDIO_LAG_NS;
         let mut failure: Option<String> = None;
         let mut stopped = false;
-        loop {
+        'run: loop {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(p) => {
                     if p.generation != generation {
@@ -556,15 +579,17 @@ impl RecordJob {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
-            if with_audio {
+            if !sources.is_empty() {
                 let now = monotonic_ns() - RECORD_AUDIO_LAG_NS;
                 let elapsed_ms = ((now - audio_cursor_ns).max(0) / 1_000_000) as u32;
                 if elapsed_ms >= RECORD_AUDIO_STEP_MS {
-                    if let Some(samples) = audio.window(AudioSourceKind::System, now, elapsed_ms)
-                        && let Err(e) = recorder.write_audio(&samples)
-                    {
-                        failure = Some(e.to_string());
-                        break;
+                    for (track, kind) in sources.iter().enumerate() {
+                        if let Some(samples) = audio.window(*kind, now, elapsed_ms)
+                            && let Err(e) = recorder.write_audio(track, &samples)
+                        {
+                            failure = Some(e.to_string());
+                            break 'run;
+                        }
                     }
                     audio_cursor_ns = now;
                 }
@@ -609,6 +634,6 @@ impl RecordJob {
 struct Opened {
     recorder: Recorder,
     rx: Receiver<EncodedPacket>,
-    with_audio: bool,
+    sources: Vec<AudioSourceKind>,
     generation: u64,
 }
