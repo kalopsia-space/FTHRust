@@ -239,6 +239,38 @@ fn binary_round_trip() {
     assert_eq!(v["message"], json!("Uploader request is not valid JSON."));
 }
 
+/// `--version` is what `tools/check-version.sh` and the packaging read from
+/// every binary: the name and the version, exit status 0, and no waiting for
+/// a request on stdin.
+#[test]
+fn version_flag_prints_the_version_without_reading_a_request() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fthrust-uploader"))
+        .arg("--version")
+        // Open and silent: a binary that reads its request first hangs here.
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("--version waited for a request on stdin");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let out = child.wait_with_output().unwrap();
+    assert!(status.success(), "{status}");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        format!("fthrust-uploader {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
 /// Runs the binary on a Catbox connection test with the test overrides in its
 /// environment, and returns its reply and whether anything connected to the
 /// address `FTHRUST_UPLOADER_CATBOX_URL` named. (Proxy variables point at a

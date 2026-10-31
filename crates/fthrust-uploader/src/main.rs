@@ -1,11 +1,17 @@
 //! `fthrust-uploader`: one JSON request on stdin, one JSON line on stdout,
-//! exit status 0 only when the response is ok.
+//! exit status 0 only when the response is ok. `fthrust-uploader --version`
+//! prints `fthrust-uploader <version>` and exits 0 (what
+//! `tools/check-version.sh` and the packaging read from every binary).
 
 use std::io::{Read, Write};
 
 use fthrust_uploader::{Env, Response, handle};
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("fthrust-uploader {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let mut input = String::new();
     let response = match std::io::stdin().read_to_string(&mut input) {
         Err(_) => Response::fail("Uploader request is not valid JSON."),
