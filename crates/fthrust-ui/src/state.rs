@@ -424,8 +424,6 @@ pub struct AppState {
     pub theme: fthrust_core::theme::ThemeStore,
     /// Open Customize sections.
     pub customize_open: [bool; 6],
-    /// Export the theme as a ZIP (plan 5 opens the save picker).
-    pub theme_export_requested: bool,
     /// Preview a notification sound (plan 5 plays it).
     pub sound_preview_requested: Option<String>,
     /// Open the export jobs dialog (plan 6).
@@ -600,6 +598,8 @@ pub enum BrowseKind {
     PreviewBackground,
     /// A theme ZIP to import.
     ThemeArchive,
+    /// Where to export the theme ZIP (a save dialog).
+    ThemeExport,
     /// A font file for a role (`display` / `body`).
     FontFile(String),
     /// A custom icon file for a logical icon.
@@ -721,7 +721,6 @@ impl AppState {
             overlay_live: std::collections::HashMap::new(),
             theme,
             customize_open: [false; 6],
-            theme_export_requested: false,
             sound_preview_requested: None,
             export_jobs_requested: false,
             export_queue: crate::services::export::ExportQueue::new(),

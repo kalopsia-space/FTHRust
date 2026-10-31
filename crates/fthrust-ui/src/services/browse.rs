@@ -83,6 +83,12 @@ pub fn request_for(kind: &BrowseKind) -> (String, bool, bool, Filters) {
             false,
             vec![("ZIP files", vec!["*.zip"])],
         ),
+        BrowseKind::ThemeExport => (
+            "Export Theme".into(),
+            false,
+            false,
+            vec![("ZIP files", vec!["*.zip"])],
+        ),
         BrowseKind::FontFile(_) => (
             "Import font".into(),
             false,
@@ -112,24 +118,36 @@ pub fn request_for(kind: &BrowseKind) -> (String, bool, bool, Filters) {
     }
 }
 
+/// The suggested file name of a theme export (`_on_export`).
+pub const THEME_EXPORT_NAME: &str = "fthr_theme.zip";
+
 /// Opens the FileChooser portal; the chosen paths (empty on cancel).
 pub async fn pick(kind: &BrowseKind) -> Result<Vec<PathBuf>, String> {
-    use ashpd::desktop::file_chooser::{FileChooserProxy, FileFilter, OpenFileOptions};
+    use ashpd::desktop::file_chooser::{
+        FileChooserProxy, FileFilter, OpenFileOptions, SaveFileOptions,
+    };
     let (title, directory, multiple, filters) = request_for(kind);
+    let filters = filters.into_iter().map(|(label, globs)| {
+        globs
+            .into_iter()
+            .fold(FileFilter::new(label), FileFilter::glob)
+    });
     let proxy = FileChooserProxy::new().await.map_err(|e| e.to_string())?;
-    let options = OpenFileOptions::default()
-        .set_modal(true)
-        .set_directory(directory)
-        .set_multiple(multiple)
-        .set_filters(filters.into_iter().map(|(label, globs)| {
-            globs
-                .into_iter()
-                .fold(FileFilter::new(label), FileFilter::glob)
-        }));
-    let request = proxy
-        .open_file(None, &title, options)
-        .await
-        .map_err(|e| e.to_string())?;
+    let request = if *kind == BrowseKind::ThemeExport {
+        let options = SaveFileOptions::default()
+            .set_modal(true)
+            .set_current_name(THEME_EXPORT_NAME)
+            .set_filters(filters);
+        proxy.save_file(None, &title, options).await
+    } else {
+        let options = OpenFileOptions::default()
+            .set_modal(true)
+            .set_directory(directory)
+            .set_multiple(multiple)
+            .set_filters(filters);
+        proxy.open_file(None, &title, options).await
+    }
+    .map_err(|e| e.to_string())?;
     match request.response() {
         Ok(files) => Ok(files
             .uris()
@@ -233,6 +251,20 @@ fn font_families(path: &Path) -> Vec<String> {
         }
     }
     out
+}
+
+/// `dest` with a `.zip` extension (portals don't add one from the filter).
+pub fn with_zip_extension(dest: PathBuf) -> PathBuf {
+    let has_zip = dest
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    if has_zip {
+        dest
+    } else {
+        let mut name = dest.into_os_string();
+        name.push(".zip");
+        PathBuf::from(name)
+    }
 }
 
 fn save_theme(state: &mut AppState) {
@@ -360,6 +392,18 @@ pub fn apply(state: &mut AppState, kind: BrowseKind, paths: Vec<PathBuf>) {
                 message: "This will fully replace your current theme (typography, colors, icons, and sounds).\n\nContinue?".into(),
                 tag: format!("{THEME_TAG}{}", first.display()),
             });
+        }
+        BrowseKind::ThemeExport => {
+            let dest = with_zip_extension(first);
+            match state.theme.export_zip(&dest) {
+                Ok(()) => state.dialogs.push_message(
+                    "Exported",
+                    format!("Theme exported to:\n{}", dest.display()),
+                ),
+                Err(e) => state
+                    .dialogs
+                    .push_message("Theme export failed", e.to_string()),
+            }
         }
         BrowseKind::FontFile(role) => {
             let families = font_families(&first);

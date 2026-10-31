@@ -149,7 +149,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         Vec2::new(widths[0], 43.0),
     )));
     if buttons::secondary(&mut ex, &t, "Export theme", "QPushButton[Export theme]").clicked() {
-        state.theme_export_requested = true;
+        state.browse_requested = Some(BrowseKind::ThemeExport);
     }
     x += widths[0] + 12.0;
     let mut im = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(

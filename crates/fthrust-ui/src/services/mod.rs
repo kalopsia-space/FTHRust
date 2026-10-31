@@ -5,6 +5,7 @@
 
 pub mod browse;
 pub mod camera;
+pub mod devices;
 pub mod diagnostics;
 pub mod engine;
 pub mod export;
@@ -145,6 +146,15 @@ pub enum Event {
     Toplevels(Vec<fthrust_wayland::toplevels::Toplevel>),
     /// Whether the toplevel protocol is available.
     GameDetectionAvailability(bool),
+    /// The encoders that passed the one-frame test (cached or probed).
+    EncoderCapabilities(Vec<fthrust_media::capabilities::EncoderCapability>),
+    /// The audio devices the engine lists.
+    AudioDevices {
+        /// Playback sinks `(label, id)`.
+        playback: Result<devices::DeviceList, String>,
+        /// Microphones `(name, id)`.
+        microphones: Result<devices::DeviceList, String>,
+    },
 }
 
 impl PartialEq for ScanEvent {
@@ -186,16 +196,12 @@ pub enum Request {
     RefreshAudioDevices,
     /// Refresh cameras.
     RefreshCameras,
-    /// Export the theme ZIP.
-    ExportTheme,
     /// Preview a sound.
     PreviewSound(String),
     /// Toggle manual recording.
     ToggleRecording,
     /// Upload a clip.
     Upload(PathBuf),
-    /// Open a clip in the editor.
-    OpenClip(PathBuf),
     /// Open a screenshot.
     OpenScreenshot(PathBuf),
     /// Show a file in the file manager.
@@ -208,8 +214,6 @@ pub enum Request {
     PauseCapture,
     /// Resume capture (focus regained).
     ResumeCapture,
-    /// Stop everything.
-    Shutdown,
 }
 
 /// The app id registered with the desktop portals.
@@ -387,7 +391,57 @@ impl Services {
         player.preload_async(&state.theme);
         services.sounds = Some(player);
         services.last_tokens = Some(state.tokens.clone());
+        services.detect_encoders(state, false);
+        services.list_audio_devices();
         services
+    }
+
+    /// Loads (or, with `force`, re-runs) the encoder test off the UI
+    /// thread; the result arrives as [`Event::EncoderCapabilities`].
+    fn detect_encoders(&self, state: &AppState, force: bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        if RUNNING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let cache = state.paths.encoder_capabilities_file();
+        let outbox = self.outbox.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fthrust-encoder-probe".into())
+            .spawn(move || {
+                let found = devices::encoder_capabilities(&cache, force);
+                RUNNING.store(false, Ordering::Release);
+                outbox.send(Event::EncoderCapabilities(found));
+            });
+        if let Err(e) = spawned {
+            RUNNING.store(false, Ordering::Release);
+            tracing::warn!(error = %e, "encoder probe thread not started");
+        }
+    }
+
+    /// Asks the engine binary for the playback sinks and microphones; the
+    /// result arrives as [`Event::AudioDevices`].
+    fn list_audio_devices(&self) {
+        let Some(handle) = self.runtime() else {
+            return;
+        };
+        let outbox = self.outbox.clone();
+        handle.spawn(async move {
+            let (playback, microphones) = match engine::discover_engine(None) {
+                Some(exe) => (
+                    devices::list(&exe, "--list-playback-devices").await,
+                    devices::list(&exe, "--list-microphones").await,
+                ),
+                None => {
+                    let missing = Err("fthrust-engine not found".to_owned());
+                    (missing.clone(), missing)
+                }
+            };
+            outbox.send(Event::AudioDevices {
+                playback,
+                microphones,
+            });
+        });
     }
 
     /// Cards and cues queued by the pages and the other services.
@@ -1332,7 +1386,21 @@ impl Services {
                 ),
             },
             Request::RefreshCameras => self.camera.refresh(),
-            other => tracing::debug!(?other, "request without a consumer yet"),
+            Request::RedetectEncoders => self.detect_encoders(state, true),
+            Request::RefreshAudioDevices => self.list_audio_devices(),
+            Request::OpenScreenshot(path) => crate::shell::open_url(&path.display().to_string()),
+            Request::ShowInFileManager(path) => match self.runtime() {
+                Some(handle) => {
+                    handle.spawn(async move { devices::reveal(&path).await });
+                }
+                None => {
+                    let folder = path.parent().unwrap_or(&path).to_path_buf();
+                    crate::shell::open_url(&folder.display().to_string());
+                }
+            },
+            // Only recorded (tests): the recording service restarts the
+            // engine through the supervisor directly.
+            Request::RestartForRecording(_) => {}
         }
     }
 
@@ -1564,6 +1632,20 @@ fn apply_event(state: &mut AppState, ev: Event) {
             state.error_bar.remove_by_key(&key);
         }
         Event::EncoderActive(codec) => state.active_encoder = Some(codec),
+        Event::EncoderCapabilities(found) => state.encoder_capabilities = Some(found),
+        Event::AudioDevices {
+            playback,
+            microphones,
+        } => {
+            match playback {
+                Ok(list) => state.audio_devices = list,
+                Err(e) => tracing::warn!(error = %e, "playback devices not listed"),
+            }
+            match microphones {
+                Ok(list) => state.mic_devices = list,
+                Err(e) => tracing::warn!(error = %e, "microphones not listed"),
+            }
+        }
         Event::Health(_)
         | Event::Hotkey(_)
         | Event::Engine(_)
@@ -1631,9 +1713,6 @@ fn collect_requests(state: &mut AppState) -> Vec<Request> {
     }
     if std::mem::take(&mut state.refresh_cameras_requested) {
         out.push(Request::RefreshCameras);
-    }
-    if std::mem::take(&mut state.theme_export_requested) {
-        out.push(Request::ExportTheme);
     }
     if let Some(key) = state.sound_preview_requested.take() {
         out.push(Request::PreviewSound(key));
