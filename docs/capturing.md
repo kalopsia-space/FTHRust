@@ -179,7 +179,7 @@ On first start, FTHRust tests every encoder your system might have with a real o
 | **NVIDIA NVENC** | NVIDIA GPUs. Supports the speed/quality preset (P1 Fastest … P4 Balanced … P7 Best Quality). |
 | **VA-API (AMD / Intel)** | AMD and Intel GPUs through Mesa or Intel's media driver. |
 | **Intel Quick Sync** | Intel GPUs. |
-| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, or x264, x265, libaom or rav1e where your FFmpeg lacks those. Kvazaar and SVT-AV1 choose their own number of threads; the others run on as many as FFmpeg's automatic count gives them. |
+| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, or x264, x265, libaom or rav1e where your FFmpeg lacks those. Kvazaar and SVT-AV1 choose their own number of threads; the others run on as many as FFmpeg's automatic count gives them. SVT-AV1 records in its low-delay mode at a constant bitrate, so a clip ends at the moment you save it; an SVT-AV1 that refuses that mode records as before, about two seconds behind. |
 
 The preset only applies with **NVIDIA NVENC** chosen, where it is shown. Every other choice, **Automatic** included, runs its encoder at the default preset (P4 Balanced).
 
