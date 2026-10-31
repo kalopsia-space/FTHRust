@@ -45,7 +45,7 @@ fn video_thumbnails_arrive_decoded_so_the_ui_thread_reads_no_file() {
         .recv_timeout(Duration::from_secs(30))
         .expect("a result");
     match result.image {
-        Some(ThumbImage::Video(cached, rgba)) => {
+        Some(ThumbImage::Video(cached, Some(rgba))) => {
             let on_disk = image::open(&cached.jpg).unwrap();
             assert!(rgba.width() > 0 && rgba.height() > 0);
             assert_eq!(
@@ -55,6 +55,39 @@ fn video_thumbnails_arrive_decoded_so_the_ui_thread_reads_no_file() {
             );
         }
         other => panic!("expected a decoded poster, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_damaged_cached_poster_is_rebuilt_with_its_details_and_pixels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clip = tmp.path().join("clip.mp4");
+    if support::write_test_clip(&clip, 1, false).is_none() {
+        return;
+    }
+    let pool = ThumbPool::start(tmp.path().join("cache"));
+    let wait = |pool: &ThumbPool| {
+        pool.results()
+            .recv_timeout(Duration::from_secs(30))
+            .expect("a result")
+    };
+    assert!(pool.request(&clip, "fp", true));
+    let Some(ThumbImage::Video(first, Some(_))) = wait(&pool).image else {
+        panic!("expected a poster");
+    };
+    // The cached JPEG is damaged (a disk error, a truncated write).
+    std::fs::write(&first.jpg, b"damaged").unwrap();
+    assert!(pool.request(&clip, "fp", true));
+    match wait(&pool).image {
+        Some(ThumbImage::Video(again, Some(rgba))) => {
+            assert_eq!(again.meta, first.meta, "the same details");
+            assert!(rgba.width() > 0, "pixels again");
+            assert!(
+                image::open(&again.jpg).is_ok(),
+                "the cache file was rebuilt, not left damaged"
+            );
+        }
+        other => panic!("expected a rebuilt poster, got {other:?}"),
     }
 }
 

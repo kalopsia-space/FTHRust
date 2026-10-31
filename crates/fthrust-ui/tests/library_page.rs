@@ -579,6 +579,58 @@ fn scrolling_away_drops_the_queued_thumbnail_jobs_of_the_old_rows() {
 }
 
 #[test]
+fn a_poster_that_could_not_be_decoded_keeps_the_clips_details() {
+    use fthrust_core::thumbnails::MetaV3;
+    use fthrust_media::thumbnail::library::CachedThumbnail;
+    use fthrust_ui::library::page::apply_thumbnail;
+    use fthrust_ui::library::thumbs::{ThumbImage, ThumbPool, ThumbResult};
+    let (tmp, mut s) = state(serde_json::json!({}));
+    // A pool without workers only gives the generation results must carry.
+    let pool = ThumbPool::start_with(tmp.path().join("cache"), 0);
+    let generation = pool.generation();
+    s.thumb_pool = Some(pool);
+    let clip = tmp.path().join("clip.mp4");
+    let meta = MetaV3 {
+        duration: 12.5,
+        width: 1920,
+        height: 1080,
+        fps: 60.0,
+        video_bitrate: 25_000_000,
+        total_bitrate: 25_200_000,
+    };
+    let cached = CachedThumbnail {
+        jpg: tmp.path().join("poster.jpg"),
+        duration_s: meta.duration,
+        meta,
+    };
+    let ctx = egui::Context::default();
+    // The workers found the details but no poster that decodes.
+    apply_thumbnail(
+        &ctx,
+        &mut s,
+        ThumbResult {
+            path: clip.clone(),
+            generation,
+            fingerprint: "10|20".into(),
+            image: Some(ThumbImage::Video(cached, None)),
+            elapsed_ms: 1,
+        },
+        5.0,
+    );
+    assert_eq!(
+        s.thumb_meta.get(&clip),
+        Some(&("1080p · 60 FPS · 25 Mbps".to_owned(), Some(12.5))),
+        "the card keeps its resolution, frame rate, bitrate and length"
+    );
+    assert!(!s.thumb_textures.contains(&clip), "there is no picture");
+    assert!(
+        s.thumb_failed.contains(&clip),
+        "the poster is tried again later, not on every frame"
+    );
+    assert!(!s.thumb_requested.contains(&clip));
+}
+
+#[test]
 fn a_failed_thumbnail_is_asked_for_again_when_the_clip_changes() {
     let (tmp, mut s) = state(serde_json::json!({}));
     s.library.records = synthetic_records(&tmp.path().join("clips"), 1);

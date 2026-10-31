@@ -10,7 +10,7 @@ use fthrust_core::library_ownership::{Ownership, classify_media_path};
 
 use super::card::{CardData, MenuItem, card};
 use super::layout::{GRID_SPACING, H_MARGIN, SECTION_SPACING, card_height, metrics};
-use super::thumbs::ThumbImage;
+use super::thumbs::{ThumbImage, ThumbResult};
 use crate::fidelity;
 use crate::fonts::Weight;
 use crate::state::{AppState, DialogKind, DialogResult};
@@ -54,8 +54,11 @@ fn fingerprint(state: &AppState, path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
-    let now = ui.ctx().input(|i| i.time);
+/// Applies every thumbnail the workers have finished (the shell calls this
+/// each frame: a result carries its pixels, and they would pile up unseen
+/// while another page is showing).
+pub fn drain_thumbnails(ctx: &egui::Context, state: &mut AppState) {
+    let now = ctx.input(|i| i.time);
     let mut results = Vec::new();
     if let Some(pool) = &state.thumb_pool {
         while let Ok(r) = pool.results().try_recv() {
@@ -63,63 +66,76 @@ fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
         }
     }
     for r in results {
-        state.thumb_requested.remove(&r.path);
-        if Some(r.generation) != state.thumb_pool.as_ref().map(|p| p.generation()) {
-            continue;
+        apply_thumbnail(ctx, state, r, now);
+    }
+}
+
+/// Takes one finished thumbnail into the state: its details, its texture, or
+/// the failure to retry later.
+pub fn apply_thumbnail(ctx: &egui::Context, state: &mut AppState, r: ThumbResult, now: f64) {
+    state.thumb_requested.remove(&r.path);
+    if Some(r.generation) != state.thumb_pool.as_ref().map(|p| p.generation()) {
+        return;
+    }
+    let upload = |rgba: &image::RgbaImage| {
+        let ci = egui::ColorImage::from_rgba_unmultiplied(
+            [rgba.width() as usize, rgba.height() as usize],
+            rgba.as_raw(),
+        );
+        ctx.load_texture(
+            format!("thumb:{}", r.path.display()),
+            ci,
+            egui::TextureOptions::LINEAR,
+        )
+    };
+    match &r.image {
+        Some(ThumbImage::Video(cached, rgba)) => {
+            let meta = cached.meta.clone();
+            let mut details = vec![format!("{}p", meta.height)];
+            if meta.fps > 0.0 {
+                details.push(format!("{} FPS", trim_float(meta.fps)));
+            }
+            if meta.video_bitrate > 0 {
+                details.push(format!(
+                    "{} Mbps",
+                    trim_float(meta.video_bitrate as f64 / 1_000_000.0)
+                ));
+            }
+            state
+                .thumb_meta
+                .insert(r.path.clone(), (details.join(" · "), Some(meta.duration)));
+            match rgba {
+                Some(rgba) => {
+                    state.thumb_failed.remove(&r.path);
+                    let tex = upload(rgba);
+                    state.thumb_textures.insert(r.path.clone(), tex, Some(meta));
+                }
+                // The details are known, the poster could not be decoded
+                // (and its cache file was dropped): the card keeps its
+                // details and the poster is tried again in a while.
+                None => {
+                    state
+                        .thumb_failed
+                        .insert(r.path.clone(), r.fingerprint.clone(), now);
+                }
+            }
         }
-        match r.image {
-            Some(ThumbImage::Video(cached, rgba)) => {
-                state.thumb_failed.remove(&r.path);
-                let meta = cached.meta;
-                let mut details = vec![format!("{}p", meta.height)];
-                if meta.fps > 0.0 {
-                    details.push(format!("{} FPS", trim_float(meta.fps)));
-                }
-                if meta.video_bitrate > 0 {
-                    details.push(format!(
-                        "{} Mbps",
-                        trim_float(meta.video_bitrate as f64 / 1_000_000.0)
-                    ));
-                }
-                state
-                    .thumb_meta
-                    .insert(r.path.clone(), (details.join(" · "), Some(meta.duration)));
-                let ci = egui::ColorImage::from_rgba_unmultiplied(
-                    [rgba.width() as usize, rgba.height() as usize],
-                    rgba.as_raw(),
-                );
-                let tex = ui.ctx().load_texture(
-                    format!("thumb:{}", r.path.display()),
-                    ci,
-                    egui::TextureOptions::LINEAR,
-                );
-                state.thumb_textures.insert(r.path.clone(), tex, Some(meta));
-            }
-            Some(ThumbImage::Image(rgba)) => {
-                state.thumb_failed.remove(&r.path);
-                state
-                    .thumb_meta
-                    .insert(r.path.clone(), ("Screenshot".into(), None));
-                let ci = egui::ColorImage::from_rgba_unmultiplied(
-                    [rgba.width() as usize, rgba.height() as usize],
-                    rgba.as_raw(),
-                );
-                let tex = ui.ctx().load_texture(
-                    format!("thumb:{}", r.path.display()),
-                    ci,
-                    egui::TextureOptions::LINEAR,
-                );
-                state.thumb_textures.insert(r.path.clone(), tex, None);
-            }
-            None => {
-                state
-                    .thumb_failed
-                    .insert(r.path.clone(), r.fingerprint.clone(), now);
-                state
-                    .thumb_meta
-                    .entry(r.path.clone())
-                    .or_insert_with(|| ("Video clip".into(), None));
-            }
+        Some(ThumbImage::Image(rgba)) => {
+            state.thumb_failed.remove(&r.path);
+            state
+                .thumb_meta
+                .insert(r.path.clone(), ("Screenshot".into(), None));
+            let tex = upload(rgba);
+            state.thumb_textures.insert(r.path.clone(), tex, None);
+        }
+        None => {
+            state
+                .thumb_failed
+                .insert(r.path.clone(), r.fingerprint.clone(), now);
+            state
+                .thumb_meta
+                .entry(r.path.clone())
+                .or_insert_with(|| ("Video clip".into(), None));
         }
     }
 }
@@ -392,7 +408,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, t.color(Color::Bg));
-    drain_thumbnails(ui, state);
+    drain_thumbnails(ui.ctx(), state);
     consume_results(state);
     if state.library_dirty {
         let key = screenshot_key(state);
