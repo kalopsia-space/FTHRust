@@ -174,7 +174,7 @@ On first start, FTHRust tests every encoder your system might have with a real o
 | **NVIDIA NVENC** | NVIDIA GPUs. Supports the speed/quality preset (P1 Fastest … P4 Balanced … P7 Best Quality). |
 | **VA-API (AMD / Intel)** | AMD and Intel GPUs through Mesa or Intel's media driver. |
 | **Intel Quick Sync** | Intel GPUs. |
-| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU. |
+| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, with as many threads as FFmpeg picks for it. |
 
 **Automatic (recommended)** tries NVENC, then VA-API, then Quick Sync, and **never falls back to software on its own**. If none works you get a clear error rather than a game that suddenly stutters. Choose **Software** yourself if that's what you want.
 
