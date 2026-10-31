@@ -304,6 +304,58 @@ fn an_entry_the_uploader_could_not_save_is_kept() {
     assert!(!r.svc.busy(), "queued again although it was uploaded");
 }
 
+/// A server that took a clip and sent no link leaves a card that offers
+/// "Upload clip" and a history that calls the clip uploaded: pressing the
+/// button used to do nothing at all. Now the bar says why and offers to
+/// upload the clip again; immediate and interval mode still never do.
+#[test]
+fn an_uploaded_clip_without_a_link_says_so_and_can_be_uploaded_again() {
+    let mut r = rig(&uploader_ok(""), json!({}));
+    let clip = r.clip("n.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1);
+    let key = clip.canonicalize().unwrap();
+    assert!(r.state.upload_history.is_uploaded(&key));
+    assert!(r.state.upload_history.link(&key).is_none());
+    r.state.error_bar.clear();
+
+    // The share button: nothing is uploaded, and the bar explains.
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1, "uploaded again without being asked");
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "ALREADY UPLOADED");
+    assert!(
+        e.detail
+            .starts_with("n.mp4 was uploaded, but its server sent no link back"),
+        "{}",
+        e.detail
+    );
+    let labels: Vec<&str> = e.actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, vec!["UPLOAD AGAIN"]);
+
+    // The automatic modes skip the clip, without a word.
+    r.state.error_bar.clear();
+    r.state
+        .uploader_settings
+        .set("upload_mode", json!("immediate"));
+    r.state.saved_clips.push(clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1);
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+
+    // UPLOAD AGAIN uploads it.
+    assert!(r.svc.error_action(&mut r.state, &e.actions[0].id));
+    r.settle();
+    assert_eq!(r.requests().len(), 2);
+}
+
 /// Auto-delete removes the clip, and the clips folder may be reached through
 /// a symlink: the history entry is the uploader's, under the real path. The
 /// app must not add a second one under the symlink's spelling (a path that
@@ -363,10 +415,12 @@ fn queue_dedups_and_waits_for_readiness() {
     r.state.readiness.complete(&clip);
     r.settle();
     assert_eq!(r.requests().len(), 1, "duplicates dropped");
-    // Already uploaded: nothing queued.
+    // Already uploaded: nothing queued, and nothing said (the card offers
+    // its link, not an upload).
     r.svc.enqueue(&mut r.state, clip.clone());
     r.settle();
     assert_eq!(r.requests().len(), 1);
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
 
     let failed = r.clip("c.mp4");
     r.state.readiness.engine_committed(&failed, true);

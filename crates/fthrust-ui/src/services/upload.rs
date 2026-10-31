@@ -37,6 +37,8 @@ pub const UPLOADING: &str = "Uploading…";
 pub const COMPRESS_TAG: &str = "upload-compress:";
 /// Error-bar action prefix for `RETRY NOW`.
 pub const RETRY_ACTION: &str = "upload-retry:";
+/// Error-bar action prefix for `UPLOAD AGAIN` (a clip uploaded without a link).
+pub const AGAIN_ACTION: &str = "upload-again:";
 /// Error-bar action that opens the upload settings.
 pub const OPEN_SETTINGS_ACTION: &str = "open-upload-settings";
 
@@ -247,6 +249,19 @@ enum Job {
     },
 }
 
+/// Who asked for an upload, which decides what a clip that is uploaded
+/// already gets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    /// The immediate and interval modes: skipped, silently.
+    Auto,
+    /// The user (share button, menu, editor, RETRY NOW): skipped too, but a
+    /// clip with no link to copy is explained, with the way out.
+    User,
+    /// The user, after that explanation: uploaded again.
+    Again,
+}
+
 struct Done {
     path: PathBuf,
     /// The uploaded file's key in the history (its canonical path), taken
@@ -375,18 +390,20 @@ impl UploadService {
         !self.in_flight.is_empty() || !self.waiting.is_empty() || self.scan.is_some()
     }
 
-    /// `enqueue_upload`: queues a finished video once; silently ignored
-    /// while uploads are off.
+    /// `enqueue_upload`, for a request from the user (share button, menu,
+    /// editor): queues a finished video once; silently ignored while uploads
+    /// are off, and for a clip that is uploaded already, unless that clip has
+    /// no link to copy: then the bar says so and offers to upload it again.
     pub fn enqueue(&mut self, state: &mut AppState, path: PathBuf) {
-        self.queue(state, path, false);
+        self.queue(state, path, false, Ask::User);
     }
 
     /// `enqueue_compressed_upload`: compress a copy, then upload it.
     pub fn enqueue_compressed(&mut self, state: &mut AppState, path: PathBuf) {
-        self.queue(state, path, true);
+        self.queue(state, path, true, Ask::Auto);
     }
 
-    fn queue(&mut self, state: &mut AppState, path: PathBuf, compress: bool) {
+    fn queue(&mut self, state: &mut AppState, path: PathBuf, compress: bool, ask: Ask) {
         if !uploader_enabled(state) {
             return;
         }
@@ -395,7 +412,14 @@ impl UploadService {
             return;
         }
         let path = library_path(state, path);
-        if self.is_busy(&path) || state.upload_history.is_uploaded(&resolved(&path)) {
+        if self.is_busy(&path) {
+            return;
+        }
+        let key = resolved(&path);
+        if ask != Ask::Again && state.upload_history.is_uploaded(&key) {
+            if ask == Ask::User && state.upload_history.link(&key).is_none() {
+                explain_no_link(state, &path);
+            }
             return;
         }
         state.upload_status.insert(path.clone(), UPLOADING.into());
@@ -406,6 +430,10 @@ impl UploadService {
     pub fn error_action(&mut self, state: &mut AppState, id: &str) -> bool {
         if let Some(p) = id.strip_prefix(RETRY_ACTION) {
             self.enqueue(state, PathBuf::from(p));
+            return true;
+        }
+        if let Some(p) = id.strip_prefix(AGAIN_ACTION) {
+            self.queue(state, PathBuf::from(p), false, Ask::Again);
             return true;
         }
         if id == OPEN_SETTINGS_ACTION {
@@ -439,7 +467,7 @@ impl UploadService {
         for clip in std::mem::take(&mut state.saved_clips) {
             if uploader_enabled(state) && state.uploader_settings.str("upload_mode") == "immediate"
             {
-                self.enqueue(state, clip);
+                self.queue(state, clip, false, Ask::Auto);
             }
         }
         self.interval(state, now);
@@ -481,7 +509,7 @@ impl UploadService {
         {
             self.scan = None;
             for p in found {
-                self.enqueue(state, p);
+                self.queue(state, p, false, Ask::Auto);
             }
         }
         let s = &state.uploader_settings;
@@ -771,6 +799,26 @@ fn unsaved_entry(
             Some(entry)
         }
     }
+}
+
+/// The user asked to upload a clip that is uploaded already but has no link
+/// (its server sent none back, so the card offers "Upload clip" and nothing
+/// would happen): say so, and offer to upload it again.
+fn explain_no_link(state: &mut AppState, path: &Path) {
+    let name = file_name(path);
+    state.error_bar.push_error(
+        "ALREADY UPLOADED",
+        &format!(
+            "{name} was uploaded, but its server sent no link back, so there is nothing to copy. Upload it again to try for one."
+        ),
+        Level::Warning,
+        vec![Action {
+            label: "UPLOAD AGAIN".into(),
+            id: format!("{AGAIN_ACTION}{}", path.display()),
+        }],
+        Some(format!("{AGAIN_ACTION}{}", path.display())),
+        true,
+    );
 }
 
 fn file_name(path: &Path) -> String {
