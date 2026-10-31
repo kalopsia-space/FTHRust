@@ -3,7 +3,7 @@
 //! its command loop). Ports `CaptureEngine::SaveClip` (`capture_engine.cpp:435-533`).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -297,6 +297,9 @@ pub const RECORD_BACKLOG_SECONDS: u64 = 8;
 pub const RECORD_AUDIO_STEP_MS: u32 = 100;
 /// Audio is pulled this far behind wall time so late blocks still land.
 pub const RECORD_AUDIO_LAG_NS: i64 = 200_000_000;
+/// Longest a stopping recording waits for the frames, and then the audio,
+/// captured before the stop.
+pub const RECORD_STOP_WAIT: Duration = Duration::from_millis(500);
 /// Largest audio window pulled in one piece.
 const RECORD_AUDIO_MAX_MS: u32 = 1000;
 /// Frames per millisecond at the capture rate.
@@ -389,6 +392,8 @@ struct RecordShared {
     stop: AtomicBool,
     /// The request that asked for the stop (0 for a shutdown).
     stop_request: AtomicU64,
+    /// When the stop was asked for: frames captured before it are kept.
+    stop_ns: AtomicI64,
 }
 
 impl RecordShared {
@@ -398,6 +403,7 @@ impl RecordShared {
 
     fn request_stop(&self, request_id: u64) {
         self.stop_request.store(request_id, Ordering::SeqCst);
+        self.stop_ns.store(monotonic_ns(), Ordering::SeqCst);
         self.stop.store(true, Ordering::SeqCst);
     }
 }
@@ -427,6 +433,7 @@ impl RecordWorker {
                 phase: Mutex::new(Phase::Idle),
                 stop: AtomicBool::new(false),
                 stop_request: AtomicU64::new(0),
+                stop_ns: AtomicI64::new(0),
             }),
             thread: Mutex::new(None),
             backlog_seconds,
@@ -614,6 +621,7 @@ impl RecordJob {
             rx,
             sources: sources.into_iter().map(|(kind, _)| kind).collect(),
             generation: enc.generation,
+            frame_ns: 1_000_000_000 / i64::from(enc.fps.max(1)),
         })
     }
 
@@ -623,6 +631,7 @@ impl RecordJob {
             rx,
             sources,
             generation,
+            frame_ns,
         } = opened;
         {
             // A stop asked for while the file was opening stays in force.
@@ -644,6 +653,7 @@ impl RecordJob {
         let mut session = Session {
             recorder: &mut recorder,
             cursor: None,
+            last_video_ns: None,
             generation,
             priming_ns,
             audio_tracks: !sources.is_empty(),
@@ -674,7 +684,10 @@ impl RecordJob {
         };
         let stopped = matches!(end, LoopEnd::Stopped);
         let failure = match end {
-            LoopEnd::Stopped | LoopEnd::TapClosed => {
+            LoopEnd::Stopped => {
+                self.finish_after_stop(&mut session, &rx, audio.as_ref(), &sources, frame_ns)
+            }
+            LoopEnd::TapClosed => {
                 self.engine.set_packet_tap(None);
                 None
             }
@@ -704,6 +717,43 @@ impl RecordJob {
         };
         let _ = self.events.send(event);
     }
+
+    /// After a stop: keeps the frames captured before it that are still on
+    /// their way through the encoder, then the audio up to the end of the
+    /// last frame. Stopping used to drop both: the packets still queued and
+    /// the last 200-300 ms of audio.
+    fn finish_after_stop(
+        &self,
+        session: &mut Session<'_>,
+        rx: &Receiver<EncodedPacket>,
+        audio: &dyn AudioProvider,
+        sources: &[AudioSourceKind],
+        frame_ns: i64,
+    ) -> Option<String> {
+        let stop_ns = self.shared.stop_ns.load(Ordering::SeqCst);
+        let generation = session.generation;
+        let before_stop =
+            |p: &EncodedPacket| p.generation == generation && p.wall_time_ns < stop_ns;
+        let deadline = Instant::now() + RECORD_STOP_WAIT;
+        let mut kept = Vec::new();
+        loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(p) if before_stop(&p) => kept.push(p),
+                // A frame from after the stop: the encoder has caught up.
+                Ok(_) | Err(_) => break,
+            }
+        }
+        self.engine.set_packet_tap(None);
+        kept.extend(rx.try_iter().filter(before_stop));
+        for p in &kept {
+            if let Err(e) = session.write(p) {
+                return Some(e);
+            }
+        }
+        let end_ns = session.last_video_ns? + frame_ns;
+        wait_for_audio(audio, sources, end_ns, RECORD_STOP_WAIT);
+        session.pump(audio, sources, end_ns, 1).err()
+    }
 }
 
 /// What [`RecordJob::open`] hands to the recording loop.
@@ -712,6 +762,7 @@ struct Opened {
     rx: Receiver<EncodedPacket>,
     sources: Vec<AudioSourceKind>,
     generation: u64,
+    frame_ns: i64,
 }
 
 /// Why the recording loop ended.
@@ -729,6 +780,8 @@ struct Session<'a> {
     recorder: &'a mut Recorder,
     /// Created at the first written keyframe.
     cursor: Option<AudioCursor>,
+    /// Capture time of the last video packet written.
+    last_video_ns: Option<i64>,
     generation: u64,
     priming_ns: i64,
     audio_tracks: bool,
@@ -743,7 +796,11 @@ impl Session<'_> {
         if p.generation != self.generation {
             return Err("the encoder was reopened; the recording was closed".into());
         }
+        let before = self.recorder.video_packets();
         self.recorder.write_video(p).map_err(|e| e.to_string())?;
+        if self.recorder.video_packets() > before {
+            self.last_video_ns = Some(p.wall_time_ns);
+        }
         if self.cursor.is_none()
             && self.audio_tracks
             && let Some(start) = self.recorder.video_start_ns()

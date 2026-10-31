@@ -651,48 +651,6 @@ impl fthrust_engine::audio::AudioProvider for SlowStatusAudio {
     }
 }
 
-#[test]
-fn a_slow_audio_status_does_not_stall_capture() {
-    if !have_software_h264() {
-        return eprintln!("skipping: no software H.264 encoder");
-    }
-    // status() held the engine's status lock while it asked the audio
-    // sources for theirs; the capture thread takes that lock for every
-    // frame, so a slow source status (its locks held by a long save or the
-    // capture callback) stalled capture.
-    let mut r = rig_with(
-        config(|c| c.microphone_endpoint_id.clear()),
-        Arc::new(SlowStatusAudio {
-            inner: SyntheticAudio::new(),
-            delay: Duration::from_millis(150),
-        }),
-        Duration::from_millis(16),
-    );
-    r.engine.start().unwrap();
-    wait_frames(&r.engine, 10);
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let poller = {
-        let (handle, stop) = (r.engine.handle(), stop.clone());
-        std::thread::spawn(move || {
-            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
-                let _ = handle.status();
-            }
-        })
-    };
-    let ring = r.engine.ring();
-    std::thread::sleep(Duration::from_millis(300));
-    let before = ring.stats().packets;
-    std::thread::sleep(Duration::from_secs(2));
-    let during = ring.stats().packets - before;
-    stop.store(true, std::sync::atomic::Ordering::SeqCst);
-    poller.join().unwrap();
-    assert!(
-        during >= 60,
-        "{during} frames in 2 s at a 16 ms frame interval while status was polled"
-    );
-    r.engine.shutdown();
-}
-
 /// A desktop source whose blocks reach the ring `lag` after they were
 /// captured, like a real capture stream's latency.
 struct LaggyAudio {
@@ -789,6 +747,42 @@ impl fthrust_engine::audio::AudioProvider for LaggyAudio {
     }
 }
 
+/// Stream durations in seconds: (video, every audio track).
+fn stream_seconds(path: &std::path::Path) -> (f64, Vec<f64>) {
+    let ictx = ffmpeg_next::format::input(path).unwrap();
+    let seconds = |s: &ffmpeg_next::format::stream::Stream| {
+        let tb = s.time_base();
+        s.duration() as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator())
+    };
+    let mut video = 0.0;
+    let mut audio = Vec::new();
+    for s in ictx.streams() {
+        match s.parameters().medium() {
+            ffmpeg_next::media::Type::Video => video = seconds(&s),
+            ffmpeg_next::media::Type::Audio => audio.push(seconds(&s)),
+            _ => {}
+        }
+    }
+    (video, audio)
+}
+
+fn record_for(r: &Rig, id: u64, path: &std::path::Path, seconds: Duration) -> Event {
+    r.record.start(id, path.to_path_buf());
+    next_event(
+        &r.events,
+        Duration::from_secs(10),
+        |e| matches!(e, Event::RecordingStarted { request_id, .. } if *request_id == id),
+    );
+    std::thread::sleep(seconds);
+    r.record.stop(id + 1);
+    next_event(&r.events, Duration::from_secs(10), |e| {
+        matches!(
+            e,
+            Event::RecordingStopped { .. } | Event::RecordingError { .. }
+        )
+    })
+}
+
 #[test]
 fn a_clip_does_not_end_on_audio_the_source_has_not_delivered() {
     if !have_software_h264() {
@@ -825,6 +819,111 @@ fn a_clip_does_not_end_on_audio_the_source_has_not_delivered() {
     assert!(
         rms > 0.1,
         "the clip's last 80 ms hold silence (rms {rms}) where the tone plays on"
+    );
+    r.engine.shutdown();
+}
+
+#[test]
+fn stopping_a_recording_keeps_the_audio_up_to_its_last_frame() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The record thread pulls audio 200 ms behind the clock in 100 ms steps;
+    // a stop used to end the file there, 200-300 ms short of the video.
+    let mut r = rig(
+        config(|c| c.microphone_endpoint_id.clear()),
+        SyntheticAudio::new(),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 30);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("tail.mp4");
+    let e = record_for(&r, 51, &path, Duration::from_secs(3));
+    assert!(matches!(e, Event::RecordingStopped { .. }), "{e:?}");
+    let (video, audio) = stream_seconds(&path);
+    assert_eq!(audio.len(), 1);
+    assert!(video > 2.5, "video {video}");
+    assert!(
+        (audio[0] - video).abs() <= 0.07,
+        "audio {:.3} s, video {video:.3} s",
+        audio[0]
+    );
+    r.engine.shutdown();
+}
+
+#[test]
+fn recordings_carry_the_microphone() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Clips get Default Mix and Microphone; recordings only ever wrote the
+    // desktop track.
+    let mut r = rig(
+        config(|_| {}),
+        SyntheticAudio::new(),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 30);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("mic.mp4");
+    let e = record_for(&r, 61, &path, Duration::from_secs(2));
+    assert!(matches!(e, Event::RecordingStopped { .. }), "{e:?}");
+    let names: Vec<String> = fthrust_media::combined_audio::descriptors_from_file(&path)
+        .unwrap()
+        .into_iter()
+        .map(|d| d.handler_name.unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["Default Mix", "Microphone"]);
+    let (video, audio) = stream_seconds(&path);
+    for a in audio {
+        assert!(
+            (a - video).abs() <= 0.07,
+            "audio {a:.3} s, video {video:.3} s"
+        );
+    }
+    r.engine.shutdown();
+}
+
+#[test]
+fn a_slow_audio_status_does_not_stall_capture() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // status() held the engine's status lock while it asked the audio
+    // sources for theirs; the capture thread takes that lock for every
+    // frame, so a slow source status (its locks held by a long save or the
+    // capture callback) stalled capture.
+    let mut r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(SlowStatusAudio {
+            inner: SyntheticAudio::new(),
+            delay: Duration::from_millis(150),
+        }),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 10);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let (handle, stop) = (r.engine.handle(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = handle.status();
+            }
+        })
+    };
+    let ring = r.engine.ring();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = ring.stats().packets;
+    std::thread::sleep(Duration::from_secs(2));
+    let during = ring.stats().packets - before;
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    poller.join().unwrap();
+    assert!(
+        during >= 60,
+        "{during} frames in 2 s at a 16 ms frame interval while status was polled"
     );
     r.engine.shutdown();
 }
@@ -876,49 +975,5 @@ fn starting_a_recording_does_not_wait_on_the_engine() {
         "{e:?}"
     );
     assert!(path.exists());
-    r.engine.shutdown();
-}
-
-fn record_for(r: &Rig, id: u64, path: &std::path::Path, seconds: Duration) -> Event {
-    r.record.start(id, path.to_path_buf());
-    next_event(
-        &r.events,
-        Duration::from_secs(10),
-        |e| matches!(e, Event::RecordingStarted { request_id, .. } if *request_id == id),
-    );
-    std::thread::sleep(seconds);
-    r.record.stop(id + 1);
-    next_event(&r.events, Duration::from_secs(10), |e| {
-        matches!(
-            e,
-            Event::RecordingStopped { .. } | Event::RecordingError { .. }
-        )
-    })
-}
-
-#[test]
-fn recordings_carry_the_microphone() {
-    if !have_software_h264() {
-        return eprintln!("skipping: no software H.264 encoder");
-    }
-    // Clips get Default Mix and Microphone; recordings only ever wrote the
-    // desktop track.
-    let mut r = rig(
-        config(|_| {}),
-        SyntheticAudio::new(),
-        Duration::from_millis(16),
-    );
-    r.engine.start().unwrap();
-    wait_frames(&r.engine, 30);
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("mic.mp4");
-    let e = record_for(&r, 61, &path, Duration::from_secs(2));
-    assert!(matches!(e, Event::RecordingStopped { .. }), "{e:?}");
-    let names: Vec<String> = fthrust_media::combined_audio::descriptors_from_file(&path)
-        .unwrap()
-        .into_iter()
-        .map(|d| d.handler_name.unwrap_or_default())
-        .collect();
-    assert_eq!(names, ["Default Mix", "Microphone"]);
     r.engine.shutdown();
 }
