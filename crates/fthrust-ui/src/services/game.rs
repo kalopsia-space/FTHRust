@@ -100,6 +100,36 @@ pub struct GameDetector {
 }
 
 impl GameDetector {
+    /// Connects with `connect` on the reader's own thread, then forwards
+    /// snapshots as [`start`](Self::start) does; a failed connection is
+    /// reported as unavailable.
+    pub fn start_with(
+        connect: impl FnOnce() -> Result<Box<dyn Toplevels>, String> + Send + 'static,
+        outbox: Outbox,
+    ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let refresh = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let stop = stop.clone();
+            let refresh = refresh.clone();
+            std::thread::Builder::new()
+                .name("fthrust-game-detect".into())
+                .spawn(move || match connect() {
+                    Ok(watcher) => run(watcher, outbox, stop, refresh),
+                    Err(e) => {
+                        tracing::info!(error = %e, "toplevel list unavailable");
+                        outbox.send(Event::GameDetectionAvailability(false));
+                    }
+                })
+                .ok()
+        };
+        GameDetector {
+            stop,
+            refresh,
+            thread,
+        }
+    }
+
     /// Starts forwarding `watcher`'s snapshots as [`Event::Toplevels`].
     pub fn start(watcher: Box<dyn Toplevels>, outbox: Outbox) -> Self {
         let stop = Arc::new(AtomicBool::new(false));

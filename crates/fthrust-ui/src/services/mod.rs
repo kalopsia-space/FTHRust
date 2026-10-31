@@ -312,6 +312,8 @@ pub struct Services {
     upload: upload::UploadService,
     camera: camera::CameraService,
     mic_level: Option<mic_level::MicLevel>,
+    /// A mic meter being opened off the UI thread.
+    mic_level_pending: Option<std::sync::mpsc::Receiver<Result<mic_level::MicLevel, String>>>,
     mic_level_retry: f64,
     mic_generation: u64,
     gary: Option<crate::overlay::gary::GaryOverlay>,
@@ -386,6 +388,7 @@ impl Services {
             upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
+            mic_level_pending: None,
             mic_level_retry: 0.0,
             mic_generation: 0,
             gary: None,
@@ -516,15 +519,18 @@ impl Services {
     }
 
     /// Starts the toplevel reader (availability is reported as an event).
+    /// The compositor connection is made on the reader's thread: its two
+    /// roundtrips blocked the UI thread for up to 5 s at startup.
     fn start_game_detection(&mut self) {
         let outbox = self.outbox.clone();
-        match fthrust_wayland::toplevels::ToplevelWatcher::connect() {
-            Ok(w) => self.detector = Some(game::GameDetector::start(Box::new(w), outbox)),
-            Err(e) => {
-                tracing::info!(error = %e, "toplevel list unavailable");
-                outbox.send(Event::GameDetectionAvailability(false));
-            }
-        }
+        self.detector = Some(game::GameDetector::start_with(
+            || {
+                fthrust_wayland::toplevels::ToplevelWatcher::connect()
+                    .map(|w| Box::new(w) as Box<dyn game::Toplevels>)
+                    .map_err(|e| e.to_string())
+            },
+            outbox,
+        ));
     }
 
     /// A new toplevel snapshot: game detection and the focus pause.
@@ -697,6 +703,7 @@ impl Services {
             upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
+            mic_level_pending: None,
             mic_level_retry: 0.0,
             mic_generation: 0,
             gary: None,
@@ -1498,14 +1505,41 @@ impl Services {
             if let Some(m) = &self.mic_level {
                 m.set_gain(gain);
             }
-            if restart && now >= self.mic_level_retry {
-                self.mic_level = None;
-                match mic_level::MicLevel::start(target, gain) {
-                    Ok(m) => {
+            // Opening the stream can take seconds when PipeWire is slow, so
+            // it happens on a thread (it used to block the UI thread).
+            if let Some(rx) = &self.mic_level_pending {
+                match rx.try_recv() {
+                    Ok(Ok(m)) => {
+                        self.mic_level_pending = None;
                         self.mic_level = Some(m);
                         // Gary must pick up the new stream's meter.
                         self.mic_generation += 1;
                     }
+                    Ok(Err(e)) => {
+                        self.mic_level_pending = None;
+                        tracing::warn!(error = %e, "mic level unavailable");
+                        self.mic_level_retry = now + 5.0;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        self.outbox
+                            .ctx
+                            .request_repaint_after(std::time::Duration::from_millis(100));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.mic_level_pending = None;
+                        self.mic_level_retry = now + 5.0;
+                    }
+                }
+            } else if restart && now >= self.mic_level_retry {
+                self.mic_level = None;
+                let (tx, rx) = std::sync::mpsc::channel();
+                let spawned = std::thread::Builder::new()
+                    .name("fthrust-mic-start".into())
+                    .spawn(move || {
+                        let _ = tx.send(mic_level::MicLevel::start(target, gain));
+                    });
+                match spawned {
+                    Ok(_) => self.mic_level_pending = Some(rx),
                     Err(e) => {
                         tracing::warn!(error = %e, "mic level unavailable");
                         self.mic_level_retry = now + 5.0;
@@ -1514,6 +1548,7 @@ impl Services {
             }
         } else {
             self.mic_level = None;
+            self.mic_level_pending = None;
         }
         state.mic_level = self.mic_level.as_ref().map(|m| m.read());
         if audio_page && self.mic_level.is_some() {
