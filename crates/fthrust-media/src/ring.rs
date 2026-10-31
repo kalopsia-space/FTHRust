@@ -48,7 +48,9 @@ pub struct Snapshot {
     pub presentation_start_pts: i64,
     /// Capture time at which presentation starts.
     pub presentation_start_ns: i64,
-    /// The requested end (capture time).
+    /// Capture time at which presentation ends: the end of the newest
+    /// selected frame (its capture time plus one frame), so at most one
+    /// frame past the requested end.
     pub presentation_end_ns: i64,
     /// Capture time of the last selected packet.
     pub media_end_ns: i64,
@@ -332,6 +334,13 @@ impl EncodedRing {
     /// Selects the packets covering the last `duration_ms` ending at
     /// `target_end_ns` (0 = the newest packet), restricted to `generation`
     /// (0 = all). `None` when nothing usable is held.
+    ///
+    /// The window is anchored on the newest packet at or before the target
+    /// end: its presentation ends one frame after that packet's capture
+    /// time, and the start keyframe is chosen for that window. When the
+    /// encoder's latency keeps the frames at the target from arriving in
+    /// time, the clip ends on the newest frame there is, and the audio
+    /// window and start keyframe go with it.
     pub fn snapshot(
         &self,
         duration_ms: u32,
@@ -380,8 +389,16 @@ impl EncodedRing {
         } else {
             target_end_ns
         };
+        let mut end = samples.len();
+        while end > 0 && samples[end - 1].timestamp > target_end_ns {
+            end -= 1;
+        }
+        let end = end.checked_sub(1)?;
+        let frame_ns = 1_000_000_000 / i64::from(self.fps);
+        let anchor_end_ns = samples[end].timestamp + frame_ns;
         let duration_ns = i64::from(duration_ms) * 1_000_000;
-        let selection = replay_interval::select(&samples, target_end_ns, duration_ns).ok()?;
+        let selection =
+            replay_interval::select(&samples[..=end], anchor_end_ns, duration_ns).ok()?;
         let packets: Vec<EncodedPacket> = (selection.decode_start..=selection.end)
             .map(|i| at(i).clone())
             .collect();
@@ -395,7 +412,7 @@ impl EncodedRing {
             first_pts,
         );
         let presentation_start_ns = if selection.full_history {
-            target_end_ns - duration_ns
+            anchor_end_ns - duration_ns
         } else {
             packets.first().map_or(0, |p| p.wall_time_ns)
         };
@@ -405,7 +422,7 @@ impl EncodedRing {
             full_history: selection.full_history,
             presentation_start_pts,
             presentation_start_ns,
-            presentation_end_ns: target_end_ns,
+            presentation_end_ns: anchor_end_ns,
             media_end_ns,
             fps: self.fps,
         })
