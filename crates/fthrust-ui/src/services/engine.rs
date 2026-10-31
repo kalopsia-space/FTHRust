@@ -36,6 +36,11 @@ pub const SILENCE_S: f64 = 3.0;
 pub const RESTART_GAP_S: f64 = 1.0;
 /// Retry a deferred restart this often while a save runs.
 pub const RESTART_DEFER_S: f64 = 0.5;
+/// How long a graceful stop waits for the engine to exit before SIGTERM.
+pub const KILL_GRACE_S: f64 = 2.0;
+/// The same with a clip save in flight: the engine finishes the save first
+/// (it waits up to 60 s for it), so it gets that long plus a margin.
+pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +131,8 @@ pub enum Effect {
     Kill {
         /// Ask nicely first.
         graceful: bool,
+        /// Seconds to wait for a graceful exit before SIGTERM.
+        grace_s: f64,
     },
     /// Spawn again after this many seconds.
     StartAfter(f64),
@@ -353,6 +360,20 @@ impl Supervisor {
         out.push(Effect::Spawn);
     }
 
+    /// Enters `Stopping` and asks the driver to stop the process. Saves and
+    /// recordings asked for from here on would reach an engine that is
+    /// going away, so the pages learn at once that it is gone (they used to
+    /// admit a save, show its success card, then fail it).
+    fn begin_stop(&mut self, out: &mut Vec<Effect>, graceful: bool, grace_s: f64) {
+        let was_connected = self.is_connected();
+        self.phase = Phase::Stopping;
+        self.generation += 1;
+        out.push(Effect::Kill { graceful, grace_s });
+        if was_connected {
+            out.push(Effect::Ui(Event::EngineConnected(false)));
+        }
+    }
+
     fn finish_apply(&mut self, out: &mut Vec<Effect>) {
         self.applying = false;
         self.apply_deadline = None;
@@ -395,9 +416,13 @@ impl Supervisor {
             }
             Input::Stop => {
                 if !matches!(self.phase, Phase::Stopped) {
-                    self.phase = Phase::Stopping;
-                    self.generation += 1;
-                    out.push(Effect::Kill { graceful: true });
+                    // Quitting mid-save: let the engine finish the clip.
+                    let grace_s = if self.save_busy {
+                        SAVE_EXIT_GRACE_S
+                    } else {
+                        KILL_GRACE_S
+                    };
+                    self.begin_stop(&mut out, true, grace_s);
                 }
             }
             Input::Restart {
@@ -443,9 +468,7 @@ impl Supervisor {
                         out.push(Effect::StartAfter(RESTART_GAP_S));
                     }
                     _ => {
-                        self.phase = Phase::Stopping;
-                        self.generation += 1;
-                        out.push(Effect::Kill { graceful: true });
+                        self.begin_stop(&mut out, true, KILL_GRACE_S);
                         self.restart_at = Some(now + RESTART_GAP_S);
                         out.push(Effect::StartAfter(RESTART_GAP_S));
                     }
@@ -553,9 +576,7 @@ impl Supervisor {
                     Some((RecoveryKind::EngineLineage, public)),
                 );
                 if !matches!(self.phase, Phase::Stopped) {
-                    self.phase = Phase::Stopping;
-                    self.generation += 1;
-                    out.push(Effect::Kill { graceful: true });
+                    self.begin_stop(&mut out, true, KILL_GRACE_S);
                 }
             }
             Input::Configured { warnings } => {
@@ -729,7 +750,10 @@ impl Supervisor {
             let mut more = self.handle(Input::StartupError { code, detail }, now);
             out.append(&mut more);
             if !out.iter().any(|e| matches!(e, Effect::Kill { .. })) {
-                out.push(Effect::Kill { graceful: false });
+                out.push(Effect::Kill {
+                    graceful: false,
+                    grace_s: KILL_GRACE_S,
+                });
             }
         }
         if let Some(deadline) = self.apply_deadline
@@ -853,10 +877,8 @@ pub fn discover_engine(exe_dir: Option<&Path>) -> Option<PathBuf> {
 /// connects, forwards IPC events and executes effects.
 pub struct EngineDriver {
     inputs: Sender<Input>,
-    child: Arc<Mutex<Option<tokio::process::Child>>>,
     pid: Arc<Mutex<Option<u32>>>,
     supervisor: Arc<Mutex<Supervisor>>,
-    handle: tokio::runtime::Handle,
 }
 
 struct DriverCtx {
@@ -924,10 +946,8 @@ impl EngineDriver {
             .expect("spawn engine supervisor");
         EngineDriver {
             inputs: tx,
-            child,
             pid,
             supervisor,
-            handle,
         }
     }
 
@@ -951,20 +971,29 @@ impl EngineDriver {
         }
     }
 
-    /// Stops the engine and the driver.
+    /// Stops the engine and waits until its process is gone. The stop
+    /// itself (a graceful `Shutdown`, SIGTERM, then SIGKILL) runs in the
+    /// supervisor's kill task; waiting here keeps the runtime alive until
+    /// it is done, so a save in flight is finished rather than cut off by
+    /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
         let _ = self.inputs.send(Input::Stop);
-        let child = self.child.clone();
-        let handle = self.handle.clone();
-        std::thread::sleep(Duration::from_millis(200));
-        handle.block_on(async move {
-            let taken = child.lock().ok().and_then(|mut c| c.take());
-            if let Some(mut c) = taken {
-                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
-                let _ = c.start_kill();
-                let _ = tokio::time::timeout(Duration::from_millis(500), c.wait()).await;
-            }
-        });
+        let deadline = Instant::now() + Duration::from_secs_f64(SAVE_EXIT_GRACE_S + 3.0);
+        // The supervisor picks the Stop up within one loop turn; give it
+        // that long before trusting "no process" to mean "already gone".
+        std::thread::sleep(Duration::from_millis(150));
+        while self.process_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if self.process_running() {
+            tracing::warn!("engine still running after the shutdown wait; killing it");
+            self.kill_process();
+        }
+    }
+
+    /// Whether an engine process is still running.
+    pub fn process_running(&self) -> bool {
+        self.pid.lock().map(|p| p.is_some()).unwrap_or(false)
     }
 }
 
@@ -979,7 +1008,7 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
                 tracing::warn!("engine command dropped: not connected");
             }
         }
-        Effect::Kill { graceful } => kill_engine(ctx, graceful),
+        Effect::Kill { graceful, grace_s } => kill_engine(ctx, graceful, grace_s),
         Effect::StartAfter(_) => {}
     }
 }
@@ -1170,7 +1199,7 @@ fn queue_command(ctx: &Arc<DriverCtx>, cmd: Command) -> bool {
         .unwrap_or(false)
 }
 
-fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
+fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool, grace_s: f64) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
         if graceful {
@@ -1181,10 +1210,8 @@ fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
             return;
         };
         let pid = child.id();
-        let mut done = graceful
-            && tokio::time::timeout(Duration::from_secs(2), child.wait())
-                .await
-                .is_ok();
+        let grace = Duration::from_secs_f64(grace_s.max(0.0));
+        let mut done = graceful && tokio::time::timeout(grace, child.wait()).await.is_ok();
         if !done && let Some(pid) = pid {
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid as i32),

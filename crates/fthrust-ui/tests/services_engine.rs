@@ -610,3 +610,83 @@ fn launch_success_publishes_active_config() {
         "an exited engine clears the active config: {fx:?}"
     );
 }
+
+/// Audit 2026-10-31 tier 1 #3: quitting mid-save gives the engine time to
+/// finish the clip instead of the usual two seconds.
+#[test]
+fn stop_mid_save_waits_for_the_engine() {
+    use fthrust_ui::services::engine::{KILL_GRACE_S, SAVE_EXIT_GRACE_S};
+    let grace = |fx: &[Effect]| {
+        fx.iter().find_map(|e| match e {
+            Effect::Kill { grace_s, .. } => Some(*grace_s),
+            _ => None,
+        })
+    };
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 30, &mut now);
+    sv.set_save_busy(true);
+    assert_eq!(grace(&sv.handle(Input::Stop, now)), Some(SAVE_EXIT_GRACE_S));
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 31, &mut now);
+    let fx = sv.handle(Input::Stop, now);
+    assert_eq!(grace(&fx), Some(KILL_GRACE_S));
+    // From the moment it stops, the pages see the engine as gone, so no
+    // save is admitted to a daemon that is shutting down.
+    assert!(
+        fx.contains(&Effect::Ui(Event::EngineConnected(false))),
+        "{fx:?}"
+    );
+}
+
+/// The driver's shutdown waits for the process to exit on its own (here a
+/// stand-in engine that takes 2.5 s and ignores SIGTERM) instead of
+/// returning at once and letting the runtime's shutdown SIGKILL it.
+#[test]
+fn driver_shutdown_waits_for_the_engine_to_finish() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let done = d.path().join("finished");
+    let script = d.path().join("slow-engine");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ntrap '' TERM\nsleep 2.5\ntouch '{}'\n",
+            done.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let outbox = fthrust_ui::services::Outbox::new(tx, egui::Context::default());
+    let driver = fthrust_ui::services::engine::EngineDriver::start(
+        rt.handle().clone(),
+        outbox,
+        script,
+        d.path().join("engine.sock"),
+        Vec::new(),
+        d.path().join("engine.log"),
+    );
+    driver.request(Input::Start(config()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !driver.process_running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(driver.process_running(), "the stand-in engine started");
+    driver.supervisor().lock().unwrap().set_save_busy(true);
+    let started = std::time::Instant::now();
+    driver.shutdown();
+    assert!(
+        started.elapsed() >= std::time::Duration::from_secs(2),
+        "shutdown returned after {:?}, before the engine finished",
+        started.elapsed()
+    );
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+    assert!(done.is_file(), "the engine ran to completion, not killed");
+}

@@ -93,7 +93,14 @@ pub fn run(
         next_heartbeat: Instant::now() + HEARTBEAT,
         error: None,
     };
-    event_loop.run_app(&mut runner).map_err(|e| e.to_string())?;
+    let ran = event_loop.run_app(&mut runner).map_err(|e| e.to_string());
+    // The window is gone by now (see `exiting`), so the bounded shutdown
+    // waits (exports, a recording, a save in flight) don't leave a frozen
+    // window on screen.
+    if let Some(mut app) = runner.app.take() {
+        app.on_exit();
+    }
+    ran?;
     match runner.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
@@ -341,9 +348,8 @@ impl ApplicationHandler<Wake> for Runner {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
-        if let Some(mut app) = self.app.take() {
-            app.on_exit();
-        }
+        // Close the window first; [`run`] shuts the app down once the event
+        // loop has returned.
         if let Some(mut p) = self.painter.take() {
             p.destroy();
         }
