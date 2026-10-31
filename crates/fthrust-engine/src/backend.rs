@@ -250,6 +250,9 @@ pub struct SyntheticScript {
     /// Fill each fresh frame with one grey level that differs per frame,
     /// so a test can tell which frame a decoded picture came from.
     pub solid: bool,
+    /// Stamp each fresh frame this long before it is returned, as PipeWire
+    /// stamps portal frames with the time they were produced.
+    pub timestamp_lag: Duration,
     /// Offer dmabuf capture with these constraints. In dmabuf mode frames
     /// arrive as `FrameSource::Dmabuf` views with no pixel data.
     pub dmabuf: Option<DmabufConstraints>,
@@ -257,6 +260,9 @@ pub struct SyntheticScript {
     pub dmabuf_invalidate_after: Option<u64>,
     /// `use_dmabuf` calls that succeeded (tests read it).
     pub dmabuf_uses: u64,
+    /// `capture` calls so far, each one a frame the compositor would copy
+    /// (tests read it).
+    pub captures: u64,
 }
 
 impl SyntheticScript {
@@ -272,9 +278,11 @@ impl SyntheticScript {
             transform: OutputTransform::Normal,
             static_after: None,
             solid: false,
+            timestamp_lag: Duration::ZERO,
             dmabuf: None,
             dmabuf_invalidate_after: None,
             dmabuf_uses: 0,
+            captures: 0,
         }
     }
 
@@ -393,7 +401,8 @@ impl CaptureBackend for SyntheticBackend {
             return Err(CaptureError::Cancelled);
         }
         let (interval, short_stride, black, error, transform) = {
-            let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            let mut s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            s.captures += 1;
             let k = s.kinds.get(&self.kind);
             (
                 s.frame_interval,
@@ -413,13 +422,14 @@ impl CaptureBackend for SyntheticBackend {
             std::thread::sleep(self.next_at - now);
         }
         self.next_at = Instant::now() + interval;
-        let solid = self.script.lock().unwrap_or_else(|p| p.into_inner()).solid;
-        let is_static = self
-            .script
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .static_after
-            .is_some_and(|n| self.frames >= n);
+        let (solid, is_static, lag) = {
+            let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                s.solid,
+                s.static_after.is_some_and(|n| self.frames >= n),
+                s.timestamp_lag,
+            )
+        };
         let (w, h) = (self.width as usize, self.height as usize);
         let stride = if short_stride { w * 4 - 4 } else { w * 4 };
         self.buffer.resize(stride * h, 0);
@@ -443,7 +453,8 @@ impl CaptureBackend for SyntheticBackend {
             }
         }
         self.frames += 1;
-        let ts = monotonic_ns().max(self.last_ts + 1);
+        let lag = if is_static { 0 } else { lag.as_nanos() as i64 };
+        let ts = (monotonic_ns() - lag).max(self.last_ts + 1);
         self.last_ts = ts;
         if self.dmabuf_images > 0 {
             let invalidate_after = self

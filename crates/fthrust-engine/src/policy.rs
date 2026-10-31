@@ -164,6 +164,16 @@ pub fn next_encode_deadline(next_encode_ns: i64, frame_ns: i64, frame_timestamp_
     }
 }
 
+/// How long to wait before asking the backend for the next frame: until
+/// the next encode slot opens. A frame captured earlier would only be
+/// dropped by the throttle, after the compositor had copied it.
+pub fn capture_pacing_wait(next_encode_ns: i64, now_ns: i64) -> Option<Duration> {
+    u64::try_from(next_encode_ns - now_ns)
+        .ok()
+        .filter(|ns| *ns > 0)
+        .map(Duration::from_nanos)
+}
+
 /// Sleeps `remaining` in slices of at most 50 ms while `is_running`;
 /// returns whether the wait completed without cancellation.
 pub fn wait_for_recovery_backoff(

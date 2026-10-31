@@ -13,13 +13,14 @@ use fthrust_ipc::{
 };
 use fthrust_media::encoder::{Conversion, Encoder, EncoderConfig};
 use fthrust_media::ring::{EncodedPacket, EncodedRing};
+use fthrust_wayland::backend::monotonic_ns;
 use fthrust_wayland::frame::{BgraFrame, FrameSource, OutputTransform, normalize};
 
 use crate::audio::{AudioConfig, AudioProvider, AudioTarget};
 use crate::backend::{BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind};
 use crate::policy::{
-    CaptureRecoveryPolicy, EncodeFailurePolicy, next_encode_deadline, recovery_order,
-    wait_for_recovery_backoff,
+    CaptureRecoveryPolicy, EncodeFailurePolicy, capture_pacing_wait, next_encode_deadline,
+    recovery_order, wait_for_recovery_backoff,
 };
 use crate::watchdog::ContentWatchdog;
 use crate::zero_copy::{self, ZeroCopy, zero_copy_plan};
@@ -953,6 +954,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         "the dmabuf capture buffers no longer fit the session",
                     );
                 }
+            }
+            if let Some(wait) = capture_pacing_wait(next_encode_ns, monotonic_ns()) {
+                std::thread::sleep(wait);
             }
             let view = match backend.capture() {
                 Ok(v) => v,

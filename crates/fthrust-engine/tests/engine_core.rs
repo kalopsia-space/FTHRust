@@ -617,21 +617,26 @@ fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");
     }
-    // Frames arrive about eight times per encoded frame, then the screen
-    // goes static: the repeats must show the last fresh frame even though
-    // pacing never encoded it.
-    const LAST_FRESH: u64 = 60;
+    // Fresh frames are stamped 6 ms before they arrive (as PipeWire stamps
+    // portal frames), so after each wait for the encode slot the first ones
+    // are older than the slot and the throttle skips them. Then the screen
+    // goes static: the repeats must show the last fresh frame even when the
+    // encoder never took it.
+    const LAST_FRESH: u64 = 20;
     let mut script = wlr_ok(160, 90);
     script.frame_interval = Duration::from_millis(4);
+    script.timestamp_lag = Duration::from_millis(6);
     script.solid = true;
     script.static_after = Some(LAST_FRESH + 1);
     let mut h = harness(config(|c| c.fps = 30), script);
     let (tx, rx) = crossbeam_channel::unbounded();
     h.engine.set_packet_tap(Some(tx));
     h.engine.start().unwrap();
-    wait_for(&h.engine, Duration::from_secs(20), |s| {
-        s.frames_captured >= 30
-    });
+    let started = Instant::now();
+    while h.script.lock().unwrap().captures < LAST_FRESH + 30 {
+        assert!(started.elapsed() < Duration::from_secs(20), "no repeats");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     h.engine.shutdown();
     let packets: Vec<_> = rx.try_iter().collect();
     let extradata = h.engine.encoder_snapshot().map(|s| s.extradata);
@@ -644,6 +649,34 @@ fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
     assert!(
         (got - expected).abs() <= 8,
         "last picture is grey {got}, the last fresh frame is grey {expected}"
+    );
+}
+
+#[test]
+fn capture_requests_are_paced_to_the_frame_rate() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The backend could deliver 500 frames a second and 30 are encoded:
+    // every frame requested before the next encode slot would be copied
+    // by the compositor for nothing.
+    let mut script = wlr_ok(160, 90);
+    script.frame_interval = Duration::from_millis(2);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 10
+    });
+    let captures = || h.script.lock().unwrap().captures;
+    let (c0, f0) = (captures(), h.engine.status().frames_captured);
+    std::thread::sleep(Duration::from_secs(1));
+    let (c1, f1) = (captures(), h.engine.status().frames_captured);
+    h.engine.shutdown();
+    let (captures, frames) = (c1 - c0, f1 - f0);
+    assert!(frames >= 20, "{frames} frames in a second at 30 fps");
+    assert!(
+        captures <= frames + frames / 2,
+        "{captures} capture requests for {frames} encoded frames"
     );
 }
 
