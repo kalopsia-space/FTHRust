@@ -107,7 +107,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use fthrust_wayland::backend::{CaptureFailure, monotonic_ns};
+use fthrust_wayland::backend::{CaptureFailure, monotonic_ns, repeat_deadline};
 use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform};
 use pipewire as pw;
 use pw::spa::param::video::VideoFormat;
@@ -259,6 +259,8 @@ pub struct PipeWireVideoStream {
     frame_period: Duration,
     last: Option<Delivered>,
     last_delivery: Option<Instant>,
+    /// Whether the last frame returned was fresh rather than a repeat.
+    last_fresh: bool,
     last_timestamp_ns: i64,
     native: (u32, u32),
 }
@@ -307,6 +309,7 @@ impl PipeWireVideoStream {
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1))),
             last: None,
             last_delivery: None,
+            last_fresh: false,
             last_timestamp_ns: 0,
             native: (0, 0),
         };
@@ -339,9 +342,9 @@ impl PipeWireVideoStream {
         self.native
     }
 
-    /// Captures the newest frame: waits up to one frame period after the
-    /// last delivery (5 s for the first frame), repeating the last frame on
-    /// a static screen.
+    /// Captures the newest frame, repeating the last one on a static screen
+    /// (see [`repeat_deadline`] for when a repeat is due; the first frame
+    /// may take [`FIRST_FRAME_DEADLINE`]).
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(CaptureFailure::Cancelled);
@@ -353,11 +356,10 @@ impl PipeWireVideoStream {
                 "the portal session was closed".into(),
             ));
         }
+        let now = Instant::now();
         let deadline = match (self.last_delivery, &self.last) {
-            (Some(last), Some(_)) => {
-                (last + self.frame_period).max(Instant::now() + Duration::from_millis(1))
-            }
-            _ => Instant::now() + FIRST_FRAME_DEADLINE,
+            (Some(last), Some(_)) => repeat_deadline(now, last, self.last_fresh, self.frame_period),
+            _ => now + FIRST_FRAME_DEADLINE,
         };
         let taken = {
             let mut shared = self.slot.lock();
@@ -397,6 +399,7 @@ impl PipeWireVideoStream {
             }
         };
         let fresh = taken.is_some();
+        self.last_fresh = fresh;
         match taken {
             Some(delivered) => {
                 // Moved, not copied: the frame PipeWire filled is the one
@@ -689,6 +692,7 @@ mod tests {
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps)),
             last: None,
             last_delivery: None,
+            last_fresh: false,
             last_timestamp_ns: 0,
             native: (0, 0),
         }
@@ -736,6 +740,26 @@ mod tests {
                 "the frame PipeWire filled is the one returned"
             );
         }
+    }
+
+    #[test]
+    fn a_fresh_frame_a_little_late_is_not_beaten_by_a_repeat() {
+        // 4 fps, a 250 ms period: the next frame comes 1.1 periods after
+        // the last one, as a source at about the capture rate does now and
+        // then. It must arrive as itself, not after a repeat.
+        let mut stream = receiver(4);
+        negotiated(&stream, PixelLayout::Bgra);
+        deliver(&stream, 1);
+        stream.capture().unwrap();
+        let slot = stream.slot.clone();
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(275));
+            slot.deliver(&vec![2u8; 64 * 36 * 4], None, monotonic_ns());
+        });
+        let view = stream.capture().unwrap();
+        assert!(!view.repeated, "a repeat came first");
+        assert_eq!(view.data[0], 2);
+        producer.join().unwrap();
     }
 
     #[test]

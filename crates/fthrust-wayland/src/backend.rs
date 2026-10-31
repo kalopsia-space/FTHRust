@@ -108,6 +108,28 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
     }
 }
 
+/// When a capture call that started at `now` stops waiting for a fresh
+/// frame and repeats the last one, delivered at `last_delivery`.
+///
+/// After a fresh frame the call waits a frame period and a half: the
+/// engine asks for a frame only when it needs one, and a source running at
+/// about the capture rate delivers within a period of that, so a repeat
+/// due a period after the last frame would race it (and the fresh frame
+/// arriving just after the repeat was dropped). Further repeats of a
+/// static screen follow one period apart, so the frame rate holds.
+pub fn repeat_deadline(
+    now: std::time::Instant,
+    last_delivery: std::time::Instant,
+    last_was_fresh: bool,
+    frame_period: std::time::Duration,
+) -> std::time::Instant {
+    if last_was_fresh {
+        now.max(last_delivery) + frame_period + frame_period / 2
+    } else {
+        (last_delivery + frame_period).max(now + std::time::Duration::from_millis(1))
+    }
+}
+
 /// `CLOCK_MONOTONIC` in nanoseconds.
 pub fn monotonic_ns() -> i64 {
     let ts =

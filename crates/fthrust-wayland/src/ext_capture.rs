@@ -22,7 +22,8 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
 };
 
 use crate::backend::{
-    BackendError, CaptureFailure, FailureKind, monotonic_ns, open_failure, wait_failure,
+    BackendError, CaptureFailure, FailureKind, monotonic_ns, open_failure, repeat_deadline,
+    wait_failure,
 };
 use crate::connection::{CoreState, bind_linux_dmabuf, bounded_roundtrip, connect_display};
 use crate::dispatch::{WaitResult, WaylandOps, wait_for_event};
@@ -206,6 +207,8 @@ pub struct ExtImageCopy {
     last_geometry: Option<BufferGeometry>,
     last_transform: OutputTransform,
     last_delivery: Option<Instant>,
+    /// Whether the last frame returned was fresh rather than a repeat.
+    last_fresh: bool,
     last_timestamp_ns: i64,
     native: (u32, u32),
     linux_dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
@@ -344,6 +347,7 @@ impl ExtImageCopy {
             last_geometry: None,
             last_transform: output_transform,
             last_delivery: None,
+            last_fresh: false,
             last_timestamp_ns: 0,
             native: (0, 0),
             linux_dmabuf,
@@ -527,13 +531,15 @@ impl ExtImageCopy {
     }
 
     /// Captures one frame. On a static screen the previous frame is
-    /// repeated once per frame period so the stream keeps its rate.
+    /// repeated once per frame period so the stream keeps its rate (see
+    /// [`repeat_deadline`] for when a repeat is due).
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
+        let now = Instant::now();
         let deadline = match self.last_delivery {
             Some(last) if self.last_frame_available() => {
-                (last + self.frame_period).max(Instant::now() + Duration::from_millis(1))
+                repeat_deadline(now, last, self.last_fresh, self.frame_period)
             }
-            _ => Instant::now() + FRAME_DEADLINE,
+            _ => now + FRAME_DEADLINE,
         };
         self.capture_with_deadline(deadline, true)
     }
@@ -741,11 +747,13 @@ impl ExtImageCopy {
             self.last_transform = info.transform;
         }
         self.last_delivery = Some(Instant::now());
+        self.last_fresh = true;
     }
 
     fn last_view(&mut self, repeated: bool) -> FrameView<'_> {
         if repeated {
             self.last_delivery = Some(Instant::now());
+            self.last_fresh = false;
         }
         let timestamp_ns = monotonic_ns().max(self.last_timestamp_ns + 1);
         self.last_timestamp_ns = timestamp_ns;
