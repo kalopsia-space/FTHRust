@@ -8,6 +8,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
@@ -35,6 +36,15 @@ const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
 fn local_offset() -> UtcOffset {
     static OFFSET: OnceLock<UtcOffset> = OnceLock::new();
     *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
+}
+
+/// Log files are private to the user (paths, window titles and game names end
+/// up in them): a file the log creates is `0600`. The mode only applies to a
+/// file that does not exist yet; one that is already there keeps its own.
+fn private_log() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.create(true).mode(0o600);
+    options
 }
 
 fn local_now_text() -> String {
@@ -86,7 +96,7 @@ impl RotatingWriter {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let file = private_log().append(true).open(path)?;
         let len = file.metadata()?.len();
         Ok(Self {
             path: path.to_path_buf(),
@@ -133,11 +143,7 @@ impl RotatingWriter {
             }
             fs::rename(&self.path, self.backup_path(1))?;
         }
-        self.file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self.path)?;
+        self.file = private_log().truncate(true).write(true).open(&self.path)?;
         self.len = 0;
         Ok(())
     }
@@ -360,7 +366,7 @@ fn install_panic_hook() {
                 .map(|l| format!("{}:{}", l.file(), l.line()))
                 .unwrap_or_else(|| "<unknown>".into());
             let backtrace = std::backtrace::Backtrace::force_capture();
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(mut file) = private_log().append(true).open(&path) {
                 let _ = writeln!(
                     file,
                     "panic: {} (thread {}) at {}\n{}",
@@ -391,7 +397,7 @@ pub fn init_crash_log(paths: &FthrPaths) -> Result<()> {
         old.push(".old");
         fs::rename(&path, PathBuf::from(old))?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = private_log().append(true).open(&path)?;
     writeln!(
         file,
         "===== started {} pid {} =====",
