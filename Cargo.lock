@@ -1871,8 +1871,10 @@ name = "fthrust-core"
 version = "2.0.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
+ "egui",
  "idna",
  "image",
+ "log",
  "md-5",
  "nix",
  "regex",

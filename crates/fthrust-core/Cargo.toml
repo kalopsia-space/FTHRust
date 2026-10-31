@@ -25,3 +25,7 @@ nix.workspace = true
 tempfile.workspace = true
 image.workspace = true
 nix.workspace = true
+# Only the hotkey key-name test walks `egui::Key::ALL`.
+egui.workspace = true
+# Only the logging test emits a `log` record, as wgpu and winit do.
+log = "0.4"

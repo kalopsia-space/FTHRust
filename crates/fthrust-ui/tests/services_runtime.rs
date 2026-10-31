@@ -137,7 +137,8 @@ fn diagnostics_session_records_events_and_exports_from_the_live_session() {
     let (_tmp, mut s) = state();
     let ctx = egui::Context::default();
     let mut services = Services::start_for_tests(&ctx);
-    s.diagnostics = Some(fthrust_ui::services::diagnostics::start(&s.paths));
+    s.diagnostics = fthrust_ui::services::diagnostics::start(&s.paths);
+    assert!(s.diagnostics.is_some(), "a writable profile gets a session");
     fthrust_ui::services::diagnostics::emit(
         &s,
         "library",
@@ -157,6 +158,81 @@ fn diagnostics_session_records_events_and_exports_from_the_live_session() {
     assert!(zip.exists());
     services.tick(&mut s);
     services.shutdown();
+}
+
+#[test]
+fn a_diagnostics_session_that_cannot_start_leaves_the_app_without_one() {
+    let (_tmp, mut s) = state();
+    // A file where the diagnostics directory belongs, as when the disk is
+    // full or read-only: nothing can be created there. Starting must neither
+    // panic nor fall back to a session in the temp directory.
+    std::fs::create_dir_all(s.paths.root()).unwrap();
+    std::fs::write(s.paths.diagnostics_dir(), "in the way").unwrap();
+    assert!(fthrust_ui::services::diagnostics::start(&s.paths).is_none());
+    s.diagnostics = None;
+    fthrust_ui::services::diagnostics::emit(&s, "library", "scan_started", serde_json::json!({}));
+    // The report dialog says what went wrong instead of panicking.
+    assert!(fthrust_ui::dialogs::diagnostic_report::export(&mut s).is_err());
+}
+
+#[test]
+fn a_report_made_without_a_live_session_leaves_no_crash_marker() {
+    // Diagnostics could not start at launch (a full disk), so there is no
+    // live session; the disk has room again when the user asks for a report.
+    let (_tmp, mut s) = state();
+    assert!(s.diagnostics.is_none());
+    let zip = fthrust_ui::dialogs::diagnostic_report::export(&mut s).unwrap();
+    assert!(zip.exists());
+    assert!(
+        !s.paths
+            .diagnostics_dir()
+            .join("active-session.json")
+            .exists(),
+        "the report's own session is closed: no marker for the next launch to call a crash"
+    );
+    let next =
+        fthrust_core::diagnostics::session::DiagnosticsSession::start(&s.paths, "next").unwrap();
+    assert!(
+        next.previous_unclean().is_none(),
+        "the next launch is not told the previous one did not shut down cleanly"
+    );
+}
+
+#[test]
+fn startup_notices_are_not_swallowed_by_the_error_notification_setting() {
+    use fthrust_ui::shell::error_bar::Level;
+    let tmp = tempfile::tempdir().unwrap();
+    // A damaged theme.json is something the stores report at startup.
+    let paths = fthrust_core::FthrPaths::new(tmp.path());
+    std::fs::create_dir_all(paths.theme_dir()).unwrap();
+    std::fs::write(paths.theme_file(), "{not json").unwrap();
+    let mut s = AppState::for_tests(
+        tmp.path(),
+        serde_json::json!({"error_notifications_enabled": false}),
+    );
+    assert!(
+        !s.error_bar.enabled,
+        "the user turned error notifications off"
+    );
+    assert!(
+        s.theme
+            .startup_issues()
+            .iter()
+            .any(|m| m.contains("theme.json was damaged"))
+    );
+    fthrust_ui::services::diagnostics::report_startup_issues(&mut s);
+    let shown = s.error_bar.current().expect("the notice is shown anyway");
+    assert_eq!(shown.title, "STARTUP PROBLEM");
+    assert!(
+        shown.detail.contains("theme.json was damaged"),
+        "{}",
+        shown.detail
+    );
+    // Ordinary errors still follow the setting.
+    assert!(
+        !s.error_bar
+            .push_error("X", "y", Level::Error, Vec::new(), None, false)
+    );
 }
 
 fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

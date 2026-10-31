@@ -97,21 +97,28 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **STOP RECORDING FIRST**, **WAIT FOR CLIP SAVE** | That action has to wait for the recording or save in progress. |
 | **CAMERA UNAVAILABLE**, **CAMERA OVERLAY FAILED** | The webcam overlay couldn't be used. Clips save without it. |
 | **LIMITED FEATURE SUPPORT** | Your desktop doesn't share its window list, so game detection and focus pause are off. Capture and hotkeys are unaffected. See [Desktop support](install.md#desktop-support). |
+| **STARTUP PROBLEM** | FTHRust couldn't read or write one of its own files while starting (`settings.json`, `theme.json`, the theme folders), for example on a full or read-only disk, and opened anyway with defaults. The message names the file, and shows even if you turned error notifications off. A file that couldn't be read is left as it is, so that session's changes aren't saved; a damaged one is kept as `<name>.corrupt`. The same notice appears if FTHRust was killed in the middle of a theme import and couldn't undo it: it names the `.import-…` folder under `~/.fthr/theme/` that keeps your previous icons, sounds and fonts, and tries again at the next start. |
 
 ## Logs
 
-- **The app** logs to the terminal. Start it from a terminal to see what it's doing, and add `RUST_LOG=debug` for more detail:
+- **The app** logs to `~/.fthr/logs/fthr.log`, rotated at 2 MB with two older copies kept, and to the terminal if you started it from one. It records FTHRust's own messages at info level and warnings from everything else; add `RUST_LOG=debug` for more detail:
 
   ```sh
   RUST_LOG=debug ./FTHRust-*-x86_64.AppImage
   ```
 
+  Passwords, tokens, cookies and similar are replaced with `<redacted>` before a line is written.
+
+- **Crashes**: a panic is written, with its backtrace, to `~/.fthr/logs/fthr-crash.log`.
+
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
+
+If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that.
 
 ## Diagnostic reports
 
 **Settings → General → Troubleshooting → Export diagnostic report** builds a ZIP in `~/.fthr/diagnostics/` and shows it in a dialog that you can drag straight into a bug report.
 
-The report holds a summary of your system and FTHRust's recent activity, with paths and secrets (tokens, passwords, auth headers) redacted. It **never** includes clips, screenshots, audio, credentials or a listing of your files, and it's never uploaded anywhere by FTHRust. Open the ZIP and read it before sending if you like; it's all plain text.
+The report holds a summary of your system, FTHRust's recent activity (`events.jsonl`, one JSON record per line) and the last megabyte of each log (`ui.log` from `fthr.log`, `engine.log` from the engine's log), with paths and secrets (tokens, passwords, cookies, auth headers) redacted. It **never** includes clips, screenshots, audio, credentials or a listing of your files, and it's never uploaded anywhere by FTHRust. Open the ZIP and read it before sending if you like; it's all plain text.
 
-While FTHRust is in alpha, please also attach `~/.fthr/logs/engine.log` (and the terminal output if you have it). The report doesn't include full logs yet.
+If a problem started earlier than the last megabyte of a log reaches, attach the whole `~/.fthr/logs/fthr.log` or `engine.log` as well (and the terminal output if you have it).

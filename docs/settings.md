@@ -67,6 +67,8 @@ Theme the whole app. Six sections, each with its own reset:
 
 A live mock window shows your changes before you commit to them. **Apply theme** saves them. **Export theme** saves the theme as a file you can share, and **Import theme** loads one. **Reset all** goes back to stock.
 
+A theme file is a ZIP. Importing one is all or nothing: its icons, sounds and fonts are unpacked beside your current ones and swapped in only once the whole file has been read, so a bad file leaves your theme as it was, and if FTHRust is killed before the import is done the next start puts all of your previous icons, sounds and fonts back (and says so). It may hold up to 1,000 entries and 256 MB of assets (64 MB for any one), and `theme.json` up to 4 MB; anything bigger is refused.
+
 ## Performance
 
 <img src="images/settings-performance.png" alt="Settings, Performance tab" width="860">
@@ -102,7 +104,7 @@ Everything FTHRust remembers lives in `~/.fthr`. It's the same folder, and the s
 
 | Path | What |
 |---|---|
-| `settings.json` | All settings. A corrupt file is set aside and replaced with defaults rather than crashing the app. |
+| `settings.json` | All settings. A corrupt file is set aside as `settings.json.corrupt` and replaced with defaults rather than crashing the app. A file the app can't read at all (permissions, a disk error) is never overwritten: that session runs on defaults and its changes aren't saved, and a notice says so. The JSON files FTHRust writes here are private to you (`0600`). |
 | `hotkeys.json` | Global hotkey bindings. |
 | `presets.json`, `export_presets.json` | Settings presets and Share presets. |
 | `clip_metadata.sqlite3` | Clip titles, tags, descriptions and editor drafts. |
@@ -110,7 +112,9 @@ Everything FTHRust remembers lives in `~/.fthr`. It's the same folder, and the s
 | `portal_screencast_token` | Lets the ScreenCast portal skip its dialog next time. |
 | `theme/` | Your custom theme, fonts, icons and sounds. |
 | `thumbnails/`, `playback/` | Caches. Safe to delete. |
-| `uploader/` | Upload settings, history and trusted SFTP host keys (see [Uploading](uploads.md#whats-stored-where)). |
+| `uploader/` | Upload settings, history and trusted SFTP host keys (see [Uploading](uploads.md#whats-stored-where)). Only you can open the folder (`0700`). |
+| `logs/fthr.log` | The app's log, rotated at 2 MB (two older copies are kept). The log files are created private to you (`0600`). |
+| `logs/fthr-crash.log` | Panics, with a backtrace, and a line for each start. |
 | `logs/engine.log` | The capture engine's log. |
 | `diagnostics/` | Diagnostic sessions and exported reports. |
 | `fthr.lock` | Keeps a second copy of the app from starting. |
@@ -131,7 +135,7 @@ You shouldn't need any of these, but they help when something's odd.
 |---|---|
 | `FTHR_CAPTURE_BACKEND` | Forces a capture method: `ext`, `wlr` or `portal`. |
 | `FTHR_VAAPI_DEVICE` | Picks the VA-API render node, for example `/dev/dri/renderD129`. |
-| `RUST_LOG` | Log detail for the app, for example `RUST_LOG=debug`. |
+| `RUST_LOG` | Log detail for the app, for example `RUST_LOG=debug`. Without it the app logs FTHRust's own messages at info and everything else at warning. |
 | `FTHRUST_LOG` | Log detail for the engine. |
 | `FTHRUST_ENGINE`, `FTHRUST_UPLOADER` | Use a different engine or uploader binary. Normally they're found next to the app. |
 

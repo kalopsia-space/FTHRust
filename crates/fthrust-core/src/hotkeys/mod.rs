@@ -5,10 +5,12 @@
 //! `keyboard` map). [`HotkeyBindings::load`] reads all of them.
 
 pub mod hyprland;
+mod keys;
 
 use crate::error::{CoreError, Result};
 use crate::{FthrPaths, read_json, write_json_atomic};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 const CUSTOM_PREFIX: &str = "save_custom_clip_";
@@ -260,53 +262,78 @@ fn normalize_controller_combo(input: &str) -> String {
     out.join("+")
 }
 
-/// The xkb keysym name of a named key (`Page Up` → `Prior`), shared by the
-/// portal trigger and the Hyprland bind writers.
-pub(crate) fn portal_key(part: &str) -> Option<&'static str> {
-    Some(match part {
-        "Esc" => "Escape",
-        "Enter" => "Return",
-        "Space" => "space",
-        "Tab" => "Tab",
-        "Backspace" => "BackSpace",
-        "Delete" => "Delete",
-        "Insert" => "Insert",
-        "Home" => "Home",
-        "End" => "End",
-        "Page Up" => "Prior",
-        "Page Down" => "Next",
-        "Up" => "Up",
-        "Down" => "Down",
-        "Left" => "Left",
-        "Right" => "Right",
-        "Print" => "Print",
-        "Pause" => "Pause",
-        "Scroll Lock" => "Scroll_Lock",
-        _ => return None,
-    })
+/// Whether two keyboard combos are the same chord: the same modifiers and
+/// the same key, the key compared as a key (by its keysym) and not by how it
+/// is spelled. `Ctrl+Pageup` (what the hotkey popup stores), `Ctrl+Page Up`,
+/// `Ctrl+PgUp` and `Ctrl+Prior` are one chord, and a desktop that describes
+/// its trigger in its own words has not changed it. With Shift among the
+/// modifiers a shifted symbol is the key it is typed on, as the writers bind
+/// it: `Ctrl+Shift+Exclamationmark` and `Ctrl+Shift+1` are one chord.
+pub fn same_chord(a: &str, b: &str) -> bool {
+    fn split(combo: &str) -> (BTreeSet<&'static str>, String) {
+        let mut mods = BTreeSet::new();
+        let mut key = String::new();
+        for part in combo.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+            let lower = part.to_lowercase().replace('_', " ");
+            let modifier = modifier_alias(&lower).or(match lower.as_str() {
+                "super" | "logo" => Some("Win"),
+                _ => None,
+            });
+            match modifier {
+                Some(m) => {
+                    mods.insert(m);
+                }
+                None => key = part.to_owned(),
+            }
+        }
+        (mods, key)
+    }
+    let (mods_a, key_a) = split(a);
+    let (mods_b, key_b) = split(b);
+    // The key a chord is bound on, as the writers bind it: with Shift,
+    // `Ctrl+Shift+Exclamationmark` and `Ctrl+Shift+1` are one chord.
+    let key_a = keys::bound_key(&key_a, mods_a.contains("Shift"));
+    let key_b = keys::bound_key(&key_b, mods_b.contains("Shift"));
+    mods_a == mods_b && keys::same_key(key_a, key_b)
+}
+
+/// The key to record when the key egui calls `name` was pressed with Shift
+/// held: for shifted punctuation (`Exclamationmark`, `Questionmark`, `Colon`,
+/// `Pipe`, the curly brackets, `Plus`) the key it is typed on in a US layout
+/// (`1`, `Slash`, `Semicolon`, `Backslash`, `OpenBracket`, `CloseBracket`,
+/// `Equals`); `None` for every other key, which is recorded as it is. A
+/// compositor matches a bind on the unshifted key, so `Shift+1` fires where
+/// `Shift+Exclamationmark` (keysym `exclam`) never does. A chord stored that
+/// way before the popup recorded the base key (or with the character itself,
+/// `Shift+!`, as the Qt app wrote it) is written as the base key by
+/// [`to_portal_trigger`] and [`hyprland::to_hyprland_bind`], so it fires too;
+/// those characters give the same answer here.
+pub fn unshifted_key_name(name: &str) -> Option<&'static str> {
+    keys::unshifted_base(name)
 }
 
 /// Converts an FTHR combo such as `Ctrl+Shift+S` to the freedesktop
-/// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`).
+/// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`). Keys are
+/// spelled as xkb keysym names (`Page Up`, `PageUp` and `Pageup` all give
+/// `Prior`); one with no keysym is passed through as it was typed. With Shift
+/// held a shifted symbol goes out as the key it is typed on
+/// (`Ctrl+Shift+Exclamationmark` → `CTRL+SHIFT+1`), the one a desktop matches.
 pub fn to_portal_trigger(combo: &str) -> String {
-    combo
+    let parts: Vec<&str> = combo
         .split('+')
         .map(str::trim)
         .filter(|p| !p.is_empty())
+        .collect();
+    let shift = parts.contains(&"Shift");
+    parts
+        .into_iter()
         .map(|part| match part {
             "Ctrl" => "CTRL".to_string(),
             "Alt" => "ALT".to_string(),
             "Shift" => "SHIFT".to_string(),
             "Win" => "LOGO".to_string(),
-            _ => {
-                if let Some(k) = portal_key(part) {
-                    k.to_string()
-                } else if part.chars().count() == 1 && part.chars().all(char::is_alphabetic) {
-                    part.to_lowercase()
-                } else {
-                    part.to_string()
-                }
-            }
+            _ => keys::keysym(keys::bound_key(part, shift))
+                .map_or_else(|| part.to_string(), Cow::into_owned),
         })
         .collect::<Vec<_>>()
         .join("+")

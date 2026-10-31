@@ -200,6 +200,13 @@ pub fn clear_button(
 }
 
 /// Chord text for an egui key event (`Ctrl+Shift+F10`).
+///
+/// egui reports the logical key, so Shift+1 arrives as `Exclamationmark`. A
+/// compositor binds the key as typed with no modifier (Hyprland matches the
+/// unshifted keysym), so with Shift held a shifted punctuation symbol is
+/// recorded as the key it sits on, `Ctrl+Shift+1`, which fires. Letters and
+/// every other key stay logical: physical keys would put a letter on the
+/// wrong key of an AZERTY layout.
 fn chord_for(modifiers: egui::Modifiers, key: egui::Key) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if modifiers.ctrl || modifiers.command {
@@ -211,7 +218,11 @@ fn chord_for(modifiers: egui::Modifiers, key: egui::Key) -> String {
     if modifiers.shift {
         parts.push("Shift");
     }
-    let name = key.name();
+    let name = if modifiers.shift {
+        fthrust_core::hotkeys::unshifted_key_name(key.name()).unwrap_or_else(|| key.name())
+    } else {
+        key.name()
+    };
     let mut s = parts.join("+");
     if !s.is_empty() {
         s.push('+');

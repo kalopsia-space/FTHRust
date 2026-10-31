@@ -15,11 +15,22 @@ pub use fthrust_core::theme::BUILTIN_FONT_FAMILIES as BUILTIN_FAMILIES;
 /// missing or corrupt file yields the defaults (the core loader quarantines
 /// and reports; the UI never shows an unstyled screen).
 pub fn load(paths: &FthrPaths) -> Tokens {
-    let mut tokens = Tokens::default_palette();
     match ThemeStore::load(paths.clone()) {
-        Ok(store) => apply(&mut tokens, &store),
-        Err(e) => tracing::warn!("theme not loaded, using defaults: {e}"),
+        Ok(store) => tokens_for(&store),
+        Err(e) => {
+            tracing::warn!("theme not loaded, using defaults: {e}");
+            Tokens::default_palette()
+        }
     }
+}
+
+/// The default palette with every valid value of `store` applied. The app
+/// loads the store once and builds its tokens from it with this: loading it a
+/// second time would find a damaged `theme.json` already set aside and lose
+/// the notice about it.
+pub fn tokens_for(store: &ThemeStore) -> Tokens {
+    let mut tokens = Tokens::default_palette();
+    apply(&mut tokens, store);
     tokens
 }
 

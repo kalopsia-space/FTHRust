@@ -78,13 +78,17 @@ You'll get a capture card instead of a clip if:
 
 Change them in the **Hotkeys** popup in the toolbar. Hotkeys are global: they work while your game has focus.
 
+A desktop binds a key as it is typed with nothing held, so when you hold Shift the popup records a shifted symbol as the key it sits on (on a US layout): Shift+1, not Shift+!, and likewise `/` for `?`, `;` for `:`, `\` for `|`, `[` and `]` for `{` and `}`, `=` for `+`. Letters and every other key are recorded as you type them. A hotkey saved with Shift and one of those symbols themselves (Shift+!, as the Qt app wrote it, or an earlier build's Shift+Exclamationmark) is handed to the desktop as the key it sits on (Shift+1), so it works without being recorded again. A carried-over hotkey with any other shifted symbol (Shift+@, say) is passed on as it is; record it again in the popup.
+
 Wayland doesn't let apps read the keyboard while another window has focus, so FTHRust asks your desktop to deliver the keys for it. How depends on your desktop:
 
 ### Hyprland: automatic
 
 FTHRust writes your bindings to `~/.config/hypr/fthr-hotkeys.conf`, adds a single `source = ~/.config/hypr/fthr-hotkeys.conf` line to `hyprland.conf` the first time, and runs `hyprctl reload`. Change a key in the popup and the file is rewritten. It never creates `hyprland.conf` for you, and never adds the `source` line twice.
 
-On Lua configs (a `custom/keybinds.lua` or `hyprland.lua` exists), it maintains a fenced block in `custom/keybinds.lua` instead, between `-- FTHR Clips hotkeys begin (managed)` and `-- FTHR Clips hotkeys end (managed)`. Edit outside those markers as you please. If the block looks broken, FTHRust leaves the file alone rather than guess.
+On Lua configs (a `custom/keybinds.lua` or `hyprland.lua` exists), it maintains a fenced block in `custom/keybinds.lua` instead, between `-- FTHR Clips hotkeys begin (managed)` and `-- FTHR Clips hotkeys end (managed)`. Edit outside those markers as you please. Each change is written to a temporary file and renamed into place (a symlinked file stays a symlink; where a rename is refused, as for a bind-mounted file, it is rewritten in place), and the contents before the change are kept next to it as `keybinds.lua.fthr-bak` (your own `.bak` copies are never touched). If the block looks broken, or the file can't be read or isn't valid UTF-8, FTHRust leaves the file alone rather than guess.
+
+Keys are written the way Hyprland spells them (`PageUp` becomes `Prior`, `Equals` becomes `equal`, `Backtick` becomes `grave`), and a key with no such name, such as `Fn`, is left out of the file instead of being written as a bind Hyprland would reject. The portal shortcuts use the same names.
 
 ### KDE, GNOME and others: the shortcuts portal
 
@@ -197,7 +201,7 @@ Everything lives under your clips folder, `~/Videos/FTHR Clips` by default (chan
 └── Shared/         size-targeted files made by Share
 ```
 
-Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` and are never shown in the library.
+Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` (exports and screenshots use a hidden `.<name>.partial.<code>` file) and are never shown in the library. If a crash leaves any of them behind, the next start removes the ones more than a day old from the clips and recordings folders, along with leftover `.fthr-finalize-*` folders. A finished clip or recording is never touched, not even one a crash cut short.
 
 ## What's not there yet
 

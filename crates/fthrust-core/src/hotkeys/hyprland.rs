@@ -6,7 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::HotkeyBindings;
+use super::{HotkeyBindings, keys};
+use crate::fsutil;
 
 const SOCKET_ACTIONS: [&str; 6] = [
     "save_clip",
@@ -30,7 +31,9 @@ pub fn managed_conf(home: &Path) -> PathBuf {
     hypr_dir(home).join("fthr-hotkeys.conf")
 }
 
-/// `_to_hyprland_bind`: `Ctrl+Shift+S` → `("CTRL SHIFT", "S")`.
+/// `_to_hyprland_bind`: `Ctrl+Shift+S` → `("CTRL SHIFT", "S")`. With Shift
+/// held a shifted symbol is bound on the key it is typed on, which is what
+/// Hyprland matches: `Ctrl+Shift+Exclamationmark` → `("CTRL SHIFT", "1")`.
 pub fn to_hyprland_bind(combo: &str) -> (String, String) {
     let parts: Vec<&str> = combo.split('+').collect();
     if parts.len() == 1 {
@@ -39,24 +42,29 @@ pub fn to_hyprland_bind(combo: &str) -> (String, String) {
         }
         return (String::new(), hypr_key(parts[0]));
     }
-    let mods = parts[..parts.len() - 1]
+    let modifiers = &parts[..parts.len() - 1];
+    let mods = modifiers
         .iter()
         .map(|p| p.to_uppercase())
         .collect::<Vec<_>>()
         .join(" ");
-    let last = parts[parts.len() - 1];
+    let shift = modifiers
+        .iter()
+        .any(|p| p.trim().eq_ignore_ascii_case("shift"));
+    let last = keys::bound_key(parts[parts.len() - 1], shift);
     (mods, hypr_key(last))
 }
 
-/// Hyprland parses xkb keysym names: single characters upper-cased as the
-/// reference did, named keys through the keysym table (`Page Up` → `Prior`).
+/// Hyprland parses xkb keysym names: letters upper-cased as the reference
+/// did, every other key through the keysym table the portal trigger shares
+/// (`Page Up`, `PageUp` and `Pageup` → `Prior`, `Equals` → `equal`). A key
+/// with no keysym is passed through as it was typed.
 fn hypr_key(key: &str) -> String {
-    if key.chars().count() == 1 {
-        return key.to_uppercase();
+    match keys::keysym(key) {
+        Some(k) if k.chars().count() == 1 => k.to_uppercase(),
+        Some(k) => k.into_owned(),
+        None => key.to_owned(),
     }
-    super::portal_key(key)
-        .map(str::to_owned)
-        .unwrap_or_else(|| key.to_owned())
 }
 
 /// The command a compositor bind runs: `"<client_exe>" --hotkey <action>`.
@@ -75,7 +83,9 @@ pub fn bind_line(action: &str, combo: &str, client_exe: &Path, sock: &Path) -> S
 }
 
 /// `_hyprland_bind_actions`: the six socket actions then the custom clips
-/// by length, keeping only those with a key.
+/// by length, keeping only those with a key. A key with no xkb keysym (`Fn`,
+/// or a name nothing knows) is left out and logged: Hyprland would reject the
+/// line, and in a Lua config a bad bind can take the rest of the file with it.
 pub fn bind_actions(bindings: &HotkeyBindings) -> Vec<String> {
     let mut actions: Vec<String> = SOCKET_ACTIONS.iter().map(|s| s.to_string()).collect();
     for n in bindings.custom_clip_lengths() {
@@ -83,7 +93,16 @@ pub fn bind_actions(bindings: &HotkeyBindings) -> Vec<String> {
     }
     actions
         .into_iter()
-        .filter(|a| bindings.get(a).is_some_and(|k| !k.is_empty()))
+        .filter(|a| {
+            let Some(combo) = bindings.get(a).filter(|k| !k.is_empty()) else {
+                return false;
+            };
+            let bindable = keys::is_bindable(combo);
+            if !bindable {
+                tracing::warn!(action = %a, combo, "the key has no xkb keysym; not written to the Hyprland config");
+            }
+            bindable
+        })
         .collect()
 }
 
@@ -142,8 +161,84 @@ pub fn ensure_source_line(home: &Path) -> std::io::Result<()> {
     f.write_all(line.as_bytes())
 }
 
+/// Reads a user's Lua keybind file for editing: `None` when it does not
+/// exist. Any other failure to read it, and content that is not UTF-8,
+/// aborts: the file is the user's, and treating it as empty would rewrite it
+/// with nothing but the managed block.
+fn read_lua_config(path: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not valid UTF-8; refusing to edit user config",
+                    path.display()
+                ),
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Suffix of the copy kept of the Lua keybind file before a change. It is not
+/// `.bak`: `keybinds.lua.bak` is the name a user (or their editor) gives a
+/// copy of their own, and it must not be overwritten.
+pub const LUA_BACKUP_SUFFIX: &str = ".fthr-bak";
+
+/// Where the previous contents of the Lua keybind file at `path` are kept:
+/// `<name>.fthr-bak` beside it.
+pub fn lua_backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(LUA_BACKUP_SUFFIX);
+    path.with_file_name(name)
+}
+
+/// Errors that say a file cannot be replaced by a rename although it can
+/// still be written: a mount point (a bind-mounted file), a directory that is
+/// not ours around a file that is, a read-only directory over a writable file.
+fn rename_refused(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{PermissionDenied, ReadOnlyFilesystem, ResourceBusy};
+    matches!(
+        e.kind(),
+        PermissionDenied | ReadOnlyFilesystem | ResourceBusy
+    )
+}
+
+/// Replaces the Lua keybind file with `text` through a temporary file and a
+/// rename, after saving `previous` beside it ([`lua_backup_path`]). A symlink
+/// (dotfile managers) is written through, not replaced, and the file keeps
+/// its mode. Nothing is replaced unless the backup was written. When the
+/// rename is refused (see [`rename_refused`]) the file is rewritten in place
+/// instead: the backup is already safe, and if the rewrite itself fails
+/// half-way the previous contents are put back.
+fn replace_lua_config(path: &Path, previous: Option<&str>, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0o644);
+    if let Some(previous) = previous.filter(|p| !p.is_empty()) {
+        fsutil::write_atomic(&lua_backup_path(path), previous.as_bytes(), mode)?;
+    }
+    match fsutil::write_atomic(&target, text.as_bytes(), mode) {
+        Err(e) if rename_refused(&e) && target.is_file() => {
+            tracing::info!(path = %target.display(), error = %e, "writing the keybind file in place");
+            std::fs::write(&target, text.as_bytes()).inspect_err(|_| {
+                if let Some(previous) = previous {
+                    let _ = std::fs::write(&target, previous.as_bytes());
+                }
+            })
+        }
+        other => other,
+    }
+}
+
 /// Writes the managed block into a Lua keybind file; `Ok(true)` when the
-/// file changed. An incomplete block (begin without end) is refused.
+/// file changed. An incomplete block (begin without end) is refused, and so
+/// is a file that cannot be read or is not UTF-8 (only a missing one is
+/// created). The file is replaced atomically (in place where a rename is
+/// refused) and its previous contents stay in `<name>.fthr-bak`.
 pub fn write_lua_block(
     path: &Path,
     bindings: &HotkeyBindings,
@@ -153,7 +248,8 @@ pub fn write_lua_block(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let original = std::fs::read_to_string(path).unwrap_or_default();
+    let previous = read_lua_config(path)?;
+    let original = previous.clone().unwrap_or_default();
     let mut existing = original.clone();
     if let Some(begin) = existing.find(LUA_BEGIN) {
         let Some(end_rel) = existing[begin..].find(LUA_END) else {
@@ -172,9 +268,12 @@ pub fn write_lua_block(
     ];
     for action in bind_actions(bindings) {
         let combo = bindings.get(&action).unwrap_or("");
-        let lua_combo = combo
-            .split('+')
-            .map(|p| p.to_uppercase())
+        // Modifiers upper-cased, the key as its keysym name.
+        let (mods, key) = to_hyprland_bind(combo);
+        let lua_combo = mods
+            .split(' ')
+            .filter(|m| !m.is_empty())
+            .chain(std::iter::once(key.as_str()))
             .collect::<Vec<_>>()
             .join(" + ");
         let command = socket_command(&action, client_exe, sock)
@@ -189,7 +288,7 @@ pub fn write_lua_block(
     if text == original {
         return Ok(false);
     }
-    std::fs::write(path, text)?;
+    replace_lua_config(path, previous.as_deref(), &text)?;
     Ok(true)
 }
 

@@ -2,9 +2,55 @@
 #![forbid(unsafe_code)]
 
 use fthrust_core::FthrPaths;
+use fthrust_core::diagnostics::logging::{
+    LogGuard, default_env_filter, init_crash_log, init_logging,
+};
 use fthrust_core::window_geometry::{Rect, Screen};
+use fthrust_ui::state::AppState;
+
+/// Starts the file log (`~/.fthr/logs/fthr.log`, mirrored to stderr; `RUST_LOG`
+/// or else info for FTHRust's crates and warnings for the rest) and the crash
+/// log (`fthr-crash.log`, every panic with its backtrace). Without a writable
+/// log directory the app still logs to the terminal.
+fn start_logging(paths: &FthrPaths) -> Option<LogGuard> {
+    let guard = match init_logging(paths, fthrust_ui::VERSION) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(default_env_filter())
+                .with_writer(std::io::stderr)
+                .try_init();
+            tracing::warn!("no log file: {e}");
+            None
+        }
+    };
+    if let Err(e) = init_crash_log(paths) {
+        tracing::warn!("no crash log: {e}");
+    }
+    guard
+}
+
+/// Removes what a crash left in the clips and recordings folders (hidden
+/// `.partial` files of saves, recordings, exports and screenshots), on a
+/// background thread: the walk can cover a whole drive.
+fn sweep_stale_partials(state: &AppState) {
+    let roots: Vec<_> = [
+        state.settings.clips_directory(),
+        state.settings.recording_directory(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if let Err(e) = fthrust_core::clip_files::spawn_stale_partial_sweep(roots) {
+        tracing::warn!("stale partial sweep not started: {e}");
+    }
+}
 
 fn main() {
+    // First, while this is the only thread: read the local time offset the
+    // log's timestamps use (see init_local_offset for why this is only a
+    // precaution).
+    fthrust_core::diagnostics::logging::init_local_offset();
     fthrust_media::capabilities::handle_probe_argv();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--version") {
@@ -26,10 +72,6 @@ fn main() {
         };
         std::process::exit(code);
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
     let paths = match FthrPaths::from_env() {
         Ok(p) => p,
         Err(e) => {
@@ -37,19 +79,14 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let mut state = match fthrust_ui::state::AppState::load(paths) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("fthrust: {e}");
-            std::process::exit(2);
-        }
-    };
-    // One instance: a second launch activates the first and exits.
+    // One instance: a second launch activates the first and exits. That
+    // happens before the log is opened and the stores are loaded, so a second
+    // launch adds nothing to the first one's log and touches none of its files.
     let runtime_dir = fthrust_core::runtime_dir().ok();
     let instance_ctx = egui::Context::default();
     let instance = runtime_dir.as_ref().and_then(|dir| {
         fthrust_ui::services::instance::become_primary(
-            &state.paths.root().join("fthr.lock"),
+            &paths.root().join("fthr.lock"),
             dir,
             &instance_ctx,
         )
@@ -59,12 +96,26 @@ fn main() {
         eprintln!("FTHR Clips is already running; activated the existing window");
         return;
     }
+    // After the single-instance check, so a second launch adds nothing to
+    // the first one's log.
+    let _log = start_logging(&paths);
+    paths.restrict_private_dirs();
+    let mut state = match AppState::load(paths) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("cannot load the settings: {e}");
+            eprintln!("fthrust: {e}");
+            std::process::exit(2);
+        }
+    };
     if std::path::Path::new("/dev/shm/FTHR_SharedMemory_v4").exists() {
         tracing::warn!(
             "the Python FTHR Clips engine appears to be running; running both is unsupported"
         );
     }
-    state.diagnostics = Some(fthrust_ui::services::diagnostics::start(&state.paths));
+    state.diagnostics = fthrust_ui::services::diagnostics::start(&state.paths);
+    fthrust_ui::services::diagnostics::report_startup_issues(&mut state);
+    sweep_stale_partials(&state);
     state.thumb_pool = Some(fthrust_ui::library::thumbs::ThumbPool::start(
         state.paths.thumbnails_dir(),
     ));
@@ -94,7 +145,15 @@ fn main() {
             fthrust_core::window_geometry::MIN_HEIGHT as f32,
         ))
         .with_maximized(placement.maximized);
-    if let Err(e) = fthrust_ui::runner::run(state, instance, viewport) {
+    let diagnostics = state.diagnostics.clone();
+    let result = fthrust_ui::runner::run(state, instance, viewport);
+    // The window loop has ended on its own terms: a clean exit removes the
+    // marker that makes the next launch report this one as a crash.
+    if let Some(session) = &diagnostics {
+        session.close(result.is_ok());
+    }
+    if let Err(e) = result {
+        tracing::error!("{e}");
         eprintln!("fthrust: {e}");
         std::process::exit(1);
     }

@@ -161,6 +161,82 @@ pub fn share_path(
         .join(format!("{stem}_{kind}_{ts}_{id}.{ext}"))
 }
 
+/// The start of a manual recording's name (`FTHR_recording_<ts>.mp4`), lower
+/// case as names are compared.
+pub const RECORDING_PREFIX: &str = "fthr_recording_";
+/// How old a leftover must be before it is removed: no save, recording or
+/// export of this app runs that long without touching its file.
+pub const STALE_PARTIAL_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Whether a lower-cased name carries the mark of a clip or recording the
+/// app wrote.
+fn fthr_owned_media_name(name: &str) -> bool {
+    name.contains(PARTIAL_MARKER) || name.starts_with(RECORDING_PREFIX)
+}
+
+/// `.<stem>.partial.<32 hex>[.<ext>]`: the hidden staging name of an export,
+/// a finalize or an audio manifest (`StagedOutput`, `export::staged_name`).
+fn is_staged_output_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('.') else {
+        return false;
+    };
+    let Some(at) = rest.rfind(".partial.") else {
+        return false;
+    };
+    let after = &rest[at + ".partial.".len()..];
+    let (token, ext) = match after.split_once('.') {
+        Some((token, ext)) => (token, Some(ext)),
+        None => (after, None),
+    };
+    at > 0
+        && token.len() == 32
+        && token.bytes().all(|b| b.is_ascii_hexdigit())
+        && ext.is_none_or(|e| {
+            (1..=8).contains(&e.len()) && e.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+}
+
+/// `.screenshot_from_<ts>.<8 hex>.png.partial`: a screenshot staged before it
+/// was published.
+fn is_screenshot_staging_name(name: &str) -> bool {
+    name.starts_with(".screenshot_from_") && name.ends_with(".png.partial")
+}
+
+/// `.fthr-finalize-<hex>`: the scratch directory of an overlay burn.
+fn is_finalize_dir_name(name: &str) -> bool {
+    name.strip_prefix(".fthr-finalize-")
+        .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+fn is_old(meta: &std::fs::Metadata, now: SystemTime, max_age: Duration) -> bool {
+    meta.modified()
+        .ok()
+        .and_then(|m| now.duration_since(m).ok())
+        .is_some_and(|age| age >= max_age)
+}
+
+/// Whether nothing in `dir` (a finalize scratch directory) was touched within
+/// `max_age`: a burn still writing keeps updating its files.
+fn tree_is_old(dir: &Path, now: SystemTime, max_age: Duration, depth: u32) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    if !is_old(&meta, now, max_age) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().all(|e| {
+        let path = e.path();
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_dir() => depth > 0 && tree_is_old(&path, now, max_age, depth - 1),
+            Ok(m) => is_old(&m, now, max_age),
+            Err(_) => false,
+        }
+    })
+}
+
 fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -177,26 +253,31 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
         if meta.file_type().is_symlink() {
             continue;
         }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
         if meta.is_dir() {
-            walk(&path, now, max_age, removed);
+            if !is_finalize_dir_name(&name) {
+                walk(&path, now, max_age, removed);
+            } else if tree_is_old(&path, now, max_age, 2) {
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => *removed += 1,
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "failed to remove stale finalize directory")
+                    }
+                }
+            }
             continue;
         }
         if !meta.is_file() {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        let partial = name.ends_with(".mp4.partial") && name.contains(PARTIAL_MARKER);
-        let manifest = name.ends_with(&format!(".mp4{AUDIO_MANIFEST_SUFFIX}"))
-            && name.contains(PARTIAL_MARKER);
-        if !partial && !manifest {
+        let partial = name.ends_with(".mp4.partial") && fthr_owned_media_name(&name);
+        let manifest =
+            name.ends_with(&format!(".mp4{AUDIO_MANIFEST_SUFFIX}")) && fthr_owned_media_name(&name);
+        let staged = is_staged_output_name(&name) || is_screenshot_staging_name(&name);
+        if !partial && !manifest && !staged {
             continue;
         }
-        let old = meta
-            .modified()
-            .ok()
-            .and_then(|m| now.duration_since(m).ok())
-            .is_some_and(|age| age >= max_age);
-        if !old {
+        if !is_old(&meta, now, max_age) {
             continue;
         }
         if manifest {
@@ -215,12 +296,47 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
     }
 }
 
-/// Remove FTHR-owned partial clips and orphan audio manifests older than
-/// `max_age`, never following symlinks. Returns the number removed.
+/// Removes what a crashed save, recording, export or screenshot left in the
+/// library, never following symlinks, when it is older than `max_age`
+/// (use [`STALE_PARTIAL_MAX_AGE`]; a running job keeps touching its file).
+/// Only names the app itself writes qualify: `*_clip_from_*.mp4.partial` and
+/// `FTHR_recording_*.mp4.partial`, their orphaned audio manifests, the hidden
+/// `.<name>.partial.<32 hex>.<ext>` staging files of exports and overlay
+/// burns, hidden `.png.partial` screenshots and `.fthr-finalize-*`
+/// directories. A finished clip or recording is never touched. Returns the
+/// number removed.
 pub fn cleanup_stale_partials(root: &Path, now: SystemTime, max_age: Duration) -> Result<usize> {
     let mut removed = 0;
     if root.is_dir() {
         walk(root, now, max_age, &mut removed);
     }
     Ok(removed)
+}
+
+/// [`cleanup_stale_partials`] over several roots (the clips folder and a
+/// recordings folder outside it); a root inside another is not walked twice.
+pub fn cleanup_stale_partials_in(roots: &[PathBuf], now: SystemTime, max_age: Duration) -> usize {
+    roots
+        .iter()
+        .filter(|r| !roots.iter().any(|o| o != *r && r.starts_with(o)))
+        .map(|r| cleanup_stale_partials(r, now, max_age).unwrap_or(0))
+        .sum()
+}
+
+/// Runs [`cleanup_stale_partials_in`] with [`STALE_PARTIAL_MAX_AGE`] on a
+/// background thread, as the app does at startup: the walk can cover a whole
+/// drive and must not delay the window. Logs what it removed.
+pub fn spawn_stale_partial_sweep(
+    roots: Vec<PathBuf>,
+) -> std::io::Result<std::thread::JoinHandle<usize>> {
+    std::thread::Builder::new()
+        .name("fthr-stale-partial-cleanup".into())
+        .spawn(move || {
+            let removed =
+                cleanup_stale_partials_in(&roots, SystemTime::now(), STALE_PARTIAL_MAX_AGE);
+            if removed > 0 {
+                tracing::info!(removed, "removed stale partial files left by a crash");
+            }
+            removed
+        })
 }

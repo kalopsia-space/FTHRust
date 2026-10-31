@@ -151,6 +151,43 @@ fn corrupt_theme_file_gives_defaults() {
 }
 
 #[test]
+fn tokens_for_a_loaded_store_equal_what_load_builds_and_the_notice_survives() {
+    let tmp = tempfile::tempdir().unwrap();
+    let paths = write_theme(
+        tmp.path(),
+        r##"{"palette_version": 4, "typography_version": 2, "colors": {"ACCENT": "#ff0000"}}"##,
+    );
+    let store = fthrust_core::theme::ThemeStore::load(paths.clone()).unwrap();
+    let t = theme::tokens_for(&store);
+    assert_eq!(hex(t.color(Color::Accent)), "#ff0000");
+    assert_eq!(
+        hex(theme::load(&paths).color(Color::Accent)),
+        hex(t.color(Color::Accent))
+    );
+
+    // The app loads the store once: the load that meets a damaged theme.json
+    // sets it aside, so that load is the one that must keep the notice.
+    let damaged = tempfile::tempdir().unwrap();
+    let paths = write_theme(damaged.path(), "{not json");
+    let store = fthrust_core::theme::ThemeStore::load(paths.clone()).unwrap();
+    let t = theme::tokens_for(&store);
+    assert_eq!(hex(t.color(Color::Accent)), "#20e3a0", "defaults");
+    assert!(
+        store
+            .startup_issues()
+            .iter()
+            .any(|m| m.contains("theme.json was damaged")),
+        "{:?}",
+        store.startup_issues()
+    );
+    let again = fthrust_core::theme::ThemeStore::load(paths).unwrap();
+    assert!(
+        again.startup_issues().is_empty(),
+        "a second load has nothing left to report"
+    );
+}
+
+#[test]
 fn custom_icon_override_resolves_under_theme_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let paths = write_theme(

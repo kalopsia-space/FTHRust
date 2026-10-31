@@ -122,6 +122,8 @@ Wayland doesn't let an app see key presses aimed at other windows, so global hot
 2. **Hyprland.** `fthrust-core::hotkeys::hyprland` writes `bind = MODS, KEY, exec, "<exe>" --hotkey <action>` lines to a managed file (or a fenced Lua block) and the app runs `hyprctl reload`. The `<exe>` is `$APPIMAGE` when running from an AppImage, so binds survive the AppImage's temporary mount path changing.
 3. **The GlobalShortcuts portal**, registered as `space.kalopsia.fthrust`. The portal delivers activations directly, and the app adopts whatever triggers the desktop actually bound.
 
+Paths 2 and 3 name keys as xkb keysyms (`Prior`, `equal`, `grave`), not as the hotkey popup stored them (egui's `PageUp`, `Equals`, `Backtick`). One table in `fthrust-core::hotkeys::keys` serves the `.conf` writer, the Lua writer and the portal triggers, and a test walks every `egui::Key`.
+
 Single-instance activation uses the same idea: a second launch finds `fthr.lock` held, sends `activate` to the first instance's socket, and exits.
 
 ## The uploader

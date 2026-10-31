@@ -283,6 +283,49 @@ fn portal_adopts_desktop_trigger_and_warns() {
 }
 
 #[test]
+fn a_desktop_describing_the_same_key_in_other_words_is_not_a_kept_shortcut() {
+    let cleared = BTreeSet::new();
+    for described in [
+        "Ctrl+Page Up",
+        "Ctrl+PgUp",
+        "Ctrl+Prior",
+        "Ctrl+PageUp",
+        "ctrl+pageup",
+    ] {
+        let mut b = bindings();
+        b.set_keyboard("save_clip", "Ctrl+PageUp");
+        let stored = b.get("save_clip").unwrap().to_owned();
+        let mut requested = BTreeMap::new();
+        requested.insert("save_clip".to_string(), stored.clone());
+        let bound = vec![("save_clip".to_string(), described.to_string())];
+        let (changed, kept) = adopt_bound(&mut b, &requested, &cleared, &bound);
+        assert!(!changed, "{described}: the binding is not rewritten");
+        assert!(kept.is_empty(), "{described}: no false warning: {kept:?}");
+        assert_eq!(b.get("save_clip"), Some(stored.as_str()), "{described}");
+    }
+    // The spelling of the modifiers does not matter either.
+    let mut b = bindings();
+    b.set_keyboard("save_clip", "Win+Equals");
+    let mut requested = BTreeMap::new();
+    requested.insert("save_clip".to_string(), "Win+Equals".to_string());
+    let bound = vec![("save_clip".to_string(), "Meta+equal".to_string())];
+    assert_eq!(
+        adopt_bound(&mut b, &requested, &cleared, &bound),
+        (false, vec![])
+    );
+    // A different key still is one.
+    let mut b = bindings();
+    b.set_keyboard("save_clip", "Ctrl+PageUp");
+    let mut requested = BTreeMap::new();
+    requested.insert("save_clip".to_string(), "Ctrl+Pageup".to_string());
+    let bound = vec![("save_clip".to_string(), "Ctrl+Page Down".to_string())];
+    let (changed, kept) = adopt_bound(&mut b, &requested, &cleared, &bound);
+    assert!(changed);
+    assert_eq!(kept, vec!["Save clip: Ctrl+Page Down".to_string()]);
+    assert_eq!(b.get("save_clip"), Some("Ctrl+Page Down"));
+}
+
+#[test]
 fn copy_config_line_button_only_on_hyprland() {
     let tmp = tempfile::tempdir().unwrap();
     let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
