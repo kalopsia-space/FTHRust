@@ -25,7 +25,17 @@ use crate::vault;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// How long removing the leftovers of a failed upload may take in all.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one SFTP request may go unanswered.
 const SFTP_TIMEOUT_S: u64 = 20;
+/// The same while the clip is going out (see [`WRITE_WINDOW`]).
+const TRANSFER_TIMEOUT_S: u64 = 120;
+
+/// Write requests in flight at once (each carries 32 KiB). On a link with a
+/// long round trip the window decides the speed: window ÷ round trip. The
+/// library's 16 (512 KiB) held a 60 ms link to 6.4 MB/s; 64 (2 MiB) is what
+/// OpenSSH's `sftp` uses, and the SSH channel window of an OpenSSH server
+/// (2 MiB) lets no more through anyway (128 measured the same).
+const WRITE_WINDOW: usize = 64;
 const TRANSFER: &str =
     "SFTP connection or transfer failed. Check the server, folder and permissions.";
 const AUTH_FAILED: &str = "SFTP authentication failed. Check the username and password.";
@@ -298,6 +308,14 @@ fn password(env: &Env, cfg: &SftpConfig, settings: &Map<String, Value>) -> Resul
     }
 }
 
+/// The SFTP client's settings: the library's, with the wider write window.
+fn sftp_config() -> russh_sftp::client::Config {
+    russh_sftp::client::Config {
+        max_concurrent_writes: WRITE_WINDOW,
+        ..Default::default()
+    }
+}
+
 async fn connect(
     env: &Env,
     cfg: &SftpConfig,
@@ -360,7 +378,9 @@ async fn connect(
     let sftp = async {
         let channel = handle.channel_open_session().await.ok()?;
         channel.request_subsystem(true, "sftp").await.ok()?;
-        let sftp = SftpSession::new(channel.into_stream()).await.ok()?;
+        let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_config())
+            .await
+            .ok()?;
         sftp.set_timeout(SFTP_TIMEOUT_S);
         Some(sftp)
     };
@@ -488,20 +508,23 @@ async fn send(
         .await
         .map_err(|_| TRANSFER.to_owned())?
         .len();
-    let mut buf = vec![0u8; 1024 * 1024];
-    loop {
-        let n = local
-            .read(&mut buf)
-            .await
-            .map_err(|_| TRANSFER.to_owned())?;
-        if n == 0 {
-            break;
+    // With a full window a write is answered only after the ones ahead of it
+    // have gone out, which on a slow link takes longer than a lone request.
+    conn.sftp.set_timeout(TRANSFER_TIMEOUT_S);
+    let copied = async {
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = local.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n]).await?;
         }
-        file.write_all(&buf[..n])
-            .await
-            .map_err(|_| TRANSFER.to_owned())?;
+        file.shutdown().await
     }
-    file.shutdown().await.map_err(|_| TRANSFER.to_owned())?;
+    .await;
+    conn.sftp.set_timeout(SFTP_TIMEOUT_S);
+    copied.map_err(|_| TRANSFER.to_owned())?;
     let written = conn.sftp.metadata(part).await.map_err(transfer)?.size;
     if written != Some(size) {
         return Err("Remote file size verification failed; the local clip was retained.".into());
@@ -616,6 +639,22 @@ mod tests {
     const RSA256: Algorithm = Algorithm::Rsa {
         hash: Some(HashAlg::Sha256),
     };
+
+    /// The speed over a link with a long round trip is the write window
+    /// divided by the round trip (`throughput_over_a_slow_link` in
+    /// `tests/sftp.rs` measures it): the library's 16 requests held a 60 ms
+    /// link to 6.4 MB/s, 64 reach the 2 MiB window of an OpenSSH server.
+    #[test]
+    fn the_write_window_is_wide_enough_for_a_slow_link() {
+        let cfg = sftp_config();
+        assert!(cfg.max_concurrent_writes >= 64, "{cfg:?}");
+        // A write may wait for the whole window to be sent: at the slowest
+        // link this still serves (the 120 s of a stalled HTTP upload), the
+        // window has to drain within the request timeout.
+        let window = cfg.max_concurrent_writes as u64 * u64::from(cfg.max_write_packet_len);
+        assert!(window / TRANSFER_TIMEOUT_S >= 10_000, "{window} bytes");
+        const { assert!(TRANSFER_TIMEOUT_S > SFTP_TIMEOUT_S) };
+    }
 
     #[test]
     fn host_key_types_on_record_are_offered_first() {

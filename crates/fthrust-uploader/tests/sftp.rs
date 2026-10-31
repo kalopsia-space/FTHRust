@@ -403,6 +403,95 @@ async fn auto_delete_follows_a_confirmed_sftp_upload() {
     }
 }
 
+/// A TCP relay that holds every chunk back by `delay` in each direction: the
+/// round trip of a slow link without its bandwidth limit. Returns its port.
+async fn delayed_relay(target: u16, delay: std::time::Duration) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+    use tokio::time::Instant;
+
+    async fn pump(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, delay: std::time::Duration) {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = from.read(&mut buf).await {
+                if n == 0
+                    || tx
+                        .send((Instant::now() + delay, buf[..n].to_vec()))
+                        .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        while let Some((due, data)) = rx.recv().await {
+            tokio::time::sleep_until(due).await;
+            if to.write_all(&data).await.is_err() {
+                break;
+            }
+        }
+        let _ = to.shutdown().await;
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", target)).await else {
+                continue;
+            };
+            let (client_read, client_write) = client.into_split();
+            let (server_read, server_write) = server.into_split();
+            tokio::spawn(pump(client_read, server_write, delay));
+            tokio::spawn(pump(server_read, client_write, delay));
+        }
+    });
+    port
+}
+
+/// How long an upload of `size` bytes takes through a link with a round trip
+/// of `rtt`.
+async fn timed_upload(
+    server: &TestServer,
+    size: usize,
+    rtt: std::time::Duration,
+) -> std::time::Duration {
+    let port = delayed_relay(server.port, rtt / 2).await;
+    let h = home(
+        server,
+        json!({"sftp_fingerprint": server.fingerprint(), "sftp_port": port.to_string()}),
+    );
+    std::fs::write(&h.clip, vec![7u8; size]).unwrap();
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let started = std::time::Instant::now();
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    started.elapsed()
+}
+
+/// Measures the SFTP write window: `cargo t -p fthrust-uploader --test sftp
+/// -- --ignored --nocapture throughput`.
+#[tokio::test]
+#[ignore]
+async fn throughput_over_a_slow_link() {
+    let server = srv::start(21).await;
+    let rtt = std::time::Duration::from_millis(60);
+    let size = 24 << 20;
+    // The same trip with a small file shows what connecting costs.
+    let overhead = timed_upload(&server, 1000, rtt).await;
+    let total = timed_upload(&server, size, rtt).await;
+    let transfer = total.saturating_sub(overhead);
+    println!(
+        "{} MiB over a {} ms round trip: {:.2} s ({:.1} MB/s); connecting and finishing {:.2} s",
+        size >> 20,
+        rtt.as_millis(),
+        transfer.as_secs_f64(),
+        size as f64 / 1e6 / transfer.as_secs_f64(),
+        overhead.as_secs_f64()
+    );
+}
+
 #[tokio::test]
 async fn failed_rename_cleans_part_and_keeps_clip() {
     let server = srv::start(10).await;
