@@ -756,27 +756,38 @@ pub async fn upload(
             )),
         };
     }
-    // Without a link the upload is not confirmed: keep the only copy. Clips
-    // outside the clips folder (imported libraries) are never ours to delete.
-    if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
-        && link.is_some()
+    let auto_delete = fthrust_core::upload::truthy(settings.get("upload_auto_delete"));
+    let mut message = message;
+    let mut warning = None;
+    if link.is_none() {
+        // Without a link the upload is not confirmed: keep the only copy, and
+        // say that there is nothing to copy from the card.
+        let said = if provider == Provider::Custom {
+            NO_LINK
+        } else {
+            "Uploaded, but the reply had no usable link."
+        };
+        let kept = if auto_delete {
+            " The clip was kept."
+        } else {
+            ""
+        };
+        warning = Some(format!("{said}{kept}"));
+    } else if auto_delete
+        // Clips outside the clips folder (imported libraries) are never ours
+        // to delete.
         && clips_root.is_some_and(|root| path.starts_with(root))
         && let Err(e) = std::fs::remove_file(path)
     {
-        return Response {
-            ok: true,
-            message: format!("Uploaded, but local delete failed: {e}"),
-            upload_info: Some(entry),
-            settings_problem: false,
-            warning: None,
-        };
+        message = format!("Uploaded, but local delete failed: {e}");
+        warning = Some(message.clone());
     }
     Response {
         ok: true,
         message,
         upload_info: Some(entry),
         settings_problem: false,
-        warning: None,
+        warning,
     }
 }
 

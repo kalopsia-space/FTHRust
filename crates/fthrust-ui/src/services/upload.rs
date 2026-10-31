@@ -15,10 +15,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::export_presets::ExportPreset;
-use fthrust_core::upload::history::History;
+use fthrust_core::upload::history::{Entry, History};
 use fthrust_core::upload::settings::Provider;
 use fthrust_core::upload::{CATBOX_LIMIT_BYTES, validate};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::services::CardKind;
 use crate::shell::error_bar::{Action, Level};
@@ -70,6 +70,12 @@ pub struct Reply {
     pub message: String,
     /// The upload settings are wrong (URL, token); retrying cannot help.
     pub settings_problem: bool,
+    /// What the user should know about an upload that worked: no link came
+    /// back, the clip could not be deleted, the history was not saved.
+    pub warning: Option<String>,
+    /// The history entry of the upload, as the uploader made it. The history
+    /// file is where the app learns it; this is for when that write failed.
+    pub upload_info: Option<Map<String, Value>>,
 }
 
 impl Reply {
@@ -79,6 +85,8 @@ impl Reply {
             ok: false,
             message: message.into(),
             settings_problem: false,
+            warning: None,
+            upload_info: None,
         }
     }
 }
@@ -192,6 +200,16 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
                 .unwrap_or("")
                 .to_owned(),
             settings_problem: m.get("settings_problem").and_then(Value::as_bool) == Some(true),
+            warning: m
+                .get("warning")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|w| !w.is_empty())
+                .map(str::to_owned),
+            upload_info: match m.get("upload_info") {
+                Some(Value::Object(info)) if !info.is_empty() => Some(info.clone()),
+                _ => None,
+            },
         },
         _ => Reply::fail("Uploader returned an invalid response."),
     }
@@ -607,6 +625,16 @@ impl UploadService {
             return;
         }
         let compressed = done.compressed.is_some();
+        // The uploader records the upload in the history itself. When it
+        // could not, its reply still carries the entry: save it from here,
+        // and failing that keep it for this session (below), so the card
+        // still offers the link and the clip is not uploaded again.
+        let uploaded = resolved(
+            done.compressed
+                .as_ref()
+                .map_or(done.path.as_path(), |(copy, _, _)| copy.as_path()),
+        );
+        let unsaved = unsaved_entry(&state.paths, &uploaded, done.reply.upload_info.as_ref());
         if let Some((copy, size, _)) = &done.compressed {
             let (original, copy) = (resolved(&done.path), resolved(copy));
             if let Err(e) = History::update(&state.paths, |h| {
@@ -617,6 +645,25 @@ impl UploadService {
         }
         self.history_mtime = None;
         self.reload_history(state);
+        if let Some(entry) = unsaved {
+            state.upload_history.record(&uploaded, entry);
+            if let Some((_, size, _)) = &done.compressed {
+                let original = resolved(&done.path);
+                state
+                    .upload_history
+                    .alias_compressed(&original, &uploaded, *size);
+            }
+        }
+        if let Some(warning) = &done.reply.warning {
+            state.error_bar.push_error(
+                "UPLOAD WARNING",
+                warning,
+                Level::Warning,
+                Vec::new(),
+                Some(format!("upload-warning:{}", done.path.display())),
+                false,
+            );
+        }
         let (text, kind) = if compressed {
             ("UPLOADED COMPRESSED COPY", "COMPRESSED COPY")
         } else {
@@ -694,6 +741,27 @@ fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
         .find(|r| resolved(&r.path) == real)
         .map(|r| r.path.clone())
         .unwrap_or(path)
+}
+
+/// The entry the uploader made for `uploaded`, if the history file lacks it
+/// after the uploader's own write (it failed) and ours (`None`: the file has
+/// it, or the reply had none).
+fn unsaved_entry(
+    paths: &fthrust_core::FthrPaths,
+    uploaded: &Path,
+    info: Option<&Map<String, Value>>,
+) -> Option<Entry> {
+    let entry = Entry(info?.clone());
+    if History::load(paths).get(uploaded).is_some() {
+        return None;
+    }
+    match History::update(paths, |h| h.record(uploaded, entry.clone())) {
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "upload history entry not saved");
+            Some(entry)
+        }
+    }
 }
 
 fn file_name(path: &Path) -> String {

@@ -215,6 +215,95 @@ fn success_updates_card_and_toasts() {
     assert!(r.error_titles().is_empty());
 }
 
+/// An upload that worked can still leave something to say (no link came
+/// back, the clip could not be deleted, the history was not saved): the
+/// uploader sends it as `warning`, and the user must see it instead of a
+/// card with a share button that does nothing.
+#[test]
+fn a_warning_on_a_successful_upload_is_shown() {
+    let mut r = rig(
+        r#"cat >/dev/null; echo '{"ok":true,"message":"Upload complete.","upload_info":{"status":"ok","url":""},"warning":"Uploaded, but no link came back. The clip was kept."}'"#,
+        json!({}),
+    );
+    let clip = r.clip("w.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    // It is still an upload that worked.
+    assert_eq!(
+        r.state.pending_cards,
+        vec![CardKind::Upload {
+            filename: "w.mp4 · ORIGINAL".into()
+        }]
+    );
+    assert_eq!(
+        r.svc.transient_status(1.0).unwrap().text,
+        "UPLOADED ORIGINAL"
+    );
+    // And the caveat is in the bar.
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert_eq!(
+        e.detail,
+        "Uploaded, but no link came back. The clip was kept."
+    );
+    assert_eq!(e.level, fthrust_ui::shell::error_bar::Level::Warning);
+    assert!(e.actions.is_empty());
+    // A reply without one says nothing.
+    let mut quiet = rig(&uploader_ok("https://cdn.example/q.mp4"), json!({}));
+    let clip = quiet.clip("q.mp4");
+    quiet.svc.enqueue(&mut quiet.state, clip);
+    quiet.settle();
+    assert!(
+        quiet.error_titles().is_empty(),
+        "{:?}",
+        quiet.error_titles()
+    );
+}
+
+/// The uploader answers with the history entry it made. When it could not
+/// write it, the app writes it, or keeps it for the session: the card gets
+/// its link back and interval mode does not upload the clip again.
+#[test]
+fn an_entry_the_uploader_could_not_save_is_kept() {
+    let reply = |url: &str| {
+        format!(
+            r#"cat >/dev/null; echo '{{"ok":true,"message":"{url}","upload_info":{{"status":"ok","provider":"custom","url":"{url}","raw_url":"{url}"}},"warning":"Uploaded to {url}, but the upload history could not be saved (disk full). The clip was kept."}}'"#
+        )
+    };
+    // The folder is writable by the app: it saves the entry itself.
+    let mut r = rig(&reply("https://cdn.example/kept"), json!({}));
+    let clip = r.clip("k.mp4");
+    let key = clip.canonicalize().unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        "https://cdn.example/kept"
+    );
+    assert!(History::load(&r.state.paths).is_uploaded(&key), "not saved");
+    assert_eq!(r.error_titles(), vec!["UPLOAD WARNING"]);
+
+    // It is not: the entry lives for this session only.
+    let mut r = rig(&reply("https://cdn.example/session"), json!({}));
+    let clip = r.clip("s.mp4");
+    let key = clip.canonicalize().unwrap();
+    std::fs::create_dir_all(r.state.paths.upload_history_file()).unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        "https://cdn.example/session"
+    );
+    assert!(r.state.upload_history.is_uploaded(&key));
+    r.svc.enqueue(&mut r.state, clip);
+    assert!(!r.svc.busy(), "queued again although it was uploaded");
+}
+
 #[test]
 fn queue_dedups_and_waits_for_readiness() {
     let mut r = rig(&uploader_ok("https://cdn.example/b.mp4"), json!({}));

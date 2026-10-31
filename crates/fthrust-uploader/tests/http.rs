@@ -670,6 +670,62 @@ async fn auto_delete_failure_still_succeeds() {
     );
 }
 
+/// Whatever an upload that worked leaves the user to know travels as the
+/// reply's `warning` (the app shows it); a clean success has none.
+#[tokio::test]
+async fn an_upload_that_worked_with_a_caveat_says_so() {
+    // No link: there is nothing for the card to copy.
+    for auto_delete in [false, true] {
+        let srv = server(vec![(200, "stored!")]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url,
+            "upload_auto_delete": auto_delete
+        }));
+        let r = h.respond(&h.env("x")).await;
+        assert!(r.ok);
+        assert_eq!(r.message, NO_LINK);
+        let kept = if auto_delete {
+            " The clip was kept."
+        } else {
+            ""
+        };
+        assert_eq!(
+            r.warning.as_deref(),
+            Some(format!("{NO_LINK}{kept}").as_str())
+        );
+        assert!(
+            r.to_line()
+                .contains(r#""warning":"Uploaded, but your server"#)
+        );
+    }
+    // A clean success has no warning, and no key in the line.
+    let srv = server(vec![(200, "https://cdn.example/fine")]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    let r = h.respond(&h.env("x")).await;
+    assert_eq!(r.warning, None);
+    assert!(!r.to_line().contains("warning"), "{}", r.to_line());
+    // The clip could not be deleted.
+    if nix_is_root() {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let srv = server(vec![(200, "https://cdn.example/a")]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    let folder = h.dir.path().join("clips");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = h.respond(&h.env("x")).await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(r.ok);
+    assert!(
+        r.message.starts_with("Uploaded, but local delete failed: "),
+        "{}",
+        r.message
+    );
+    assert_eq!(r.warning.as_deref(), Some(r.message.as_str()));
+}
+
 /// Auto-delete only ever removes files in the clips folder. Imported folders
 /// (and links into them) upload like everything else but are never deleted:
 /// interval mode plus auto-delete would otherwise empty a whole imported
