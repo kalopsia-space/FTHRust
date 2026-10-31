@@ -140,20 +140,31 @@ mod quit_signals {
                 };
                 rt.block_on(async move {
                     use tokio::signal::unix::{SignalKind, signal};
-                    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+                    let (Ok(mut term), Ok(mut int)) = (
                         signal(SignalKind::terminate()),
                         signal(SignalKind::interrupt()),
-                        signal(SignalKind::hangup()),
                     ) else {
                         tracing::warn!("quit signals not handled");
                         return;
                     };
+                    // Started with `nohup`: a hangup stays ignored.
+                    let mut hup = if inherited_ignore(1) {
+                        None
+                    } else {
+                        signal(SignalKind::hangup()).ok()
+                    };
                     let mut asked = false;
                     loop {
                         tokio::select! {
-                            _ = term.recv() => {}
-                            _ = int.recv() => {}
-                            _ = hup.recv() => {}
+                            Some(()) = term.recv() => {}
+                            Some(()) = int.recv() => {}
+                            Some(()) = async {
+                                match hup.as_mut() {
+                                    Some(h) => h.recv().await,
+                                    None => std::future::pending().await,
+                                }
+                            } => {}
+                            else => return,
                         }
                         if asked {
                             tracing::warn!("second quit signal; exiting now");
@@ -167,6 +178,21 @@ mod quit_signals {
         if let Err(e) = spawned {
             tracing::warn!(error = %e, "quit signal thread not started");
         }
+    }
+
+    /// Whether the process inherited "ignore" for signal `signo` (the
+    /// `SigIgn` mask in `/proc/self/status`).
+    pub fn inherited_ignore(signo: u32) -> bool {
+        std::fs::read_to_string("/proc/self/status").is_ok_and(|s| ignored_in(&s, signo))
+    }
+
+    /// Whether a `/proc/<pid>/status` text lists `signo` as ignored.
+    pub fn ignored_in(status: &str, signo: u32) -> bool {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("SigIgn:"))
+            .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+            .is_some_and(|mask| (1..=64).contains(&signo) && mask & (1 << (signo - 1)) != 0)
     }
 }
 
@@ -430,6 +456,15 @@ mod tests {
     use super::*;
     use egui_wgpu::WgpuSetup;
     use egui_wgpu::wgpu::Backends;
+
+    #[test]
+    fn an_inherited_hangup_ignore_is_seen() {
+        let status = "Name:\tfthrust\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001001\n";
+        assert!(quit_signals::ignored_in(status, 1), "SIGHUP");
+        assert!(!quit_signals::ignored_in(status, 2), "SIGINT");
+        assert!(quit_signals::ignored_in(status, 13), "SIGPIPE");
+        assert!(!quit_signals::ignored_in("Name:\tx\n", 1));
+    }
 
     #[test]
     fn vulkan_only_unless_the_variable_says_otherwise() {

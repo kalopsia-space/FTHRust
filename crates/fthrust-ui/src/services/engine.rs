@@ -58,6 +58,11 @@ pub enum Input {
     Start(EngineConfig),
     /// Stop the engine.
     Stop,
+    /// The app is quitting: no more restarts, but the engine keeps running
+    /// for the shutdown steps that still need it (stopping a recording).
+    /// A logout signals the engine too, and its exit must not be answered
+    /// with a fresh engine mid-quit.
+    Quitting,
     /// Restart with a new configuration.
     Restart {
         /// The configuration.
@@ -387,6 +392,16 @@ impl Supervisor {
         out.push(Effect::Spawn);
     }
 
+    /// Nothing starts the engine again: every armed restart is dropped.
+    fn no_more_starts(&mut self, out: &mut Vec<Effect>) {
+        self.final_stop = true;
+        self.restart_at = None;
+        self.defer_restart_until = None;
+        self.deferred_restart = None;
+        self.queued_restart = None;
+        self.finish_apply(out);
+    }
+
     /// Enters `Stopping` and asks the driver to stop the process. Saves and
     /// recordings asked for from here on would reach an engine that is
     /// going away, so the pages learn at once that it is gone (they used to
@@ -491,15 +506,11 @@ impl Supervisor {
                     self.begin_start(config, &mut out, now);
                 }
             }
+            Input::Quitting => self.no_more_starts(&mut out),
             Input::Stop => {
                 // Quitting: nothing may start the engine again (an armed
                 // restart used to spawn a new engine after the stop).
-                self.final_stop = true;
-                self.restart_at = None;
-                self.defer_restart_until = None;
-                self.deferred_restart = None;
-                self.queued_restart = None;
-                self.finish_apply(&mut out);
+                self.no_more_starts(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
                     // Quitting mid-save: let the engine finish the clip.
                     let grace_s = if self.save_busy {
@@ -1190,11 +1201,15 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
 fn spawn_engine(ctx: &Arc<DriverCtx>) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
-        retire_stale_engine(&c.socket).await;
+        retire_stale_engine_shown(&c.socket, &c.outbox).await;
         if let Some(parent) = c.socket.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let mut cmd = tokio::process::Command::new(&c.engine);
+        // Its own process group: Ctrl+C or a hangup in the terminal the app
+        // was started from goes to the app, which stops the engine in order.
+        // If the app dies, the engine still sees its stdin close and exits.
+        cmd.process_group(0);
         cmd.arg("--socket")
             .arg(&c.socket)
             .stdin(std::process::Stdio::piped())
@@ -1383,6 +1398,23 @@ pub async fn retire_stale_engine(socket: &Path) {
     retire_stale_engine_within(socket, STALE_ENGINE_EXIT).await;
 }
 
+/// [`retire_stale_engine`], showing a status while it waits (it can take
+/// a minute when the old engine is finishing a save).
+async fn retire_stale_engine_shown(socket: &Path, outbox: &Outbox) {
+    let probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(socket),
+    );
+    if !matches!(probe.await, Ok(Ok(_))) {
+        return;
+    }
+    outbox.send(Event::Status {
+        text: "WAITING FOR THE PREVIOUS ENGINE".into(),
+        style: StatusStyle::Idle,
+    });
+    retire_stale_engine(socket).await;
+}
+
 /// [`retire_stale_engine`] with the wait bound given (tests).
 pub async fn retire_stale_engine_within(socket: &Path, bound: Duration) {
     let connect = tokio::time::timeout(
@@ -1402,7 +1434,7 @@ pub async fn retire_stale_engine_within(socket: &Path, bound: Duration) {
         ?pid,
         "an engine from an earlier session still owns the socket; stopping it"
     );
-    let hello = tokio::time::timeout(Duration::from_secs(2), EngineClient::connect(socket));
+    let hello = tokio::time::timeout(Duration::from_secs(1), EngineClient::connect(socket));
     if let Ok(Ok(client)) = hello.await {
         let _ = client.send(Command::Shutdown).await;
     }

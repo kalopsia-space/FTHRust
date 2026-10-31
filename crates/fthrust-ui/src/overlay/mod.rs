@@ -239,6 +239,13 @@ fn run(
             surface = None;
             gpu.reset();
             ctx = fresh_ctx(&tokens);
+            // The card on screen went with the device: say it another way.
+            if model.is_live() {
+                model.hide();
+                if let Some(c) = last_content.take() {
+                    notify(&mut notify_rt, &c);
+                }
+            }
         }
         if !model.is_live() {
             continue;

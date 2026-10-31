@@ -1064,3 +1064,20 @@ fn a_leftover_engine_that_no_longer_answers_is_waited_for() {
     );
     assert!(waited < std::time::Duration::from_secs(10), "{waited:?}");
 }
+
+/// Review of the audit fixes: once the app is quitting, an engine that
+/// dies (a logout signals it too) isn't answered with a new one.
+#[test]
+fn quitting_stops_restarts_but_not_the_engine() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 96, &mut now);
+    let fx = sv.handle(Input::Quitting, now);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "the engine keeps running for the rest of the shutdown"
+    );
+    let mut fx = sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.5);
+    fx.extend(sv.handle(Input::Tick, now + 5.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+}

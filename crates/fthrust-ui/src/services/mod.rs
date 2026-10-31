@@ -230,6 +230,17 @@ pub fn wait_for_connection(
     matches!(poll(&mut fds, PollTimeout::from(ms)), Ok(n) if n > 0)
 }
 
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The app has started to quit.
+pub fn quitting() -> bool {
+    QUITTING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn set_quitting() {
+    QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// How long an accept loop sleeps between stop checks; stopping also
 /// connects to the socket to wake it at once.
 pub const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -1615,6 +1626,12 @@ impl Services {
     /// bound) and a running manual recording is stopped and finalised
     /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
+        // From here on nothing restarts the engine, and a probe that ends
+        // (killed by the same logout) isn't cached as "doesn't work".
+        set_quitting();
+        if let Some(d) = &self.engine {
+            d.request(engine::Input::Quitting);
+        }
         // `_perform_full_shutdown`: close the share windows (cancelling
         // their exports), then cancel queued exports with a bounded wait.
         crate::editor::share::close_all(state);
@@ -1696,6 +1713,7 @@ struct Shown {
     windows: Vec<String>,
     detection: bool,
     devices: (usize, usize, Option<usize>),
+    cameras: Vec<String>,
 }
 
 impl Shown {
@@ -1722,6 +1740,7 @@ impl Shown {
                 state.mic_devices.len(),
                 state.encoder_capabilities.as_ref().map(Vec::len),
             ),
+            cameras: state.camera_devices.clone(),
         }
     }
 }

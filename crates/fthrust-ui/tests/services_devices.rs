@@ -183,3 +183,13 @@ fn a_failed_listing_reports_the_engines_error() {
         vec![("A".to_owned(), "a".to_owned())]
     );
 }
+
+/// Plain-text stderr (a panic) is reported as it is.
+#[test]
+fn a_failed_listing_without_json_reports_its_last_line() {
+    use fthrust_ui::services::devices::listing_result;
+    assert_eq!(
+        listing_result(false, b"", b"thread 'main' panicked at oops\n").unwrap_err(),
+        "the device listing failed: thread 'main' panicked at oops"
+    );
+}

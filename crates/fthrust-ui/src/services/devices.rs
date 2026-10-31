@@ -44,6 +44,11 @@ pub fn encoder_capabilities_with(
         return cached;
     }
     let found = probe();
+    if super::quitting() {
+        // A logout signals the probe children too; what they report now
+        // isn't what the machine can do.
+        return found;
+    }
     match &signature {
         Some(sig) => {
             if let Err(e) = store_cached(cache, sig, &found) {
@@ -110,11 +115,17 @@ pub fn listing_result(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<Dev
         .lines()
         .rev()
         .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
-    match parse_listing(last) {
-        Err(e) => Err(e),
-        Ok(_) if last.is_empty() => Err("the device listing failed".into()),
-        Ok(_) => Err(format!("the device listing failed: {last}")),
+        .unwrap_or("")
+        .trim();
+    if last.is_empty() {
+        return Err("the device listing failed".into());
+    }
+    match serde_json::from_str::<Value>(last)
+        .ok()
+        .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned))
+    {
+        Some(error) => Err(error),
+        None => Err(format!("the device listing failed: {last}")),
     }
 }
 
