@@ -809,18 +809,23 @@ pub async fn upload(
         // leave a copy on the server, no local file and no link anywhere:
         // keep it, and hand the link over in the reply.
         eprintln!("[Uploader] Upload history could not be saved: {e}");
-        let was = match &link {
-            Some(link) => format!("Uploaded to {link}"),
-            None => "Uploaded".to_owned(),
+        // The bar shows one line and cuts it at 240 characters: the link
+        // comes first, and the reason is kept short.
+        let why: String = e.to_string().chars().take(80).collect();
+        let warning = match &link {
+            Some(link) => format!(
+                "{link}: uploaded, but the upload history could not be saved ({why}). The clip was kept."
+            ),
+            None => format!(
+                "Uploaded, but the upload history could not be saved ({why}). The clip was kept."
+            ),
         };
         return Response {
             ok: true,
             message,
             upload_info: Some(entry),
             settings_problem: false,
-            warning: Some(format!(
-                "{was}, but the upload history could not be saved ({e}). The clip was kept."
-            )),
+            warning: Some(warning),
         };
     }
     let auto_delete = fthrust_core::upload::truthy(settings.get("upload_auto_delete"));

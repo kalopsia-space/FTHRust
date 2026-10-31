@@ -889,7 +889,7 @@ async fn a_history_that_cannot_be_saved_keeps_the_clip_and_hands_over_the_link()
     let warning = r.warning.clone().expect("no warning");
     assert!(
         warning.starts_with(
-            "Uploaded to https://cdn.example/a, but the upload history could not be saved ("
+            "https://cdn.example/a: uploaded, but the upload history could not be saved ("
         ),
         "{warning}"
     );
@@ -900,8 +900,23 @@ async fn a_history_that_cannot_be_saved_keeps_the_clip_and_hands_over_the_link()
     );
     assert!(
         r.to_line()
-            .contains(r#""warning":"Uploaded to https://cdn.example/a"#)
+            .contains(r#""warning":"https://cdn.example/a: uploaded"#)
     );
+}
+
+/// The bar shows one line and cuts a detail at 240 characters: what has to
+/// survive that is the link, so it leads, even a long one.
+#[tokio::test]
+async fn the_link_leads_the_history_warning() {
+    let long = format!("https://cdn.example/{}", "a".repeat(150));
+    let srv = server(vec![(200, long.as_str())]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    std::fs::create_dir_all(h.paths.upload_history_file()).unwrap();
+    let r = h.respond(&h.env("x")).await;
+    assert!(r.ok, "{}", r.message);
+    let warning = r.warning.expect("no warning");
+    let shown: String = warning.chars().take(240).collect();
+    assert!(shown.starts_with(&long), "{shown}");
 }
 
 fn nix_is_root() -> bool {
