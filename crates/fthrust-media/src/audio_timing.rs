@@ -61,6 +61,18 @@ pub fn assemble_window(
     end_ns: i64,
     duration_ms: u32,
 ) -> Vec<f32> {
+    assemble_window_from(blocks, channels, sample_rate, end_ns, duration_ms)
+}
+
+/// [`assemble_window`] over blocks behind any borrow, so a ring can hand out
+/// shared blocks (`Arc<AudioBlock>`) without copying their samples.
+pub fn assemble_window_from<B: std::borrow::Borrow<AudioBlock>>(
+    blocks: &[B],
+    channels: usize,
+    sample_rate: u32,
+    end_ns: i64,
+    duration_ms: u32,
+) -> Vec<f32> {
     if channels == 0 || sample_rate == 0 || duration_ms == 0 {
         return Vec::new();
     }
@@ -74,6 +86,7 @@ pub fn assemble_window(
     let mut cursor: i64 = 0;
     let mut any = false;
     for block in blocks {
+        let block = block.borrow();
         let frames = (block.samples.len() / channels) as i64;
         if frames == 0 {
             continue;

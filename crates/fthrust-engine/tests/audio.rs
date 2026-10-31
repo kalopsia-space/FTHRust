@@ -114,3 +114,64 @@ fn live_system_capture_streams() {
         "stop is bounded"
     );
 }
+
+#[test]
+fn a_long_window_does_not_hold_up_the_capture_callback() {
+    // A 120 s save copied every block (about 46 MB) while holding the source
+    // lock that the real-time capture callback takes for each block it
+    // delivers. The window now only shares the blocks under the lock.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    const SECOND: i64 = 1_000_000_000;
+    const BLOCK_FRAMES: usize = 1024;
+    let block_ns = BLOCK_FRAMES as i64 * SECOND / 48_000;
+    let audio = Arc::new(PipeWireAudio::detached(&AudioConfig {
+        system: Some(AudioTarget::DefaultSinkMonitor),
+        microphone: None,
+        keep_seconds: 120,
+    }));
+    let mut t = 0;
+    while t < 120 * SECOND {
+        audio.push_block(AudioSourceKind::System, block(t / MS, BLOCK_FRAMES, 0.1));
+        t += block_ns;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let pushed = Arc::new(Mutex::new(Vec::new()));
+    let producer = {
+        let (audio, stop, pushed) = (audio.clone(), stop.clone(), pushed.clone());
+        std::thread::spawn(move || {
+            let mut t = t;
+            while !stop.load(Ordering::SeqCst) {
+                audio.push_block(AudioSourceKind::System, block(t / MS, BLOCK_FRAMES, 0.1));
+                pushed.lock().unwrap().push(Instant::now());
+                t += block_ns;
+                std::thread::sleep(Duration::from_micros(100));
+            }
+        })
+    };
+    let mut windows = Vec::new();
+    for _ in 0..5 {
+        let started = Instant::now();
+        let w = audio
+            .window(AudioSourceKind::System, 120 * SECOND, 120_000)
+            .unwrap();
+        windows.push((started, Instant::now()));
+        assert_eq!(w.len(), 120 * 48_000 * 2);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop.store(true, Ordering::SeqCst);
+    producer.join().unwrap();
+    let pushed = pushed.lock().unwrap();
+    let delivered_meanwhile = windows
+        .iter()
+        .filter(|(started, ended)| {
+            let quarter = (*ended - *started) / 4;
+            let (from, to) = (*started + quarter, *ended - quarter);
+            pushed.iter().any(|p| *p > from && *p < to)
+        })
+        .count();
+    assert!(
+        delivered_meanwhile > 0,
+        "no block was delivered while a 120 s window was assembled ({windows:?})"
+    );
+}

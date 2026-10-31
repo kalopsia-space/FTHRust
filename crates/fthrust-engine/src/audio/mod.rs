@@ -4,12 +4,13 @@
 
 pub mod pipewire;
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fthrust_ipc::{AudioStatus, SourceStatus};
 use fthrust_media::audio_timing::{
-    AudioBlock, CHANNELS, SAMPLE_RATE, assemble_window, ring_capacity_samples,
+    AudioBlock, CHANNELS, SAMPLE_RATE, assemble_window_from, ring_capacity_samples,
 };
 use fthrust_wayland::backend::monotonic_ns;
 
@@ -44,18 +45,44 @@ pub struct AudioConfig {
     pub keep_seconds: u32,
 }
 
+/// Nanoseconds covered by `block`.
+fn block_ns(block: &AudioBlock) -> i64 {
+    (block.samples.len() / CHANNELS) as i64 * 1_000_000_000 / i64::from(SAMPLE_RATE)
+}
+
 /// A bounded store of timestamped float32 blocks.
 pub struct AudioRing {
-    blocks: std::collections::VecDeque<AudioBlock>,
+    blocks: VecDeque<Arc<AudioBlock>>,
     samples: usize,
     capacity_samples: usize,
+}
+
+/// The blocks of one window, shared with the ring they came from.
+pub struct AudioWindow {
+    blocks: Vec<Arc<AudioBlock>>,
+    end_ns: i64,
+    duration_ms: u32,
+}
+
+impl AudioWindow {
+    /// The window's interleaved PCM (silence-padded; empty when no block
+    /// overlaps it).
+    pub fn pcm(&self) -> Vec<f32> {
+        assemble_window_from(
+            &self.blocks,
+            CHANNELS,
+            SAMPLE_RATE,
+            self.end_ns,
+            self.duration_ms,
+        )
+    }
 }
 
 impl AudioRing {
     /// Capacity for `keep_seconds` (the reference's `(keep + 10) s`).
     pub fn new(keep_seconds: u32) -> Self {
         Self {
-            blocks: std::collections::VecDeque::new(),
+            blocks: VecDeque::new(),
             samples: 0,
             capacity_samples: ring_capacity_samples(keep_seconds, SAMPLE_RATE, CHANNELS),
         }
@@ -64,7 +91,7 @@ impl AudioRing {
     /// Appends a block, pruning the oldest ones past capacity.
     pub fn push(&mut self, block: AudioBlock) {
         self.samples += block.samples.len();
-        self.blocks.push_back(block);
+        self.blocks.push_back(Arc::new(block));
         while self.samples > self.capacity_samples {
             match self.blocks.pop_front() {
                 Some(old) => self.samples -= old.samples.len(),
@@ -73,22 +100,28 @@ impl AudioRing {
         }
     }
 
-    /// The `duration_ms` window ending at `end_ns` (silence-padded). Only
-    /// blocks that can overlap the window are copied, so a long ring is not
-    /// cloned under the lock the capture callback needs.
-    pub fn window(&self, end_ns: i64, duration_ms: u32) -> Vec<f32> {
+    /// The blocks that can overlap the `duration_ms` window ending at
+    /// `end_ns`, shared rather than copied: cheap enough to take under the
+    /// lock the capture callback needs, with [`AudioWindow::pcm`] doing the
+    /// copying once that lock is released.
+    pub fn window_blocks(&self, end_ns: i64, duration_ms: u32) -> AudioWindow {
         let start_ns = end_ns - i64::from(duration_ms) * 1_000_000 - 100_000_000;
-        let blocks: Vec<AudioBlock> = self
+        let blocks = self
             .blocks
             .iter()
-            .filter(|b| {
-                let len_ns =
-                    (b.samples.len() / CHANNELS) as i64 * 1_000_000_000 / SAMPLE_RATE as i64;
-                b.start_ns + len_ns >= start_ns && b.start_ns <= end_ns
-            })
+            .filter(|b| b.start_ns + block_ns(b) >= start_ns && b.start_ns <= end_ns)
             .cloned()
             .collect();
-        assemble_window(&blocks, CHANNELS, SAMPLE_RATE, end_ns, duration_ms)
+        AudioWindow {
+            blocks,
+            end_ns,
+            duration_ms,
+        }
+    }
+
+    /// The `duration_ms` window ending at `end_ns` (silence-padded).
+    pub fn window(&self, end_ns: i64, duration_ms: u32) -> Vec<f32> {
+        self.window_blocks(end_ns, duration_ms).pcm()
     }
 
     /// Blocks held.
@@ -218,12 +251,15 @@ impl AudioProvider for SyntheticAudio {
     }
 
     fn window(&self, kind: AudioSourceKind, end_ns: i64, duration_ms: u32) -> Option<Vec<f32>> {
-        let inner = self.inner.lock().unwrap();
-        let ring = match kind {
-            AudioSourceKind::System => inner.system.as_ref(),
-            AudioSourceKind::Microphone => inner.microphone.as_ref(),
-        }?;
-        Some(ring.window(end_ns, duration_ms))
+        let blocks = {
+            let inner = self.inner.lock().unwrap();
+            let ring = match kind {
+                AudioSourceKind::System => inner.system.as_ref(),
+                AudioSourceKind::Microphone => inner.microphone.as_ref(),
+            }?;
+            ring.window_blocks(end_ns, duration_ms)
+        };
+        Some(blocks.pcm())
     }
 
     fn status(&self) -> AudioStatus {
