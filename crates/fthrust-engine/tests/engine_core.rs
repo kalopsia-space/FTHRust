@@ -869,8 +869,9 @@ fn zero_copy_capture_encodes_dmabuf_frames() {
     };
     let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
     h.engine.start().unwrap();
+    // The watchdog samples the surfaces once a second, from a mapping.
     wait_for(&h.engine, Duration::from_secs(10), |s| {
-        s.frames_captured >= 30
+        s.frames_captured >= 30 && s.content_sample_sequence >= 1
     });
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
     assert_eq!(h.engine.normalized_frames(), 0);

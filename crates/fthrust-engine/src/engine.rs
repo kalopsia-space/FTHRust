@@ -1028,16 +1028,21 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             let mut sampled = None;
             let mut update_content = |m: ContentMetrics| sampled = Some(m);
             let encoded = if let FrameSource::Dmabuf(index) = view.source {
-                let (w, h) = (view.width as usize, view.height as usize);
                 let upright = view.transform == OutputTransform::Normal && !view.y_invert;
                 let is_repeat = view.repeated;
                 packets.clear();
                 let result = if !upright {
                     Err("the output is rotated or flipped".to_string())
                 } else {
+                    // Only the 16x9 sample pixels are read from the
+                    // surface, never the whole frame.
+                    let (columns, rows) = (ContentWatchdog::COLUMNS, ContentWatchdog::ROWS);
                     if watchdog.tick()
-                        && let Ok(stride) = enc.download_surface(index, &mut surface_pixels)
-                        && let Some(m) = watchdog.sample_raw(&surface_pixels, w, h, stride)
+                        && enc
+                            .sample_surface(index, columns, rows, &mut surface_pixels)
+                            .is_ok()
+                        && let Some(m) =
+                            watchdog.sample_raw(&surface_pixels, columns, rows, columns * 4)
                     {
                         update_content(m);
                     }

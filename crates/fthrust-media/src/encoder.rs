@@ -477,6 +477,20 @@ impl Encoder {
         self.capture_surfaces()?.download(index, out)
     }
 
+    /// Copies the content watchdog's `columns`×`rows` sample pixels out of
+    /// capture surface `index` into `out`, packed BGRX, without
+    /// downloading the surface.
+    pub fn sample_surface(
+        &self,
+        index: usize,
+        columns: usize,
+        rows: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        self.capture_surfaces()?
+            .sample_grid(index, columns, rows, out)
+    }
+
     /// Writes BGRA rows into capture surface `index` through a mapping, in
     /// place of the compositor (tests).
     #[doc(hidden)]

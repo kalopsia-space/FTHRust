@@ -169,6 +169,45 @@ impl CaptureSurfaces {
         Ok(())
     }
 
+    /// Copies the `columns`×`rows` pixels the content watchdog samples out
+    /// of surface `index` into `out`, packed BGRX, `columns` pixels a row
+    /// (see [`gather_grid`]). The surface is mapped for reading and only
+    /// those pixels are touched: no download of the whole surface.
+    pub(crate) fn sample_grid(
+        &self,
+        index: usize,
+        columns: usize,
+        rows: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<()> {
+        let surface = self.checked(index)?;
+        // A direct mapping (vaDeriveImage) costs no copy, and reading 144
+        // pixels from it is cheap; FFmpeg's default read mapping copies the
+        // whole surface first. Drivers that cannot derive get that one.
+        let mapped = map_for_read(surface, true).or_else(|_| map_for_read(surface, false))?;
+        let (w, h) = (self.width as usize, self.height as usize);
+        // SAFETY: the mapping is alive until `mapped` drops after this block;
+        // its plane is checked to hold h rows of linesize >= w * 4 bytes, and
+        // gather_grid only reads pixels inside w x h.
+        unsafe {
+            let f = mapped.as_ptr();
+            let (data, linesize) = ((*f).data[0], (*f).linesize[0]);
+            if data.is_null()
+                || linesize < 0
+                || (linesize as usize) < w * 4
+                || (*f).height < h as i32
+            {
+                return Err(MediaError::Invalid("mapped surface is too small".into()));
+            }
+            let linesize = linesize as usize;
+            gather_grid(w, h, columns, rows, out, |x, y| {
+                let p = data.add(y * linesize + x * 4);
+                [*p, *p.add(1), *p.add(2), *p.add(3)]
+            });
+        }
+        Ok(())
+    }
+
     /// Downloads surface `index` into `out` as BGRX rows and returns their
     /// stride (the watchdog's fallback frame).
     pub(crate) fn download(&self, index: usize, out: &mut Vec<u8>) -> Result<usize> {
@@ -209,6 +248,53 @@ impl CaptureSurfaces {
             );
         }
         Ok(row)
+    }
+}
+
+/// Maps a BGR0 surface for reading, `direct`ly (no copy) or through a copy
+/// the VA-API context makes; the mapping lives as long as the frame.
+fn map_for_read(surface: &OwnedFrame, direct: bool) -> Result<OwnedFrame> {
+    let mapped = OwnedFrame::empty()?;
+    let mut flags = ffi::AV_HWFRAME_MAP_READ as i32;
+    if direct {
+        flags |= ffi::AV_HWFRAME_MAP_DIRECT as i32;
+    }
+    // SAFETY: both frames are valid; a software destination format makes the
+    // VA-API context map the surface into `mapped`.
+    unsafe {
+        (*mapped.as_ptr()).format = ffi::AVPixelFormat::AV_PIX_FMT_BGR0 as i32;
+        super::check(ffi::av_hwframe_map(
+            mapped.as_ptr(),
+            surface.as_ptr(),
+            flags,
+        ))?;
+    }
+    Ok(mapped)
+}
+
+/// Gathers the `columns`×`rows` grid of a `width`×`height` image into `out`
+/// as a packed `columns`-wide BGRX image: for each cell the pixel at its
+/// centre, the one `fthrust_core::capture_health::sample_bgra_grid` reads.
+/// Sampling the packed image with the same grid reads every gathered pixel
+/// once, so it gives the same metrics as sampling the whole image.
+fn gather_grid(
+    width: usize,
+    height: usize,
+    columns: usize,
+    rows: usize,
+    out: &mut Vec<u8>,
+    pixel: impl Fn(usize, usize) -> [u8; 4],
+) {
+    let (columns, rows) = (columns.max(1), rows.max(1));
+    let centre =
+        |i: usize, n: usize, extent: usize| (extent - 1).min((2 * i + 1) * extent / (2 * n));
+    out.clear();
+    out.reserve(columns * rows * 4);
+    for row in 0..rows {
+        let y = centre(row, rows, height.max(1));
+        for column in 0..columns {
+            out.extend_from_slice(&pixel(centre(column, columns, width.max(1)), y));
+        }
     }
 }
 
@@ -273,5 +359,68 @@ fn export(surface: &OwnedFrame, width: u32, height: u32) -> Result<ExportedImage
             modifier: modifier.unwrap_or(u64::MAX),
             planes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fthrust_core::capture_health::sample_bgra_grid;
+
+    use super::*;
+
+    /// A frame whose every pixel differs, with padded rows.
+    fn pattern(width: usize, height: usize, stride: usize) -> Vec<u8> {
+        let mut data = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let i = y * stride + x * 4;
+                data[i..i + 4].copy_from_slice(&[
+                    (x * 7 + y) as u8,
+                    (x * 3 + y * 11) as u8,
+                    (x ^ y) as u8,
+                    0,
+                ]);
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn the_gathered_grid_samples_like_the_whole_frame() {
+        let (columns, rows) = (16, 9);
+        for (w, h) in [(1920, 1080), (2560, 1440), (101, 67), (16, 9), (7, 3)] {
+            let stride = w * 4 + 64;
+            let frame = pattern(w, h, stride);
+            let mut grid = Vec::new();
+            gather_grid(w, h, columns, rows, &mut grid, |x, y| {
+                let i = y * stride + x * 4;
+                [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+            });
+            assert_eq!(grid.len(), columns * rows * 4);
+            let whole = sample_bgra_grid(&frame, w, h, stride, columns, rows).unwrap();
+            let sparse =
+                sample_bgra_grid(&grid, columns, rows, columns * 4, columns, rows).unwrap();
+            assert_eq!(whole, sparse, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn a_mapped_sample_matches_the_downloaded_surface() {
+        if !super::super::hw::vaapi_available() {
+            return eprintln!("skipping: no VA-API device");
+        }
+        let (w, h) = (640u32, 360u32);
+        let device = VaapiFrames::create(64, 64).unwrap();
+        let surfaces = CaptureSurfaces::new(&device, w, h, 2).unwrap();
+        let (wu, hu) = (w as usize, h as usize);
+        surfaces.write(1, &pattern(wu, hu, wu * 4), wu * 4).unwrap();
+        let mut grid = Vec::new();
+        surfaces.sample_grid(1, 16, 9, &mut grid).unwrap();
+        let mut whole = Vec::new();
+        let stride = surfaces.download(1, &mut whole).unwrap();
+        assert_eq!(
+            sample_bgra_grid(&grid, 16, 9, 16 * 4, 16, 9).unwrap(),
+            sample_bgra_grid(&whole, wu, hu, stride, 16, 9).unwrap()
+        );
     }
 }
