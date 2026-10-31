@@ -85,8 +85,14 @@ def main():
     problems += [f"duplicate library id {i}" for i in sorted({i for i in ids if ids.count(i) > 1})]
     gpl = [e for e in libs + supporting if e.get("gpl")]
     for e in gpl:
-        if not e.get("signature") or not e.get("in_libraries"):
-            problems.append(f"{e['id']} is marked gpl but has no signature and in_libraries: verify-appdir.sh needs them to check the claim")
+        sigs, held_by = e.get("signatures"), e.get("in_libraries")
+        sigs_ok = isinstance(sigs, list) and sigs and all(isinstance(g, str) and re.fullmatch(r"[\x21-\x7e]+", g) for g in sigs)
+        held_ok = isinstance(held_by, list) and held_by and all(isinstance(l, str) and l for l in held_by)
+        if not (sigs_ok and held_ok):
+            problems.append(
+                f"{e['id']} is marked gpl but has no signatures and in_libraries (lists of strings, the signatures printable "
+                "and without spaces): verify-appdir.sh needs them to check the claim"
+            )
     on_disk = {f for f in os.listdir(args.licenses) if f.endswith(".txt")} if os.path.isdir(args.licenses) else set()
     for f in sorted(on_disk - {e["text"] for e in libs + supporting}):
         problems.append(f"licenses/ffmpeg/{f} belongs to no library in the registry")

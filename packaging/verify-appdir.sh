@@ -124,20 +124,47 @@ if [ -z "$want" ] || [ "$want" = null ]; then problems+=("the manifest records n
 if out="$("$HERE/check-notice-links.sh" --require-links "$DIR/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass notice-links; else fail notice-links "$(tr '\n' ' ' <<<"$out")"; fi
 
 # 8. gpl-libs: a library the notices declare as GPL ("gpl": true in the registry) is in exactly the bundled
-# libraries they name. Each is recognised by a string only it contains; a mismatch means the licence notices
-# describe a different build than the one in the package.
+# libraries they name. Each is recognised by strings only it contains (its "signatures": FFTW's own solver names,
+# string literals that survive stripping); a mismatch means the licence notices describe a different build than
+# the one in the package. A registry that cannot be read, or that names no GPL library, fails the gate (as a
+# missing configure line fails gate 6): the check must not pass because it had nothing to check.
 problems=()
-while IFS=$'\t' read -r id sig names; do
+declare -A reported=()
+report() { [ -n "${reported[$1]:-}" ] || { reported[$1]=1; problems+=("$1"); }; }
+gpl_rows='(.libraries[], .supporting_libraries[]) | select(.gpl == true) | .id as $id | (.in_libraries | join(" ")) as $in | .signatures[] | [$id, $in, .] | join("\u001f")'
+if err="$(jq -r "$gpl_rows" "$REG" 2>&1 >/dev/null)"; then
+    rows="$(jq -r "$gpl_rows" "$REG")"
+    [ -n "$rows" ] || report "${REG##*/} marks no library \"gpl\": true, so the notices name nothing behind the GPL in libavformat"
+else
+    report "cannot read the GPL libraries from ${REG##*/}: $(head -n1 <<<"$err")"
+    rows=""
+fi
+LIBS=()
+declare -A seen=()
+while IFS= read -r -d '' f; do
+    real="$(readlink -f "$f")"
+    [ -z "${seen[$real]:-}" ] || continue
+    seen[$real]=1
+    LIBS+=("$f")
+done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
+[ ${#LIBS[@]} -gt 0 ] || report "no FFmpeg libraries found"
+while IFS=$'\x1f' read -r id names sig; do
     [ -n "$id" ] || continue
-    while IFS= read -r -d '' f; do
+    if [ -z "$names" ] || [ -z "$sig" ]; then report "$id has no signatures or no in_libraries in ${REG##*/}"; continue; fi
+    for n in $names; do
+        found=0
+        for f in "${LIBS[@]}"; do [[ "$(basename "$f")" == "$n".so.* ]] && found=1; done
+        [ $found = 1 ] || report "$id: $n, which the notices say holds it, is not in the package"
+    done
+    for f in "${LIBS[@]}"; do
         base="$(basename "$f")"
         has=0 want=0
         grep -aqF -- "$sig" "$f" && has=1
         for n in $names; do [[ "$base" == "$n".so.* ]] && want=1; done
-        [ $has = 1 ] && [ $want = 0 ] && problems+=("$id is in $base, which the notices do not name")
-        [ $has = 0 ] && [ $want = 1 ] && problems+=("$id is not in $base, which the notices say holds it")
-    done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
-done < <(jq -r '(.libraries[], .supporting_libraries[]) | select(.gpl == true) | [.id, .signature, (.in_libraries | join(" "))] | @tsv' "$REG")
+        [ $has = 1 ] && [ $want = 0 ] && report "$id ($sig) is in $base, which the notices do not name"
+        [ $has = 0 ] && [ $want = 1 ] && report "$id ($sig) is not in $base, which the notices say holds it"
+    done
+done <<<"$rows"
 [ ${#problems[@]} -eq 0 ] && pass gpl-libs || fail gpl-libs "${problems[*]}"
 
 [ $failed -eq 0 ] && { echo "RESULT: PASS"; exit 0; }

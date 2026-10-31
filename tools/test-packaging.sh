@@ -145,11 +145,32 @@ group_gate() {
     d="$(fixture gplmoved)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .in_libraries) = ["libavcodec"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-moved.json"
     gate_expect gate_fails_when_a_gpl_library_is_not_where_the_notices_say 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-moved.json"
 
-    d="$(fixture gplgone)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signature) = "no_such_string_in_any_library"' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-gone.json"
+    d="$(fixture gplgone)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signatures) = ["no_such_string_in_any_library"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-gone.json"
     gate_expect gate_fails_when_a_gpl_library_is_not_in_the_libraries 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-gone.json"
 
-    d="$(fixture gplextra)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signature) = "av_version_info"' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-extra.json"
+    d="$(fixture gplextra)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signatures) = ["av_version_info"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-extra.json"
     gate_expect gate_fails_when_a_gpl_library_is_also_in_other_libraries 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-extra.json"
+
+    # Every signature has to be there: one of FFTW's solver names alone is not enough.
+    d="$(fixture gplpart)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signatures) += ["no_such_string_in_any_library"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-part.json"
+    gate_expect gate_needs_every_signature_of_a_gpl_library 1 "no_such_string_in_any_library) is not in libavformat" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-part.json"
+
+    d="$(fixture gplabsent)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .in_libraries) = ["libpostproc"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-absent.json"
+    gate_expect gate_fails_when_the_library_the_notices_name_is_not_bundled 1 "libpostproc, which the notices say holds it, is not in the package" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-absent.json"
+
+    # A registry the gate cannot use must not let it pass without having checked anything.
+    d="$(fixture noreg)"
+    gate_expect gate_fails_when_the_registry_is_missing 1 "FAIL gpl-libs: cannot read the GPL libraries from no-such-registry.json" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/no-such-registry.json"
+    printf '{ "libraries": [' > "$WORK/reg-broken.json"
+    gate_expect gate_fails_when_the_registry_is_not_json 1 "FAIL gpl-libs: cannot read the GPL libraries from reg-broken.json" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-broken.json"
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.signatures)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nosigs.json"
+    gate_expect gate_fails_when_a_gpl_library_lacks_signatures 1 "FAIL gpl-libs: cannot read the GPL libraries from reg-nosigs.json" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-nosigs.json"
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.gpl)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nogpl-gate.json"
+    gate_expect gate_fails_when_the_registry_names_no_gpl_library 1 "FAIL gpl-libs: reg-nogpl-gate.json marks no library" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-nogpl-gate.json"
+    jq '(.supporting_libraries[] | select(.id == "fftw3") | .in_libraries) = []' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-noholder.json"
+    gate_expect gate_fails_when_a_gpl_library_names_no_bundled_library 1 "fftw3 has no signatures or no in_libraries" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-noholder.json"
+    d="$(fixture nolibs)"; rm "$d"/usr/lib/libav* "$d"/usr/lib/libsw* "$d"/usr/lib/libpostproc* 2>/dev/null
+    gate_expect gate_fails_when_no_ffmpeg_library_is_bundled 1 "FAIL gpl-libs: .*no FFmpeg libraries found" "$d"
 
     d="$(fixture missing)"; rm "$d/THIRD_PARTY_NOTICES.md"
     gate_expect gate_fails_missing_notices 1 "FAIL files" "$d"
@@ -304,7 +325,7 @@ group_archive() {
         "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$m"
     reg="$WORK/source-registry.json"
     jq -n --arg repo "$src/gpl" --arg c "$gc" \
-        '{ignored_options: {}, libraries: [], not_linked: {}, supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $repo, pinned_commit: $c, text: "gplx.txt", needed_by: ["x"], gpl: true, signature: "gplx_sig", in_libraries: ["libavformat"]}]}' > "$reg"
+        '{ignored_options: {}, libraries: [], not_linked: {}, supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $repo, pinned_commit: $c, text: "gplx.txt", needed_by: ["x"], gpl: true, signatures: ["gplx_sig"], in_libraries: ["libavformat"]}]}' > "$reg"
     out="$WORK/source-out/src.tar.xz"
     local opts=(--manifest "$m" --libraries "$reg" --skip-depends-check)
 
@@ -606,16 +627,23 @@ group_ffnotice() {
     if grep -q '\*\*GPL-2.0-or-later\*\*' <<<"$out" && grep -q 'GPL code in the shipped libraries' <<<"$out" && grep -qF 'fftw3.txt' <<<"$out"; then pass ffnotice_marks_the_gpl_library
     else fail ffnotice_marks_the_gpl_library "no GPL section"; fi
 
-    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.signature)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nosig.json"
-    if out="$(python3 -I "$gen" --libraries "$WORK/reg-nosig.json" 2>&1)"; then fail ffnotice_gpl_library_needs_a_signature "exit 0"
-    elif grep -q "fftw3 is marked gpl but has no signature" <<<"$out"; then pass ffnotice_gpl_library_needs_a_signature
-    else fail ffnotice_gpl_library_needs_a_signature "$out"; fi
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.signatures)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nosig.json"
+    if out="$(python3 -I "$gen" --libraries "$WORK/reg-nosig.json" 2>&1)"; then fail ffnotice_gpl_library_needs_signatures "exit 0"
+    elif grep -q "fftw3 is marked gpl but has no signatures" <<<"$out"; then pass ffnotice_gpl_library_needs_signatures
+    else fail ffnotice_gpl_library_needs_signatures "$out"; fi
+    local bad
+    for bad in '.signatures = []' '.signatures = [""]' '.signatures = ["two words"]' '.signatures = "dft-nop"' '.in_libraries = []'; do
+        jq "(.supporting_libraries[] | select(.id == \"fftw3\")) |= ($bad)" "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-badsig.json"
+        if out="$(python3 -I "$gen" --libraries "$WORK/reg-badsig.json" 2>&1)"; then fail "ffnotice_rejects_unusable_gpl_evidence ($bad)" "exit 0"
+        elif grep -q "fftw3 is marked gpl but has no signatures and in_libraries" <<<"$out"; then pass "ffnotice_rejects_unusable_gpl_evidence ($bad)"
+        else fail "ffnotice_rejects_unusable_gpl_evidence ($bad)" "$out"; fi
+    done
 
     printf '{{ffmpeg.licence_summary}}|{{ffmpeg.licence_row}}|{{ffmpeg.configuration_sentence}}|{{ffmpeg.gpl_consequence}}\n<!-- ffmpeg-libraries -->\n' > "$WORK/tpl-licence.md"
     out="$(python3 -I "$gen" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"
     if [ "$(grep -o 'FFTW' <<<"$out" | wc -l)" -ge 3 ] && grep -q 'libavformat' <<<"$out"; then pass ffnotice_licence_wording_names_the_gpl_library
     else fail ffnotice_licence_wording_names_the_gpl_library "$out"; fi
-    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= (del(.gpl) | del(.signature) | del(.in_libraries))' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nogpl.json"
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= (del(.gpl) | del(.signatures) | del(.in_libraries))' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nogpl.json"
     out="$(python3 -I "$gen" --libraries "$WORK/reg-nogpl.json" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"
     if grep -q '^LGPL v3 or later|\*\*LGPL v3 or later\*\* (`--enable-version3`' <<<"$out" && ! grep -q 'GPL code' <<<"$out" && grep -q 'The configuration has no GPL or non-free library.' <<<"$out"; then pass ffnotice_without_a_gpl_library_says_lgpl
     else fail ffnotice_without_a_gpl_library_says_lgpl "$out"; fi

@@ -1,5 +1,5 @@
 {
-  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signature is a string only it contains, in_libraries the shipped libraries that hold it; verify-appdir.sh checks both).",
+  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signatures are strings only it contains, FFTW's own solver names, which survive stripping; in_libraries are the shipped libraries that hold it; verify-appdir.sh checks both).",
   "ignored_options": {
     "--enable-version3": "Selects LGPL version 3 or later (needed by gmp, aribb24, opencore-amr and libvmaf); adds no code.",
     "--enable-shared": "Builds shared libraries; adds no code.",
@@ -1215,7 +1215,11 @@
         "Chromaprint"
       ],
       "gpl": true,
-      "signature": "fftw_dft_indirect_register",
+      "signatures": [
+        "dft-nop",
+        "rdft-rank0",
+        "dft-indirect"
+      ],
       "in_libraries": [
         "libavformat"
       ]
