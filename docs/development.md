@@ -156,7 +156,7 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 
 | Script | Does |
 |---|---|
-| `tools/check-upload-isolation.sh` | Fails if `reqwest`, `russh`, `russh-sftp` or `keyring` end up in the app's or engine's dependency tree. Network and keyring code belongs in `fthrust-uploader` only. |
+| `tools/check-upload-isolation.sh` | Fails if an HTTP, TLS, SSH or keyring crate (`reqwest`, `hyper`, `h2`, `rustls`, `russh`, `keyring` and their families) ends up in the dependency tree of any crate but `fthrust-uploader`, and also when `cargo tree` fails or the tree doesn't list the app's crates: a check that couldn't run is not a pass. Network and keyring code belongs in `fthrust-uploader` only. `tools/test-check-upload-isolation.sh` tests the check. |
 | `tools/check-assets.sh` | Checks bundled assets against their manifests (and against the original app's copies, if `reference/` exists). |
 | `tools/check-version.sh` | The workspace version is the only version: every crate inherits it, a release tag must equal `v<version>`, and built binaries must report it. |
 | `tools/gen-notices.sh [--check]` | Regenerates `THIRD_PARTY_NOTICES.md` with cargo-about, or checks it's current. |
