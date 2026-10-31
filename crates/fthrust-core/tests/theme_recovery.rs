@@ -185,22 +185,45 @@ fn a_theme_json_that_did_not_exist_before_the_import_marks_its_finish() {
     assert!(store.startup_issues().is_empty());
 }
 
+/// The startup note an import that could not be undone leaves, naming where
+/// the old files are.
+fn stuck_note(store: &ThemeStore, staging: &Path) -> Option<String> {
+    store
+        .startup_issues()
+        .iter()
+        .find(|m| {
+            m.contains("could not be undone")
+                && m.contains(&staging.join("old").display().to_string())
+        })
+        .cloned()
+}
+
 #[test]
-fn a_staging_that_cannot_be_undone_keeps_the_old_files() {
+fn a_folder_that_cannot_be_moved_aside_leaves_everything_where_it_is() {
     let (_t, p) = home();
-    // A file where the icons folder belongs: the parked folder cannot take
-    // its place, and must not be deleted for that.
-    write(&p.theme_dir().join("icons"), b"in the way");
     let staging = p.theme_dir().join(".import-0000000000000003");
+    // The live icons are the staged ones, the old ones are parked, and the
+    // place the live folder would be moved to is taken by a file.
+    write(&p.theme_file(), OLD_JSON);
+    write(&staging.join("old/theme.json"), OLD_JSON);
+    write(&p.theme_icons_dir().join("new.png"), b"NEW");
     write(&staging.join("old/icons/old.png"), b"OLD");
+    write(&staging.join("undone"), b"in the way");
 
     let store = ThemeStore::load(p.clone()).unwrap();
 
+    assert_eq!(
+        fs::read(p.theme_icons_dir().join("new.png")).unwrap(),
+        b"NEW",
+        "the live folder is not deleted when it cannot be moved aside"
+    );
     assert_eq!(
         fs::read(staging.join("old/icons/old.png")).unwrap(),
         b"OLD",
         "left for the next start"
     );
+    let note = stuck_note(&store, &staging);
+    assert!(note.is_some(), "{:?}", store.startup_issues());
     assert!(
         store
             .startup_issues()
@@ -209,4 +232,44 @@ fn a_staging_that_cannot_be_undone_keeps_the_old_files() {
         "{:?}",
         store.startup_issues()
     );
+}
+
+#[test]
+fn an_import_that_cannot_be_judged_is_left_alone_and_reported() {
+    let (_t, p) = home();
+    let staging = p.theme_dir().join(".import-0000000000000004");
+    // theme.json cannot be read (it is a directory), so there is no telling
+    // whether the import finished: nothing may be deleted.
+    fs::create_dir_all(p.theme_file()).unwrap();
+    write(&p.theme_icons_dir().join("new.png"), b"NEW");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    assert!(p.theme_icons_dir().join("new.png").exists());
+    assert!(staging.join("old/icons/old.png").exists());
+    assert!(
+        stuck_note(&store, &staging).is_some(),
+        "{:?}",
+        store.startup_issues()
+    );
+}
+
+#[test]
+fn whatever_stands_in_the_place_of_a_parked_folder_is_replaced_not_in_the_way() {
+    let (_t, p) = home();
+    let staging = p.theme_dir().join(".import-0000000000000005");
+    // A file where the icons folder belongs does not stop the old folder
+    // from coming back: it is moved aside with the rest.
+    write(&p.theme_dir().join("icons"), b"in the way");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    assert_eq!(
+        fs::read(p.theme_icons_dir().join("old.png")).unwrap(),
+        b"OLD"
+    );
+    assert!(!staging.exists());
+    assert!(store.startup_issues().iter().any(|m| m.contains("icons")));
 }

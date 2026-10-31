@@ -125,14 +125,21 @@ impl ThemeStore {
     /// A theme import that was cut short (the app was killed before the import
     /// replaced `theme.json`) is undone first: the icons, sounds and fonts
     /// folders it had moved aside are all put back from the import's staging
-    /// directory.
+    /// directory. One that cannot be undone is left as it is, with the old
+    /// files in it, and said so in [`startup_issues`](Self::startup_issues).
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let mut issues = Vec::new();
-        let restored = archive::recover_crashed_import(&paths);
-        if !restored.is_empty() {
+        let recovery = archive::recover_crashed_import(&paths);
+        if !recovery.put_back.is_empty() {
             issues.push(format!(
                 "A theme import was interrupted when FTHRust last stopped. Your previous theme folders ({}) were put back.",
-                restored.join(", ")
+                recovery.put_back.join(", ")
+            ));
+        }
+        for (dir, why) in &recovery.stuck {
+            issues.push(format!(
+                "A theme import was interrupted and could not be undone ({why}). Your previous theme files are kept in {}.",
+                dir.join("old").display()
             ));
         }
         for d in [
@@ -198,7 +205,8 @@ impl ThemeStore {
     }
 
     /// Problems met while loading (folders that could not be created, a
-    /// damaged or unreadable `theme.json`), worded for the user.
+    /// damaged or unreadable `theme.json`, an interrupted theme import), worded
+    /// for the user.
     pub fn startup_issues(&self) -> &[String] {
         &self.issues
     }
