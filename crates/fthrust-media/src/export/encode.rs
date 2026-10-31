@@ -64,9 +64,4 @@ pub fn status_for_encoder(name: &str) -> &'static str {
     }
 }
 
-/// Whether an encoder name is a hardware one.
-pub fn is_hardware(name: &str) -> bool {
-    ["nvenc", "vaapi", "qsv", "amf"]
-        .iter()
-        .any(|h| name.contains(h))
-}
+pub use crate::encoder_policy::is_hardware;

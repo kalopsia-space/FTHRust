@@ -139,6 +139,9 @@ impl RawEncoder {
                 den: 1,
             };
             (*ctx).bit_rate = params.bitrate_bps;
+            if let Some(threads) = crate::encoder_policy::thread_count(name) {
+                (*ctx).thread_count = threads;
+            }
             (*ctx).gop_size = params.gop_frames.unwrap_or(params.fps * 2) as i32;
             (*ctx).max_b_frames = 0;
             (*ctx).color_range = ffi::AVColorRange::AVCOL_RANGE_MPEG;
@@ -343,6 +346,46 @@ impl Drop for RawEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn params() -> OpenParams {
+        OpenParams {
+            width: 64,
+            height: 64,
+            fps: 30,
+            bitrate_bps: 300_000,
+            options: Vec::new(),
+            gop_frames: None,
+            pix_fmt: ffi::AVPixelFormat::AV_PIX_FMT_YUV420P,
+        }
+    }
+
+    #[test]
+    fn software_encoders_open_with_automatic_threads() {
+        crate::init().unwrap();
+        let mut opened = 0;
+        // The wrappers that pass `thread_count` on to the library. libx264
+        // defaults to automatic threads on its own; the others run on one
+        // thread unless told otherwise.
+        for name in [
+            "libopenh264",
+            "libx264",
+            "libx265",
+            "libaom-av1",
+            "librav1e",
+        ] {
+            if !RawEncoder::exists(name) {
+                continue;
+            }
+            let raw = RawEncoder::open(name, &params(), None).unwrap();
+            // SAFETY: the context is open and owned by `raw`.
+            let threads = unsafe { (*raw.ctx).thread_count };
+            assert_eq!(threads, 0, "{name} runs on {threads} thread(s)");
+            opened += 1;
+        }
+        if opened == 0 {
+            eprintln!("skipping: no software H.264 encoder in this FFmpeg build");
+        }
+    }
 
     #[test]
     fn empty_packet_copies_to_empty_vec() {

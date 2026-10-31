@@ -86,6 +86,21 @@ pub fn encoder_candidates(codec: Codec, encoder: EncoderPref) -> Vec<&'static st
     out
 }
 
+/// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).
+pub fn is_hardware(codec_name: &str) -> bool {
+    ["nvenc", "vaapi", "amf", "qsv"]
+        .iter()
+        .any(|h| codec_name.contains(h))
+}
+
+/// The `thread_count` an encoder opens with: `Some(0)`, FFmpeg's automatic
+/// count, for software encoders (most of their wrappers otherwise run the
+/// library on one thread), and `None` to leave hardware encoders as they
+/// are.
+pub fn thread_count(codec_name: &str) -> Option<i32> {
+    (!is_hardware(codec_name)).then_some(0)
+}
+
 /// The `(option, value)` pairs that map preset `1..=7` (clamped) onto an
 /// encoder's private options, or `None` for an encoder the policy does not
 /// know. VA-API deliberately gets no quality option: its meaning differs

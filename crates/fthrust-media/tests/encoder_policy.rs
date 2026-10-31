@@ -1,5 +1,7 @@
 use fthrust_core::capture_config::{Codec, EncoderPref};
-use fthrust_media::encoder_policy::{encoder_candidates, preset_options};
+use fthrust_media::encoder_policy::{
+    encoder_candidates, is_hardware, preset_options, thread_count,
+};
 
 fn names(codec: Codec, encoder: EncoderPref) -> Vec<&'static str> {
     encoder_candidates(codec, encoder)
@@ -151,4 +153,18 @@ fn preset_options_match_reference_tables() {
         "clamped above 7"
     );
     assert!(preset_options("mpeg4", 3).is_none());
+}
+
+#[test]
+fn software_encoders_get_automatic_threads_hardware_keeps_its_default() {
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        for name in names(codec, EncoderPref::Software) {
+            assert!(!is_hardware(name), "{name}");
+            assert_eq!(thread_count(name), Some(0), "{name}");
+        }
+        for name in names(codec, EncoderPref::Auto) {
+            assert!(is_hardware(name), "{name}");
+            assert_eq!(thread_count(name), None, "{name}");
+        }
+    }
 }
