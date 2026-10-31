@@ -432,6 +432,8 @@ pub struct PlaybackService {
     preserve_pitch: bool,
     master_percent: u8,
     sources: Vec<(String, SourceState)>,
+    /// `(source id, display name)` from the clip's verified manifest.
+    source_labels: Vec<(String, String)>,
     /// Each source's `0:a:N` index (`None`: not an audio stream).
     audio_indexes: Vec<Option<u32>>,
     last_frame_pts: Option<u64>,
@@ -466,8 +468,19 @@ impl PlaybackService {
         let duration_ms = info.duration_ms;
         let (events_tx, events_rx) = channel();
         let queue = Arc::new(PcmQueue::new());
-        // Tracks: the manifest's sources, else the best audio stream.
+        // Tracks: the manifest's sources, else the best audio stream. The
+        // manifest check hashes the whole clip: it happens here, once, and the
+        // editor takes the track names from this read.
         let manifest: Option<AudioManifest> = read_verified(path).ok().flatten();
+        let source_labels: Vec<(String, String)> = manifest
+            .as_ref()
+            .map(|m| {
+                m.sources
+                    .iter()
+                    .map(|s| (s.source_uuid.clone(), s.display_name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let specs: Vec<SourceSpec> = match &manifest {
             Some(m) => m
                 .sources
@@ -559,6 +572,7 @@ impl PlaybackService {
             preserve_pitch: true,
             master_percent: 100,
             sources,
+            source_labels,
             audio_indexes,
             last_frame_pts: None,
             eof_reported: false,
@@ -733,6 +747,12 @@ impl PlaybackService {
     /// The tracks and their states.
     pub fn sources(&self) -> &[(String, SourceState)] {
         &self.sources
+    }
+
+    /// `(source id, display name)` of the manifest's tracks, as the manifest
+    /// read for this player named them (empty without a verified manifest).
+    pub fn source_labels(&self) -> &[(String, String)] {
+        &self.source_labels
     }
 
     /// Each track's `0:a:N` index for export, parallel to

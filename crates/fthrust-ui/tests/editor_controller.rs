@@ -92,6 +92,57 @@ impl Rig {
 }
 
 #[test]
+fn the_editor_verifies_the_manifest_once_and_names_its_tracks_from_that_read() {
+    use fthrust_core::audio_manifest::{
+        AudioManifest, AudioSource, MANIFEST_VERSION, SourceType, sha256_file,
+    };
+    let mut r = Rig::new();
+    let clip = r.home.join("tones.mp4");
+    if support::write_tone_clip(&clip, 2, &[("Game", 440.0), ("Mic", 880.0)]).is_none() {
+        return;
+    }
+    let sha = sha256_file(&clip).unwrap();
+    let write_manifest = move |clip: &Path, name: &str| {
+        AudioManifest {
+            manifest_version: MANIFEST_VERSION,
+            transaction_id: uuid::Uuid::new_v4().to_string(),
+            media_file: "tones.mp4".into(),
+            media_sha256: sha.clone(),
+            sources: vec![AudioSource {
+                source_uuid: "11111111-1111-4111-8111-111111111111".into(),
+                stream_index: 1,
+                source_type: SourceType::Application,
+                display_name: name.into(),
+                persistent_identity: name.into(),
+                icon_reference: None,
+                first_active_100ns: 0,
+                last_active_100ns: 20_000_000,
+                sample_rate: 48_000,
+                channels: 2,
+                sample_format: "f32".into(),
+            }],
+        }
+        .write(clip)
+        .unwrap();
+    };
+    write_manifest(&clip, "Old name");
+    // The factory changes the sidecar just before its player opens: anything
+    // that read the manifest on its own, ahead of the player, would still
+    // have the old name. (Each read hashes the whole clip.)
+    let inner = r.factory();
+    let on_open = clip.clone();
+    let factory: PlayerFactory = Arc::new(move |p: &Path| {
+        write_manifest(&on_open, "New name");
+        inner(p)
+    });
+    let mut e = Editor::open(&clip, &r.store, &r.settings, factory).unwrap();
+    r.wait_loaded(&mut e);
+    let rows = e.source_rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].label, "New name");
+}
+
+#[test]
 fn lifecycle_reaches_ready_and_play_queues() {
     let mut r = Rig::new();
     let Some(clip) = r.clip("a.mp4", 4, true) else {

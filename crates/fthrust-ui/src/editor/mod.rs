@@ -242,17 +242,14 @@ impl Editor {
         std::thread::Builder::new()
             .name("editor-open".into())
             .spawn(move || {
-                let labels = fthrust_core::audio_manifest::read_verified(&p)
-                    .ok()
-                    .flatten()
-                    .map(|m| {
-                        m.sources
-                            .iter()
-                            .map(|s| (s.source_uuid.clone(), s.display_name.clone()))
-                            .collect()
-                    })
+                // The player verifies the manifest (a SHA-256 of the whole
+                // clip) when it opens; the track names come from that read.
+                let player = factory(&p);
+                let labels = player
+                    .as_ref()
+                    .map(|pl| pl.source_labels().to_vec())
                     .unwrap_or_default();
-                let _ = tx.send((factory(&p), labels));
+                let _ = tx.send((player, labels));
             })
             .map_err(|e| e.to_string())?;
         let (mtx, mrx) = channel();
