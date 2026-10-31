@@ -56,11 +56,12 @@ impl SettingsStore {
     /// parses to something other than an object, is renamed to
     /// `settings.json.corrupt` (replacing an older one) and defaults are used.
     ///
-    /// Loading does not fail on a damaged or unreadable file: the problem is
-    /// logged and kept in [`startup_issues`](Self::startup_issues). A file
-    /// that could not be read, or could not be set aside, is never replaced:
-    /// [`save`](Self::save) refuses, so defaults cannot overwrite the user's
-    /// settings.
+    /// Loading does not fail on a damaged or unreadable file, nor when the
+    /// migrated settings cannot be written back (a full disk must not stop
+    /// the app from opening): the problem is logged and kept in
+    /// [`startup_issues`](Self::startup_issues). A file that could not be
+    /// read, or could not be set aside, is never replaced: [`save`](Self::save)
+    /// refuses, so defaults cannot overwrite the user's settings.
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let file = paths.settings_file();
         let base = defaults(&paths);
@@ -116,14 +117,22 @@ impl SettingsStore {
         };
         if changed {
             store.dirty = true;
-            store.save()?;
+            // A full or read-only disk must not stop the app from opening
+            // (the user may need it to delete clips): the migrated settings
+            // are used from memory and the failure is reported.
+            if let Err(e) = store.save() {
+                tracing::error!("could not save the migrated settings: {e}");
+                store.issues.push(format!(
+                    "The migrated settings could not be saved ({e}). They are used for this session."
+                ));
+            }
         }
         Ok(store)
     }
 
-    /// Problems met while loading (an unreadable or damaged file), worded for
-    /// the user. The app keeps running with what it could load; the UI
-    /// reports these.
+    /// Problems met while loading (an unreadable or damaged file, a failed
+    /// write-back of the migrated settings), worded for the user. The app
+    /// keeps running with what it could load; the UI reports these.
     pub fn startup_issues(&self) -> &[String] {
         &self.issues
     }

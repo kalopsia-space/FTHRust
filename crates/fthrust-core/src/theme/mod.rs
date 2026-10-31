@@ -114,9 +114,10 @@ impl ThemeStore {
     /// one is kept as `theme.json.corrupt`). Migrations run in memory only;
     /// the file is not rewritten.
     ///
-    /// Loading does not fail when the file cannot be read: the problem is
-    /// logged and kept in [`startup_issues`](Self::startup_issues). A file
-    /// that could not be read is never replaced: [`save`](Self::save)
+    /// Loading does not fail when the folders cannot be created or the file
+    /// cannot be read (a full disk must not stop the app from opening): the
+    /// problem is logged and kept in [`startup_issues`](Self::startup_issues).
+    /// A file that could not be read is never replaced: [`save`](Self::save)
     /// refuses.
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let mut issues = Vec::new();
@@ -126,7 +127,14 @@ impl ThemeStore {
             paths.theme_sounds_dir(),
             paths.theme_fonts_dir(),
         ] {
-            std::fs::create_dir_all(d)?;
+            if let Err(e) = std::fs::create_dir_all(&d) {
+                tracing::error!("could not create {}: {e}", d.display());
+                issues.push(format!(
+                    "The theme folder {} could not be created ({e}). Custom icons, sounds and fonts cannot be loaded or saved.",
+                    d.display()
+                ));
+                break;
+            }
         }
         let file = paths.theme_file();
         let mut save_blocked = None;
@@ -173,8 +181,8 @@ impl ThemeStore {
         })
     }
 
-    /// Problems met while loading (a damaged or unreadable `theme.json`),
-    /// worded for the user.
+    /// Problems met while loading (folders that could not be created, a
+    /// damaged or unreadable `theme.json`), worded for the user.
     pub fn startup_issues(&self) -> &[String] {
         &self.issues
     }
