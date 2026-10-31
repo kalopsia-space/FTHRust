@@ -134,6 +134,10 @@ impl Shared {
 /// A payload waiting to be written: the packet's sequence number and bytes.
 type DiskJob = (u64, Arc<[u8]>);
 
+/// Most payload bytes queued for the writer when the ring has no byte
+/// budget of its own (with one, the budget, if smaller).
+pub const DISK_QUEUE_CAP: u64 = 256 << 20;
+
 /// The disk side of a disk-mode ring: a queue to its writer thread.
 #[derive(Debug)]
 struct DiskWriter {
@@ -142,31 +146,67 @@ struct DiskWriter {
     failed: Arc<AtomicBool>,
     queued: AtomicU64,
     done: Arc<AtomicU64>,
+    /// Payload bytes queued and not yet handled by the writer.
+    queued_bytes: Arc<AtomicU64>,
+    /// Past this many queued bytes new payloads stay in memory.
+    cap: u64,
+    behind_logged: AtomicBool,
 }
 
 impl DiskWriter {
-    fn spawn(shared: Arc<Shared>, store: SegmentStore) -> std::io::Result<Self> {
+    fn spawn(shared: Arc<Shared>, store: SegmentStore, cap: u64) -> std::io::Result<Self> {
         let (jobs, rx) = mpsc::channel::<DiskJob>();
         let failed = Arc::new(AtomicBool::new(false));
         let done = Arc::new(AtomicU64::new(0));
-        let (thread_failed, thread_done) = (failed.clone(), done.clone());
+        let queued_bytes = Arc::new(AtomicU64::new(0));
+        let counters = WriterCounters {
+            failed: failed.clone(),
+            done: done.clone(),
+            queued_bytes: queued_bytes.clone(),
+        };
         std::thread::Builder::new()
             .name("fthrust-replay-io".into())
-            .spawn(move || write_payloads(&shared, store, &rx, &thread_failed, &thread_done))?;
+            .spawn(move || write_payloads(&shared, store, &rx, &counters))?;
         Ok(Self {
             jobs,
             failed,
             queued: AtomicU64::new(0),
             done,
+            queued_bytes,
+            cap,
+            behind_logged: AtomicBool::new(false),
         })
     }
 
-    fn send(&self, job: DiskJob) {
+    /// Queues `job` unless that would put more than the cap in the queue:
+    /// while the disk is that far behind (a hung mount, a disk in error
+    /// recovery), new payloads stay in memory under the ring's own budget
+    /// instead of piling up for the writer.
+    fn queue(&self, job: DiskJob) {
+        let len = job.1.len() as u64;
+        if self.queued_bytes.load(Ordering::Acquire) + len > self.cap {
+            if !self.behind_logged.swap(true, Ordering::Relaxed) {
+                tracing::info!(
+                    queued_mib = self.cap >> 20,
+                    "disk replay buffer is behind; keeping new video in memory meanwhile"
+                );
+            }
+            return;
+        }
+        self.queued_bytes.fetch_add(len, Ordering::AcqRel);
         self.queued.fetch_add(1, Ordering::AcqRel);
         if self.jobs.send(job).is_err() {
+            self.queued_bytes.fetch_sub(len, Ordering::AcqRel);
             self.done.fetch_add(1, Ordering::AcqRel);
         }
     }
+}
+
+/// What the writer thread reports back.
+struct WriterCounters {
+    failed: Arc<AtomicBool>,
+    done: Arc<AtomicU64>,
+    queued_bytes: Arc<AtomicU64>,
 }
 
 /// The writer thread: stores each queued payload that the ring still holds
@@ -176,9 +216,13 @@ fn write_payloads(
     shared: &Shared,
     store: SegmentStore,
     jobs: &mpsc::Receiver<DiskJob>,
-    failed: &AtomicBool,
-    done: &AtomicU64,
+    counters: &WriterCounters,
 ) {
+    let WriterCounters {
+        failed,
+        done,
+        queued_bytes,
+    } = counters;
     let mut store = Some(store);
     for (seq, bytes) in jobs {
         let held = shared.lock().get_mut(seq).is_some();
@@ -202,6 +246,7 @@ fn write_payloads(
                 }
             }
         }
+        queued_bytes.fetch_sub(bytes.len() as u64, Ordering::AcqRel);
         done.fetch_add(1, Ordering::AcqRel);
     }
 }
@@ -231,8 +276,10 @@ impl EncodedRing {
 
     /// As [`EncodedRing::new`], but payloads move into `store`'s segment
     /// files on a writer thread and only packet metadata stays in memory. A
-    /// packet is in memory until the writer reaches it. If a write fails
-    /// the ring logs once and keeps payloads in memory from then on.
+    /// packet is in memory until the writer reaches it; while the writer is
+    /// more than the byte budget (or [`DISK_QUEUE_CAP`]) behind, new packets
+    /// stay in memory. If a write fails the ring logs once and keeps
+    /// payloads in memory from then on.
     pub fn new_on_disk(
         max_duration_ms: u64,
         fps: u32,
@@ -240,7 +287,12 @@ impl EncodedRing {
         store: SegmentStore,
     ) -> Self {
         let shared = Self::shared();
-        let disk = match DiskWriter::spawn(shared.clone(), store) {
+        let cap = if max_bytes == 0 {
+            DISK_QUEUE_CAP
+        } else {
+            max_bytes.min(DISK_QUEUE_CAP)
+        };
+        let disk = match DiskWriter::spawn(shared.clone(), store, cap) {
             Ok(w) => Some(w),
             Err(e) => {
                 tracing::info!(
@@ -326,7 +378,7 @@ impl EncodedRing {
             job
         };
         if let (Some(disk), Some(job)) = (&self.disk, job) {
-            disk.send(job);
+            disk.queue(job);
         }
         self.shared.published.notify_all();
     }
@@ -485,6 +537,15 @@ impl EncodedRing {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// Payload bytes queued for the disk writer and not yet handled (0 for
+    /// a memory ring).
+    #[doc(hidden)]
+    pub fn disk_queue_bytes(&self) -> u64 {
+        self.disk
+            .as_ref()
+            .map_or(0, |d| d.queued_bytes.load(Ordering::Acquire))
     }
 }
 

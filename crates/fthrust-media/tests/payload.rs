@@ -195,3 +195,37 @@ fn a_slow_disk_never_stalls_push() {
             .unwrap();
     }
 }
+
+#[test]
+fn a_stalled_disk_queues_no_more_than_the_budget() {
+    // While one write hangs (a hung network mount, a disk in error
+    // recovery), every later payload queued for the writer: about 0.75 GB a
+    // minute at 100 Mbps, past the ring's own byte budget. Now the queue
+    // stops at the budget and newer packets stay in memory, which the
+    // budget bounds.
+    let dir = tempfile::tempdir().unwrap();
+    let store = SegmentStore::new(dir.path().to_path_buf(), 1 << 20)
+        .unwrap()
+        .with_write_delay(Duration::from_millis(300));
+    let budget = 20_000;
+    let ring = EncodedRing::new_on_disk(10_000, 30, budget, store);
+    for f in 0..200 {
+        ring.push(packet(f, 30, 1000));
+    }
+    let queued = ring.disk_queue_bytes();
+    assert!(
+        queued <= budget,
+        "{queued} bytes queued behind a stalled disk with a {budget}-byte budget"
+    );
+    let snap = ring.snapshot(1_000, 0, 0).unwrap();
+    assert!(snap.packets.iter().all(|p| p.data.len() == 1000));
+    assert!(ring.wait_disk_writes(WRITES));
+    assert_eq!(ring.disk_queue_bytes(), 0);
+    let snap = ring.snapshot(1_000, 0, 0).unwrap();
+    assert!(
+        snap.packets
+            .iter()
+            .any(|p| matches!(p.data, Payload::Mem(_))),
+        "the packets that could not be queued stay in memory"
+    );
+}
