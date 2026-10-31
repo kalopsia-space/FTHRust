@@ -8,8 +8,10 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fthrust_core::library_index::{LibraryRecord, ScanRoots, scan, watched_dirs};
+use fthrust_core::clip_files::is_partial_name;
+use fthrust_core::library_index::{LibraryRecord, ScanRoots, is_media_name, scan_with_dirs};
 use notify::Watcher;
+use notify::event::{CreateKind, ModifyKind, RemoveKind};
 
 /// Why a scan ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,6 +205,35 @@ impl Emit {
     }
 }
 
+/// Whether a filesystem event can change what a scan lists. A recording
+/// grows its `.partial` file for as long as it runs, and the engine writes
+/// sidecars next to the clips; neither is something the library shows, and
+/// a scan for each write would walk the whole tree during a game.
+pub fn watcher_event_matters(ev: &notify::Event) -> bool {
+    let changed = matches!(
+        ev.kind,
+        notify::EventKind::Create(_) | notify::EventKind::Remove(_) | notify::EventKind::Modify(_)
+    );
+    if !changed {
+        return false;
+    }
+    // A new or removed folder is a game that appears or goes; a rename can
+    // be a file taking its final name or a move into or out of the tree.
+    let structural = matches!(
+        ev.kind,
+        notify::EventKind::Create(CreateKind::Folder)
+            | notify::EventKind::Remove(RemoveKind::Folder)
+            | notify::EventKind::Modify(ModifyKind::Name(_))
+    );
+    ev.paths.is_empty()
+        || ev.paths.iter().any(|p| {
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                return true;
+            };
+            !is_partial_name(name) && (structural || is_media_name(name))
+        })
+}
+
 fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sender<()>) {
     let watcher_flag = Arc::new(AtomicBool::new(false));
     let flag = watcher_flag.clone();
@@ -210,13 +241,7 @@ fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sen
         // inotify reports our own directory listings as `Access(Open)`;
         // only real changes count, or every scan would trigger the next.
         let Ok(ev) = res else { return };
-        let changed = matches!(
-            ev.kind,
-            notify::EventKind::Create(_)
-                | notify::EventKind::Remove(_)
-                | notify::EventKind::Modify(_)
-        );
-        if changed {
+        if watcher_event_matters(&ev) {
             flag.store(true, Ordering::Relaxed);
             let _ = watch_wake.send(());
         }
@@ -277,7 +302,7 @@ fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sen
             .unwrap_or_else(|e| e.into_inner().clone());
         let started = Instant::now();
         let mut first = true;
-        let result = scan(&roots, &cancel, |batch| {
+        let result = scan_with_dirs(&roots, &cancel, |batch| {
             if first {
                 first = false;
                 events.send(ScanEvent::Batch {
@@ -290,8 +315,7 @@ fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sen
             continue;
         }
         match result {
-            Ok(records) => {
-                let dirs = watched_dirs(&roots);
+            Ok((records, dirs)) => {
                 if let Some(w) = watcher.as_mut() {
                     for old in watched.iter().filter(|d| !dirs.contains(d)) {
                         let _ = w.unwatch(old);

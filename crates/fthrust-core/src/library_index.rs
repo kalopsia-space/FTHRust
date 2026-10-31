@@ -80,6 +80,12 @@ pub enum Sort {
     Longest,
 }
 
+/// Whether a file called `name` is a finished video or image the library
+/// lists (a partial file is not).
+pub fn is_media_name(name: &str) -> bool {
+    kind_of(name).is_some()
+}
+
 fn kind_of(name: &str) -> Option<MediaKind> {
     if is_partial_name(name) {
         return None;
@@ -98,6 +104,10 @@ enum Event<'a> {
     Dir(&'a Path),
     File {
         root_id: usize,
+        /// The root being walked, as given.
+        root: &'a Path,
+        /// Its canonical path.
+        canon: &'a Path,
         path: &'a Path,
         meta: &'a std::fs::Metadata,
         kind: MediaKind,
@@ -126,7 +136,7 @@ fn effective_roots(roots: &ScanRoots) -> Vec<(usize, &Path, PathBuf)> {
 /// Depth-first walk of every root without following symlinks. `visit`
 /// returns `false` to stop the whole walk.
 fn walk(roots: &ScanRoots, visit: &mut dyn FnMut(Event<'_>) -> bool) {
-    for (root_id, root, _) in effective_roots(roots) {
+    for (root_id, root, canon) in effective_roots(roots) {
         if !root.is_dir() {
             continue;
         }
@@ -158,6 +168,8 @@ fn walk(roots: &ScanRoots, visit: &mut dyn FnMut(Event<'_>) -> bool) {
                     && let Some(kind) = kind_of(&name)
                     && !visit(Event::File {
                         root_id,
+                        root,
+                        canon: &canon,
                         path: &path,
                         meta: &meta,
                         kind,
@@ -183,7 +195,28 @@ fn mtime_ns(meta: &std::fs::Metadata) -> i128 {
 pub fn scan(
     roots: &ScanRoots,
     cancel: &AtomicBool,
+    on_batch: impl FnMut(Vec<LibraryRecord>),
+) -> Result<Vec<LibraryRecord>> {
+    scan_walk(roots, cancel, on_batch, None)
+}
+
+/// [`scan`], also returning the directories the walk visited: the list
+/// [`watched_dirs`] gives, from the same walk instead of a second one.
+pub fn scan_with_dirs(
+    roots: &ScanRoots,
+    cancel: &AtomicBool,
+    on_batch: impl FnMut(Vec<LibraryRecord>),
+) -> Result<(Vec<LibraryRecord>, Vec<PathBuf>)> {
+    let mut dirs = Vec::new();
+    let records = scan_walk(roots, cancel, on_batch, Some(&mut dirs))?;
+    Ok((records, dirs))
+}
+
+fn scan_walk(
+    roots: &ScanRoots,
+    cancel: &AtomicBool,
     mut on_batch: impl FnMut(Vec<LibraryRecord>),
+    mut dirs: Option<&mut Vec<PathBuf>>,
 ) -> Result<Vec<LibraryRecord>> {
     let imported_canon: Vec<PathBuf> = effective_roots(roots)
         .into_iter()
@@ -199,18 +232,32 @@ pub fn scan(
         if cancelled() {
             return false;
         }
-        let Event::File {
-            root_id,
-            path,
-            meta,
-            kind,
-        } = ev
-        else {
+        let (root_id, root, canon, path, meta, kind) = match ev {
+            Event::File {
+                root_id,
+                root,
+                canon,
+                path,
+                meta,
+                kind,
+            } => (root_id, root, canon, path, meta, kind),
+            Event::Dir(d) => {
+                if let Some(dirs) = dirs.as_deref_mut()
+                    && dirs.len() < DEFAULT_MAX_WATCHED_DIRECTORIES
+                    && !dirs.iter().any(|x| x == d)
+                {
+                    dirs.push(d.to_path_buf());
+                }
+                return true;
+            }
+        };
+        // The walk follows no symlink below a root, so a file's canonical
+        // path is its root's canonical path plus where it sits below the
+        // root: no file system call per file.
+        let Ok(below) = path.strip_prefix(root) else {
             return true;
         };
-        let Ok(identity) = std::fs::canonicalize(path) else {
-            return true;
-        };
+        let identity = canon.join(below);
         if let Some(&i) = index.get(&identity) {
             let rec = &mut records[i];
             if let Err(pos) = rec.root_ids.binary_search(&root_id) {

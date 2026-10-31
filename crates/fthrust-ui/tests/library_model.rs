@@ -339,6 +339,116 @@ fn scan_service_does_not_rescan_without_changes() {
 }
 
 #[test]
+fn scan_service_does_not_rescan_while_a_recording_is_written() {
+    use std::io::Write;
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("clips");
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    std::fs::write(root.join("Desktop/a.mp4"), b"x").unwrap();
+    let svc = ScanService::start(root.clone(), vec![]);
+    svc.request(ScanKind::Foreground);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut first = false;
+    while std::time::Instant::now() < deadline && !first {
+        first = matches!(
+            svc.events().recv_timeout(Duration::from_millis(100)),
+            Ok(ScanEvent::Done { .. })
+        );
+    }
+    assert!(first, "the first scan");
+    // A recording grows its `.partial` file for as long as it runs; writes a
+    // bit more than the debounce apart used to start a scan each.
+    let partial = root.join("Desktop/FTHR_recording_x.mp4.partial");
+    let mut file = std::fs::File::create(&partial).unwrap();
+    for _ in 0..6 {
+        file.write_all(&[7u8; 4096]).unwrap();
+        file.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let mut scans = 0;
+    let quiet_until = std::time::Instant::now() + Duration::from_millis(600);
+    while std::time::Instant::now() < quiet_until {
+        if let Ok(ScanEvent::Done { .. }) = svc.events().recv_timeout(Duration::from_millis(50)) {
+            scans += 1;
+        }
+    }
+    assert_eq!(scans, 0, "no scan for a file the library does not list");
+    // The recording ends: the file gets its name and appears.
+    drop(file);
+    std::fs::rename(&partial, root.join("Desktop/FTHR_recording_x.mp4")).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut seen = 0;
+    while std::time::Instant::now() < deadline && seen < 2 {
+        if let Ok(ScanEvent::Done { records, .. }) =
+            svc.events().recv_timeout(Duration::from_millis(100))
+        {
+            seen = records.len();
+        }
+    }
+    assert_eq!(seen, 2, "the finished recording is listed");
+    svc.stop();
+}
+
+#[test]
+fn watcher_events_that_cannot_change_the_listing_are_ignored() {
+    use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+    use notify::{Event, EventKind};
+    use fthrust_ui::library::scan::watcher_event_matters;
+    let at = |kind: EventKind, path: &str| Event::new(kind).add_path(PathBuf::from(path));
+    let data = EventKind::Modify(ModifyKind::Data(DataChange::Any));
+    assert!(
+        !watcher_event_matters(&at(data, "/c/Desktop/rec.mp4.partial")),
+        "a partial file's data"
+    );
+    assert!(
+        !watcher_event_matters(&at(
+            EventKind::Create(CreateKind::File),
+            "/c/Desktop/.rec.partial.mp4"
+        )),
+        "a partial file appearing"
+    );
+    assert!(
+        !watcher_event_matters(&at(data, "/c/Desktop/a.fthr-audio.json")),
+        "a sidecar is not media"
+    );
+    assert!(watcher_event_matters(&at(data, "/c/Desktop/a.mp4")));
+    assert!(watcher_event_matters(&at(
+        EventKind::Create(CreateKind::File),
+        "/c/Desktop/s.png"
+    )));
+    assert!(watcher_event_matters(&at(
+        EventKind::Remove(RemoveKind::File),
+        "/c/Desktop/a.mp4"
+    )));
+    assert!(
+        watcher_event_matters(&at(
+            EventKind::Create(CreateKind::Folder),
+            "/c/Half-Life 2.5"
+        )),
+        "a new game folder"
+    );
+    assert!(watcher_event_matters(&at(
+        EventKind::Remove(RemoveKind::Folder),
+        "/c/Game"
+    )));
+    assert!(
+        watcher_event_matters(&at(
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            "/c/Desktop/rec.mp4"
+        )),
+        "the recording's final name"
+    );
+    let moved = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+        .add_path(PathBuf::from("/c/Desktop/rec.mp4.partial"))
+        .add_path(PathBuf::from("/c/Desktop/rec.mp4"));
+    assert!(watcher_event_matters(&moved), "any path that matters counts");
+    assert!(
+        watcher_event_matters(&Event::new(data)),
+        "an event without a path is not worth the risk"
+    );
+}
+
+#[test]
 fn forwarder_replaces_the_direct_channel() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().join("clips");
