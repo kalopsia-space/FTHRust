@@ -354,8 +354,12 @@ const CHUNK: usize = 256 * 1024;
 
 /// How far an upload's body has got, for the stall watchdog.
 struct Progress {
-    /// When hyper last took a piece of the body (when the request began, until it does).
-    last: tokio::time::Instant,
+    /// When hyper last took a piece of the body; `None` until it takes the
+    /// first one, which is when the watchdog starts: while the connection is
+    /// still being made nothing has gone out to stall, and a connection that
+    /// never comes up is the connect timeout's to report ("could not
+    /// reach"), not a stalled upload.
+    last: Option<tokio::time::Instant>,
     /// The last piece has been taken: the server's answer is next.
     finished: bool,
 }
@@ -367,7 +371,7 @@ struct Watch(Arc<Mutex<Progress>>);
 impl Watch {
     fn new() -> Watch {
         Watch(Arc::new(Mutex::new(Progress {
-            last: tokio::time::Instant::now(),
+            last: None,
             finished: false,
         })))
     }
@@ -378,13 +382,13 @@ impl Watch {
 
     /// A piece of the body was taken.
     fn moved(&self) {
-        self.state().last = tokio::time::Instant::now();
+        self.state().last = Some(tokio::time::Instant::now());
     }
 
     /// The last piece of the body is being taken.
     fn finish(&self) {
         let mut p = self.state();
-        p.last = tokio::time::Instant::now();
+        p.last = Some(tokio::time::Instant::now());
         p.finished = true;
     }
 }
@@ -399,6 +403,8 @@ enum Quiet {
 
 /// `request.send()`, given up on when the body has not moved for `limit`
 /// (or, once it is all out, when the server has not answered for `limit`).
+/// The watchdog starts with the first piece of the body taken; before that
+/// the connect timeout is in charge.
 ///
 /// reqwest's own read timeout cannot do this: it is one timer from the start
 /// of the request until the response headers, and body progress never resets
@@ -412,12 +418,19 @@ async fn send_watched(
     let send = request.send();
     tokio::pin!(send);
     loop {
-        let due = watch.state().last + limit;
+        // Not started: look again after the longest the connect timeout
+        // allows (nothing wakes this loop when the first piece is taken).
+        let due = watch
+            .state()
+            .last
+            .map_or_else(|| tokio::time::Instant::now() + limit, |last| last + limit);
         tokio::select! {
             sent = &mut send => return Ok(sent),
             () = tokio::time::sleep_until(due) => {
                 let p = watch.state();
-                if p.last + limit <= tokio::time::Instant::now() {
+                if let Some(last) = p.last
+                    && last + limit <= tokio::time::Instant::now()
+                {
                     return Err(if p.finished { Quiet::Answering } else { Quiet::Sending });
                 }
             }

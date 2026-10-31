@@ -1373,4 +1373,28 @@ mod stalls {
             );
         }
     }
+
+    /// Nothing goes out while the connection is still being made, and a
+    /// connection that never comes up is the connect timeout's to report,
+    /// as it always was, not a stalled upload.
+    #[tokio::test]
+    async fn a_connection_that_never_comes_up_is_a_connect_timeout() {
+        // https:// to a server that takes the TLS hello and never answers.
+        let (url, _) = serve(Mode::NeverAnswers);
+        let url = url.replacen("http://", "https://", 1);
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
+        let mut env = h.env("x");
+        env.io_timeout = Duration::from_millis(500);
+        env.retry_delays = Vec::new();
+        let (ok, msg, _) = tokio::time::timeout(Duration::from_secs(20), h.upload(&env))
+            .await
+            .expect("the upload hung");
+        assert_eq!(
+            (ok, msg.as_str()),
+            (
+                false,
+                "Could not reach your server: the connection timed out."
+            )
+        );
+    }
 }
