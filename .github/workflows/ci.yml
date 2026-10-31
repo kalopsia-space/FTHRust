@@ -1,53 +1,128 @@
 name: ci
 on:
+  # Pull requests and main only: a push to a pull request's branch used to run
+  # twice (push and pull_request), and a tag push ran this next to the release
+  # workflow. The release workflow calls this one for its tag instead.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
+# A newer push to the same branch or pull request makes the running one stale.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # The FFmpeg the AppImage ships (packaging/ffmpeg_manifest_linux.json),
+      # not Ubuntu's 6.1, so tests and release see the same libraries.
+      # LD_LIBRARY_PATH is set on the test step only.
+      FFMPEG_LIB: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib
+      PKG_CONFIG_PATH: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib/pkgconfig
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # The test binaries' link step ran out of disk (ld: Bus error).
       - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
-      - run: sudo apt-get update && sudo apt-get install -y pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev clang libwayland-dev mesa-vulkan-drivers libxkbcommon-dev fonts-noto-mono fonts-dejavu-core fonts-noto-cjk
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev clang libwayland-dev mesa-vulkan-drivers libxkbcommon-dev fonts-noto-mono fonts-dejavu-core fonts-noto-cjk patchelf jq
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
         with:
           components: clippy, rustfmt
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo build -p fthrust-engine
-      - run: cargo test --workspace
-        env:
-          WGPU_BACKEND: vulkan
-      - run: cargo install cargo-deny --locked
-      - run: cargo deny check
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # A new FFmpeg pin must rebuild ffmpeg-sys-next (its path is the same).
+          key: ffmpeg-${{ hashFiles('packaging/ffmpeg_manifest_linux.json') }}
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Read the pinned cargo-about version
+        id: about
+        run: echo "version=$(sed -n 's/^CARGO_ABOUT_VERSION=//p' tools/gen-notices.sh)" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-deny@0.20,cargo-about@${{ steps.about.outputs.version }}
+      # The quick checks first: they fail in seconds, before the long builds.
+      - run: cargo fmt --all --check
+      - run: cargo deny --locked check
       - run: tools/check-upload-isolation.sh
       - run: tools/check-assets.sh
       - run: tools/check-version.sh
-      - run: cargo install cargo-about --locked --features cli --version "$(sed -n 's/^CARGO_ABOUT_VERSION=//p' tools/gen-notices.sh)"
+      - name: No bytecode or build output is tracked
+        run: |
+          tracked="$(git ls-files | grep -E '(^|/)__pycache__/|\.pyc$|(^|/)target/' || true)"
+          if [ -n "$tracked" ]; then
+            echo "tracked files that .gitignore covers:" >&2
+            echo "$tracked" >&2
+            exit 1
+          fi
+      - run: packaging/fetch-third-party.sh --ffmpeg
       - run: tools/gen-notices.sh --check
-      - run: sudo apt-get install -y patchelf jq && tools/test-packaging.sh
+      - run: tools/test-packaging.sh
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo build --locked -p fthrust-engine
+      - run: cargo test --locked --workspace
+        env:
+          WGPU_BACKEND: vulkan
+          LD_LIBRARY_PATH: ${{ env.FFMPEG_LIB }}
+
+  # The bench's own crate and launcher, which the scenarios below depend on.
+  uidrive-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev cage grim dbus
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: tools/uidrive
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: tools/uidrive/bench-unit.sh
+      - run: cd tools/uidrive && cargo fmt --check
+      - run: cd tools/uidrive && cargo clippy --locked --all-targets -- -D warnings
+      # The live test drives its own headless cage on a private socket.
+      - run: cd tools/uidrive && cargo test --locked
+        env:
+          UIDRIVE_LIVE: "1"
 
   uidrive:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PKG_CONFIG_PATH: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib/pkgconfig
+      # bench.sh starts the app with `env -i`; this puts the pinned FFmpeg
+      # back on the app's library path.
+      BENCH_EXTRA_ENV: LD_LIBRARY_PATH=${{ github.workspace }}/packaging/.cache/ffmpeg/lib
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev clang libwayland-dev mesa-vulkan-drivers libxkbcommon-dev cage grim dbus fonts-noto-mono fonts-dejavu-core fonts-noto-cjk
-      - uses: dtolnay/rust-toolchain@1.98.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libpipewire-0.3-dev libspa-0.2-dev libclang-dev clang libwayland-dev mesa-vulkan-drivers libxkbcommon-dev cage grim dbus jq fonts-noto-mono fonts-dejavu-core fonts-noto-cjk
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ffmpeg-${{ hashFiles('packaging/ffmpeg_manifest_linux.json') }}
+          workspaces: |
+            .
+            tools/uidrive
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: packaging/fetch-third-party.sh --ffmpeg
       # Release: a debug UI rasterised by llvmpipe on the runner's few cores
       # takes seconds per frame on first page visits and misses the
       # scenarios' 5 s waits.
-      - run: cargo build --release -p fthrust-ui -p fthrust-engine -p fthrust-uploader
-      - run: cd tools/uidrive && cargo build
+      - run: cargo build --locked --release -p fthrust-ui -p fthrust-engine -p fthrust-uploader
+      - run: cd tools/uidrive && cargo build --locked
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/save_clip.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/export.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/overlays.sh --release --renderer pixman --settings tools/uidrive/overlays-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/upload.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: uidrive-bench
