@@ -48,6 +48,22 @@ fn readiness_knows_whether_any_clip_is_blocked() {
 }
 
 #[test]
+fn readiness_counts_the_questions_that_touch_the_file_system() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("clip.mp4");
+    std::fs::write(&clip, b"base").unwrap();
+    let mut r = ClipReadinessRegistry::new();
+    assert_eq!(r.state_lookups(), 0);
+    assert!(!r.has_blocked());
+    r.engine_committed(&clip, false);
+    assert_eq!(r.state_lookups(), 0, "neither of those asks");
+    assert!(r.can_access(&clip));
+    assert_eq!(r.state(&clip), ReadinessState::Ready);
+    assert_eq!(r.state_lookups(), 2);
+    assert_eq!(r.clone().state_lookups(), 2, "a clone starts from the count");
+}
+
+#[test]
 fn readiness_finalizing_then_warning_is_ready_with_warning() {
     let d = tempfile::tempdir().unwrap();
     let clip = d.path().join("clip.mp4");

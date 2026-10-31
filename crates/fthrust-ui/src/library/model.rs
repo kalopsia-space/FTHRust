@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fthrust_core::clip_readiness::ClipReadinessRegistry;
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort, apply};
@@ -74,6 +75,17 @@ pub fn title_from_path(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// A count the library can be asked for (diagnostics and tests); cloning
+/// copies the value.
+#[derive(Debug, Default)]
+struct Tally(AtomicU64);
+
+impl Clone for Tally {
+    fn clone(&self) -> Tally {
+        Tally(AtomicU64::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
 /// One day section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
@@ -105,6 +117,8 @@ pub struct Library {
     pub records: Vec<LibraryRecord>,
     /// Position of each record by path, rebuilt with the sections.
     index: HashMap<PathBuf, usize>,
+    /// Lookups the index could not answer (see [`Library::record`]).
+    slow_lookups: Tally,
     /// Current filter.
     pub filter: Filter,
     /// Current sort.
@@ -135,6 +149,7 @@ impl Library {
             clips_root,
             records: Vec::new(),
             index: HashMap::new(),
+            slow_lookups: Tally::default(),
             filter: Filter::All,
             sort: Sort::Newest,
             sections: Vec::new(),
@@ -153,7 +168,17 @@ impl Library {
             .filter(|r| r.path == path)
             // The index is as old as the last rebuild: after an upsert or a
             // removal the lookup falls back to the slow, always right way.
-            .or_else(|| self.records.iter().find(|r| r.path == path))
+            .or_else(|| {
+                self.slow_lookups.0.fetch_add(1, Ordering::Relaxed);
+                self.records.iter().find(|r| r.path == path)
+            })
+    }
+
+    /// How many [`Library::record`] lookups missed the index and scanned the
+    /// records (a page that does this per card and frame scales with the
+    /// library).
+    pub fn slow_lookups(&self) -> u64 {
+        self.slow_lookups.0.load(Ordering::Relaxed)
     }
 
     /// Rebuilds the sections for the current filter and sort.

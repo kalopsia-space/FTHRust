@@ -156,37 +156,89 @@ fn only_visible_rows_request_thumbnails() {
     );
 }
 
-/// The fastest of ten settled frames with `n` records.
-fn settled_frame_time(n: usize) -> std::time::Duration {
+/// What a Clips page over `n` records did in `FRAMES` settled frames.
+struct Settled {
+    /// Texts egui had laid out after the last frame (it keeps only what that
+    /// frame used).
+    galleys: usize,
+    /// Cards built in the last frame.
+    built: usize,
+    /// Questions the readiness registry was asked (each canonicalises and
+    /// stats a file).
+    state_lookups: u64,
+    /// Record lookups that fell back to scanning the library.
+    slow_lookups: u64,
+}
+
+const FRAMES: usize = 10;
+
+fn settled_page(n: usize, finalizing_clip: bool) -> Settled {
     let (tmp, mut s) = state(serde_json::json!({}));
     s.library.records = synthetic_records(&tmp.path().join("clips"), n);
     s.library_dirty = true;
+    if finalizing_clip {
+        // A clip the engine has just saved and is still finalizing.
+        let newest = s.library.records[0].path.clone();
+        s.readiness.engine_committed(&newest, true);
+    }
     let tokens = s.tokens.clone();
+    let counts = std::rc::Rc::new(std::cell::Cell::new((0u64, 0u64, 0usize)));
+    let probe = counts.clone();
     let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
         shell::frame(ui, &mut s);
+        probe.set((
+            s.readiness.state_lookups(),
+            s.library.slow_lookups(),
+            s.visible_cards.len(),
+        ));
     });
     h.run_steps(4);
-    (0..10)
-        .map(|_| {
-            let started = Instant::now();
-            h.step();
-            started.elapsed()
-        })
-        .min()
-        .unwrap()
+    let (lookups_before, slow_before, _) = counts.get();
+    h.run_steps(FRAMES);
+    let (lookups_after, slow_after, built) = counts.get();
+    Settled {
+        galleys: h.ctx.fonts(|f| f.num_galleys_in_cache()),
+        built,
+        state_lookups: lookups_after - lookups_before,
+        slow_lookups: slow_after - slow_before,
+    }
 }
 
 #[test]
-fn a_frame_costs_about_the_same_in_a_big_library_as_in_a_small_one() {
-    let small = settled_frame_time(300);
-    let large = settled_frame_time(12_000);
-    eprintln!("frame with 300 records: {small:?}, with 12000: {large:?}");
-    // The same 15 or so cards are built either way; only work proportional to
-    // the library (cloning every section, scanning every record for each
-    // card, laying out every day's header) tells the two apart.
+fn a_frame_does_no_work_that_grows_with_the_library() {
+    let small = settled_page(300, false);
+    let large = settled_page(12_000, false);
+    // The same cards are built either way.
+    assert!(small.built > 0 && large.built > 0);
+    // Nothing is finalizing, so no card asks the file system about its clip.
+    assert_eq!(small.state_lookups, 0);
+    assert_eq!(large.state_lookups, 0, "a readiness check per card and frame");
+    // Every card's record comes from the path index.
+    assert_eq!(small.slow_lookups, 0);
+    assert_eq!(
+        large.slow_lookups, 0,
+        "a scan of the records per card and frame"
+    );
+    // Text is laid out for the headers and cards that are built, not for the
+    // 500 days of the large library (each day's label is a text of its own).
     assert!(
-        large < small * 3 + std::time::Duration::from_millis(4),
-        "a frame took {large:?} with 12000 records and {small:?} with 300"
+        large.galleys <= small.galleys + 20,
+        "{} texts laid out with 12000 records, {} with 300",
+        large.galleys,
+        small.galleys
+    );
+}
+
+#[test]
+fn while_a_clip_is_finalizing_the_cards_ask_for_their_readiness() {
+    // The shortcut above must not hide a clip that is not ready.
+    let page = settled_page(12_000, true);
+    assert!(page.state_lookups > 0, "nothing asked about the clip");
+    assert!(
+        page.state_lookups <= (page.built * FRAMES) as u64,
+        "{} questions for {} cards over {FRAMES} frames: more than one per card and frame",
+        page.state_lookups,
+        page.built
     );
 }
 
