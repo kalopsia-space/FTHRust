@@ -1,4 +1,21 @@
-use fthrust_portal::stream::{FrameLayout, choose_pts, copy_rows, monotonic, next_timestamp};
+use fthrust_portal::stream::{
+    FrameLayout, StreamError, choose_pts, copy_rows, monotonic, next_timestamp,
+};
+
+#[test]
+fn only_a_format_timeout_means_a_stale_restored_session() {
+    // A stream that never settles a format is what a stale restore token
+    // gives; a PipeWire error from a broken connection says nothing about
+    // the token and must not cost it (nor bring up the picker).
+    assert!(StreamError::FormatTimeout.negotiation_timed_out());
+    for e in [
+        StreamError::PipeWire("PipeWire stream error: connection lost".into()),
+        StreamError::PipeWire("connect_fd: Broken pipe".into()),
+        StreamError::Cancelled,
+    ] {
+        assert!(!e.negotiation_timed_out(), "{e}");
+    }
+}
 use fthrust_wayland::frame::{BgraFrame, PixelLayout};
 
 #[test]

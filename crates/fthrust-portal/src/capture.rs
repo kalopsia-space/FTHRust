@@ -24,10 +24,11 @@ pub struct PortalCapture {
 impl PortalCapture {
     /// Runs the portal flow (the user's dialog unless the saved token
     /// restores the last choice) on the portal runtime and connects the
-    /// stream. A restored session whose stream does not negotiate is
+    /// stream. A restored session whose stream never settles a format is
     /// closed, its token is forgotten and the flow runs once more without
     /// it. Nothing else is retried and nothing else forgets the token: a
-    /// missing or silent portal leaves it for the next start.
+    /// missing or silent portal, or a PipeWire error, leaves it for the
+    /// next start.
     pub fn open(
         paths: &FthrPaths,
         fps: u32,
@@ -57,7 +58,7 @@ impl PortalCapture {
                 Err(e) => {
                     let restored = session.restored();
                     session.close_blocking();
-                    if e.is_negotiation() && should_retry_startup(attempt, restored) {
+                    if e.negotiation_timed_out() && should_retry_startup(attempt, restored) {
                         tracing::warn!(
                             "the restored portal session did not negotiate ({e}); retrying without its restore token"
                         );

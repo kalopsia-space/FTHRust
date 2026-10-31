@@ -120,12 +120,9 @@ pub const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 /// Why the stream could not be connected.
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
-    /// libpipewire could not set the stream up.
+    /// libpipewire failed.
     #[error("pipewire: {0}")]
     PipeWire(String),
-    /// The stream connected but failed before it settled a format.
-    #[error("pipewire: {0}")]
-    Negotiation(String),
     /// No format within [`FORMAT_DEADLINE`].
     #[error("the screen stream did not settle a format in time")]
     FormatTimeout,
@@ -135,13 +132,11 @@ pub enum StreamError {
 }
 
 impl StreamError {
-    /// Whether the stream connected and then failed to negotiate (what a
-    /// stale restored session does), as opposed to PipeWire itself failing.
-    pub fn is_negotiation(&self) -> bool {
-        matches!(
-            self,
-            StreamError::Negotiation(_) | StreamError::FormatTimeout
-        )
+    /// Whether the stream connected but never settled a format, which is
+    /// what a stale restored session gives. A PipeWire error (a broken
+    /// connection, a stream error) says nothing about the restore token.
+    pub fn negotiation_timed_out(&self) -> bool {
+        matches!(self, StreamError::FormatTimeout)
     }
 }
 
@@ -331,7 +326,7 @@ impl PipeWireVideoStream {
             {
                 let shared = this.slot.shared.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(e) = &shared.error {
-                    return Err(StreamError::Negotiation(e.clone()));
+                    return Err(StreamError::PipeWire(e.clone()));
                 }
                 if let Some(layout) = shared.layout {
                     this.native = (layout.width, layout.height);
