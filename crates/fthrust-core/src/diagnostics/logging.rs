@@ -29,24 +29,25 @@ use crate::paths::FthrPaths;
 const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
-/// The local UTC offset, read once. The `time` crate refuses to read it once
-/// a second thread exists (reading the time zone is not thread-safe on Linux),
-/// so asking per line would give local time for the first line and UTC for
-/// the rest; the first call decides for the whole log. That is
-/// [`init_local_offset`] when the process made it first thing, and otherwise
-/// the log's start banner, by which time other threads usually exist and the
-/// answer is UTC. A change of offset during the run (daylight saving time) is
-/// not followed.
+/// The local UTC offset, read once and then fixed for the run: every line of
+/// the log, the start banner included, is stamped with the same offset, so a
+/// change of offset in a long session (daylight saving time) is not followed.
+/// Unreadable gives UTC.
 fn local_offset() -> UtcOffset {
     static OFFSET: OnceLock<UtcOffset> = OnceLock::new();
     *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
 }
 
-/// Reads the local UTC offset for the log's timestamps. Call it as the first
-/// thing `main` does: the `time` crate can only read the offset while the
-/// process has a single thread, and `init_logging` runs after the single
-/// instance check has started its activation thread, when it no longer can
-/// (the log would then be in UTC).
+/// Reads the local UTC offset the log's timestamps use. `main` calls it as its
+/// first statement, while the process has a single thread. That is a
+/// precaution, not a fix for wrong times: the locked `time` (0.3.55) reads the
+/// offset with other threads running too, and only its explicit `refresh_tz`
+/// checks the thread count. But the C library reads the `TZ` environment
+/// variable the first time it is asked, `time`'s documentation requires that
+/// nothing else is changing the environment at that moment, and a single
+/// thread is the one place that is certain; a `time` that refuses the read
+/// once threads exist would also fall back to UTC without it. Without the call
+/// the first log line reads the offset.
 pub fn init_local_offset() {
     let _ = local_offset();
 }
@@ -368,9 +369,9 @@ impl Drop for LogGuard {
 /// else [`DEFAULT_LOG_FILTER`]. Records from the `log` crate (wgpu, winit...)
 /// are forwarded too. Fails if a global subscriber is already installed.
 ///
-/// The log's timestamps use the local offset read by [`init_local_offset`]
-/// (call that first thing in `main`, while there is a single thread); without
-/// it they are UTC once other threads exist.
+/// The log's timestamps are in local time, with the UTC offset read once
+/// ([`init_local_offset`], which `main` calls first thing; without that call,
+/// the first line reads it).
 pub fn init_logging(paths: &FthrPaths, app_version: &str) -> Result<LogGuard> {
     let logger = Logger::open(paths, app_version)?;
     logger
