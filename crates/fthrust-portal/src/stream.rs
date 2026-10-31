@@ -110,15 +110,29 @@ pub const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 /// Why the stream could not be connected.
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
-    /// libpipewire failed.
+    /// libpipewire could not set the stream up.
     #[error("pipewire: {0}")]
     PipeWire(String),
+    /// The stream connected but failed before it settled a format.
+    #[error("pipewire: {0}")]
+    Negotiation(String),
     /// No format within [`FORMAT_DEADLINE`].
     #[error("the screen stream did not settle a format in time")]
     FormatTimeout,
     /// The cancel flag was set.
     #[error("capture cancelled")]
     Cancelled,
+}
+
+impl StreamError {
+    /// Whether the stream connected and then failed to negotiate (what a
+    /// stale restored session does), as opposed to PipeWire itself failing.
+    pub fn is_negotiation(&self) -> bool {
+        matches!(
+            self,
+            StreamError::Negotiation(_) | StreamError::FormatTimeout
+        )
+    }
 }
 
 #[derive(Default)]
@@ -242,7 +256,7 @@ impl PipeWireVideoStream {
             {
                 let shared = this.slot.shared.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(e) = &shared.error {
-                    return Err(StreamError::PipeWire(e.clone()));
+                    return Err(StreamError::Negotiation(e.clone()));
                 }
                 if let Some(layout) = shared.layout {
                     this.native = (layout.width, layout.height);
