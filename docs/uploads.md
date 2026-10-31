@@ -82,7 +82,7 @@ Files are uploaded as `fthr-<random>.mp4` under a temporary name, renamed when c
 - **Upload immediately after capture**: every saved clip is uploaded.
 - **Upload on an interval**: new clips are collected and sent every few minutes, hours or days. Files changed in the last 30 seconds are left for the next round.
 
-**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link. If no link comes back, your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead.
+**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link FTHRust can use: an `http://` or `https://` address, or an SFTP location. If no link comes back, or the reply is something else (a word such as `queued`, a `file:` address, several lines of text), your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead.
 
 ## Getting the link
 

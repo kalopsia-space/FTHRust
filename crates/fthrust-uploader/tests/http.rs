@@ -668,6 +668,52 @@ async fn auto_delete_failure_still_succeeds() {
     );
 }
 
+/// Auto-delete needs a link the card could offer: whatever else a server
+/// puts in its reply, "the server said something" is not a confirmation.
+#[tokio::test]
+async fn only_a_real_link_allows_auto_delete() {
+    for (body, what) in [
+        (r#"{"url": "queued"}"#, "a word"),
+        (r#"{"url": "file:///etc/hostname"}"#, "a file URL"),
+        (r#"{"url": "ftp://files.example/a.mp4"}"#, "an ftp URL"),
+        (
+            r#"{"url": "sftp://files.example"}"#,
+            "an sftp URL without a path",
+        ),
+        (r#"{"url": "https://cdn.example/a b"}"#, "a space"),
+        (
+            r#"{"url": "https://cdn.example/a\nhttps://cdn.example/b"}"#,
+            "two lines in JSON",
+        ),
+        (
+            "https://cdn.example/a\nand some words",
+            "plain text, two lines",
+        ),
+    ] {
+        let srv = server(vec![(200, body)]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+        }));
+        let real = h.real_clip();
+        let r = h.respond(&h.env("x")).await;
+        assert!(r.ok, "{what}: {}", r.message);
+        assert!(real.exists(), "{what}: the clip was deleted");
+        assert_eq!(r.message, NO_LINK, "{what}");
+        assert!(h.history().is_uploaded(&real), "{what}: not recorded");
+    }
+    // Real links still delete (the SFTP ones are tested with the SFTP server).
+    for url in ["https://cdn.example/a", "http://192.168.1.5:8080/f/a.mp4"] {
+        let srv = server(vec![(200, url)]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+        }));
+        let real = h.real_clip();
+        let r = h.respond(&h.env("x")).await;
+        assert_eq!((r.ok, r.message.as_str()), (true, url));
+        assert!(!real.exists(), "{url}: the clip was kept");
+    }
+}
+
 /// The upload worked but nothing records it: deleting the clip would leave
 /// a copy on the server, no local file and no link anywhere.
 #[tokio::test]

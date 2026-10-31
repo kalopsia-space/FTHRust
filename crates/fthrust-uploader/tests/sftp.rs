@@ -286,6 +286,34 @@ async fn upload_part_rename_and_urls() {
     assert_eq!(mode & 0o777, 0o644);
 }
 
+/// Both SFTP links, the `sftp://` location and the public HTTPS one, are
+/// links the card can offer, so they confirm an upload.
+#[tokio::test]
+async fn auto_delete_follows_a_confirmed_sftp_upload() {
+    let server = srv::start(15).await;
+    for public in [false, true] {
+        let mut extra =
+            json!({"sftp_fingerprint": server.fingerprint(), "upload_auto_delete": true});
+        if public {
+            extra["sftp_public_enabled"] = json!(true);
+            extra["sftp_public_base_url"] = json!("https://videos.example/clips");
+        }
+        let h = home(&server, extra);
+        let env = h.env();
+        h.save_password(&env, srv::PASSWORD).await;
+        let clip = h.clip.canonicalize().unwrap();
+        let (ok, msg) = h.upload(&env).await;
+        assert!(ok, "{msg}");
+        let want = if public {
+            "https://videos.example/clips/fthr-"
+        } else {
+            "sftp://127.0.0.1:"
+        };
+        assert!(msg.starts_with(want), "{msg}");
+        assert!(!clip.exists(), "public={public}: the clip stayed");
+    }
+}
+
 #[tokio::test]
 async fn failed_rename_cleans_part_and_keeps_clip() {
     let server = srv::start(10).await;

@@ -634,6 +634,22 @@ async fn attempt(
     }
 }
 
+/// What a server says when it took the upload but gave no usable link.
+const NO_LINK: &str = "Uploaded, but your server didn't reply with a link.";
+
+/// The link of a finished upload, if it has one anybody can use: exactly
+/// what the app's `History::link` accepts (an http(s) URL, or an `sftp://`
+/// location with a host, a port and a path), on a single line. Only such a
+/// link confirms an upload enough to delete the clip; a server may put
+/// anything in its reply (`queued`, `file:///…`, a few lines of text).
+fn usable_link(entry: &Map<String, Value>) -> Option<String> {
+    let key = Path::new("upload");
+    let mut history = History::default();
+    history.record(key, Entry(entry.clone()));
+    let url = history.link(key)?.url;
+    (!url.chars().any(|c| c.is_whitespace() || c.is_control())).then_some(url)
+}
+
 /// `UploadRuntime.upload`: size limit, attempts, history, auto-delete.
 pub async fn upload(
     env: &Env,
@@ -712,13 +728,11 @@ pub async fn upload(
     );
     entry.extend(result);
     let saved = History::update(&env.paths, |h| h.record(path, Entry(entry.clone())));
-    let url = entry.get("url").and_then(Value::as_str).unwrap_or("");
-    let message = if url.is_empty() && provider == Provider::Custom {
-        "Uploaded, but your server didn't reply with a link.".to_owned()
-    } else if url.is_empty() {
-        "Upload complete.".to_owned()
-    } else {
-        url.to_owned()
+    let link = usable_link(&entry);
+    let message = match &link {
+        Some(link) => link.clone(),
+        None if provider == Provider::Custom => NO_LINK.to_owned(),
+        None => "Upload complete.".to_owned(),
     };
     if let Err(e) = saved {
         // The upload exists, but nothing records it, and the app learns a
@@ -726,10 +740,9 @@ pub async fn upload(
         // leave a copy on the server, no local file and no link anywhere:
         // keep it, and hand the link over in the reply.
         eprintln!("[Uploader] Upload history could not be saved: {e}");
-        let was = if url.is_empty() {
-            "Uploaded".to_owned()
-        } else {
-            format!("Uploaded to {url}")
+        let was = match &link {
+            Some(link) => format!("Uploaded to {link}"),
+            None => "Uploaded".to_owned(),
         };
         return Response {
             ok: true,
@@ -743,7 +756,7 @@ pub async fn upload(
     }
     // Without a link the upload is not confirmed: keep the only copy.
     if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
-        && !url.is_empty()
+        && link.is_some()
         && let Err(e) = std::fs::remove_file(path)
     {
         return Response {
