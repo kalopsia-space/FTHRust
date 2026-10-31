@@ -1252,8 +1252,12 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
         };
 
-        // Generation end.
+        // Generation end. The compositor no longer writes into the capture
+        // surfaces; the next generation allocates its own if it uses any.
         drop(backend);
+        if let Some(enc) = encoder.as_mut() {
+            enc.release_dmabuf_targets();
+        }
         inner.zero_copy.store(false, Ordering::Relaxed);
         match end {
             GenerationEnd::Stop => break 'generations,
@@ -1464,7 +1468,9 @@ fn start_zero_copy(
         .render_node()
         .and_then(fthrust_media::vaapi::render_node_dev);
     if env_disabled || !gpu_conversion || constraints.is_none() {
-        // Nothing to allocate surfaces for.
+        // Nothing to allocate surfaces for, and surfaces an earlier
+        // generation left (the encoder outlives it) are freed.
+        enc.release_dmabuf_targets();
         return match zero_copy_plan(
             constraints.as_ref(),
             encoder_gpu,
@@ -1511,6 +1517,58 @@ fn log_zero_copy_off(logged: &mut bool, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_copy_that_cannot_start_frees_surfaces_an_earlier_generation_left() {
+        // An ext generation held capture surfaces; its retries are spent and
+        // wlr, which has no dmabuf, takes over with the same encoder.
+        if fthrust_media::init().is_err() || !fthrust_media::vaapi::vaapi_available() {
+            return eprintln!("skipping: no VA-API device");
+        }
+        let capture = fthrust_core::capture_config::CaptureConfig::default();
+        let Ok(mut enc) = Encoder::open(&EncoderConfig {
+            src_width: 320,
+            src_height: 180,
+            enc_width: 320,
+            enc_height: 180,
+            fps: 30,
+            bitrate_kbps: 2000,
+            codec: fthrust_core::capture_config::Codec::H264,
+            encoder: fthrust_core::capture_config::EncoderPref::Vaapi,
+            preset: 1,
+        }) else {
+            return eprintln!("skipping: no VA-API H.264 encoder");
+        };
+        if enc.conversion() != Conversion::Gpu {
+            return eprintln!("skipping: no GPU colour conversion");
+        }
+        enc.dmabuf_targets(320, 180, ZERO_COPY_SURFACES).unwrap();
+        let mut probe = Vec::new();
+        assert!(enc.download_surface(0, &mut probe).is_ok(), "surfaces held");
+        let mut script = crate::backend::SyntheticScript::new(320, 180);
+        script.kinds.insert(
+            BackendKind::WlrScreencopy,
+            crate::backend::KindScript::default(),
+        );
+        let factory = crate::backend::SyntheticFactory {
+            script: Arc::new(Mutex::new(script)),
+            candidates: vec![BackendKind::WlrScreencopy],
+        };
+        let Ok(mut wlr) = factory.create(
+            BackendKind::WlrScreencopy,
+            &capture,
+            false,
+            OpenReason::Recovery,
+            Arc::new(AtomicBool::new(false)),
+        ) else {
+            panic!("the synthetic wlr backend opens");
+        };
+        assert!(start_zero_copy(wlr.as_mut(), &mut enc, (320, 180)).is_err());
+        assert!(
+            enc.download_surface(0, &mut probe).is_err(),
+            "the earlier generation's surfaces are still allocated"
+        );
+    }
 
     #[test]
     fn the_recording_keyframe_is_requested_only_once_the_tap_is_in_place() {
