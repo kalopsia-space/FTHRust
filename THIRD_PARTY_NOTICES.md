@@ -71,7 +71,7 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 | `--enable-gmp` | GNU MP (GMP) | LGPL-3.0-or-later OR GPL-2.0-or-later | [gmplib.org](https://gmplib.org/), built from [github.com/BtbN/gmplib](https://github.com/BtbN/gmplib) `9994908f090c` | [gmp.txt](licenses/ffmpeg/gmp.txt) |
 | `--enable-libharfbuzz` | HarfBuzz | MIT ("Old MIT") | [harfbuzz.github.io](https://harfbuzz.github.io/), built from [github.com/harfbuzz/harfbuzz](https://github.com/harfbuzz/harfbuzz) `fe9501b08d1b` | [harfbuzz.txt](licenses/ffmpeg/harfbuzz.txt) |
 | `--enable-libkvazaar` | Kvazaar | BSD-3-Clause | [github.com/ultravideo/kvazaar](https://github.com/ultravideo/kvazaar) `d6815293f34a` | [kvazaar.txt](licenses/ffmpeg/kvazaar.txt) |
-| `--enable-libmp3lame` | LAME (libmp3lame) | LGPL-2.0-or-later | [lame.sourceforge.io](https://lame.sourceforge.io/), built from [svn.code.sf.net/p/lame/svn/trunk/lame](https://svn.code.sf.net/p/lame/svn/trunk/lame) (trunk) | [lame.txt](licenses/ffmpeg/lame.txt) |
+| `--enable-libmp3lame` | LAME (libmp3lame) | LGPL-2.0-or-later | [lame.sourceforge.io](https://lame.sourceforge.io/), built from [svn.code.sf.net/p/lame/svn/trunk/lame](https://svn.code.sf.net/p/lame/svn/trunk/lame) `r6531` | [lame.txt](licenses/ffmpeg/lame.txt) |
 | `--enable-liblcevc-dec` | LCEVCdec | BSD-3-Clause-Clear (no patent licence granted) | [github.com/v-novaltd/LCEVCdec](https://github.com/v-novaltd/LCEVCdec) `a254bd474649` | [lcevc-dec.txt](licenses/ffmpeg/lcevc-dec.txt) |
 | `--enable-libaom` | libaom | BSD-2-Clause, with the AOM Patent License 1.0 | [aomedia.googlesource.com/aom](https://aomedia.googlesource.com/aom) `43f2b6a99000` | [aom.txt](licenses/ffmpeg/aom.txt) |
 | `--enable-libaribcaption` | libaribcaption | MIT | [github.com/xqq/libaribcaption](https://github.com/xqq/libaribcaption) `f9d8c50fe5e5` | [libaribcaption.txt](licenses/ffmpeg/libaribcaption.txt) |
@@ -102,7 +102,7 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 | `--enable-libopencore-amrnb` `--enable-libopencore-amrwb` | OpenCORE AMR | Apache-2.0 | [opencore-amr.sourceforge.io](https://opencore-amr.sourceforge.io/) `7dba8c322384` | [opencore-amr.txt](licenses/ffmpeg/opencore-amr.txt) |
 | `--enable-libopenh264` | OpenH264 | BSD-2-Clause | [www.openh264.org](https://www.openh264.org/), built from [github.com/cisco/openh264](https://github.com/cisco/openh264) `a8e04adb69c7` | [openh264.txt](licenses/ffmpeg/openh264.txt) |
 | `--enable-libopenjpeg` | OpenJPEG | BSD-2-Clause | [www.openjpeg.org](https://www.openjpeg.org/), built from [github.com/uclouvain/openjpeg](https://github.com/uclouvain/openjpeg) `9dd4b3c98a78` | [openjpeg.txt](licenses/ffmpeg/openjpeg.txt) |
-| `--enable-openssl` | OpenSSL | Apache-2.0 | [www.openssl.org](https://www.openssl.org/), built from [github.com/openssl/openssl](https://github.com/openssl/openssl) `openssl-3.6.` | [openssl.txt](licenses/ffmpeg/openssl.txt) |
+| `--enable-openssl` | OpenSSL | Apache-2.0 | [www.openssl.org](https://www.openssl.org/), built from [github.com/openssl/openssl](https://github.com/openssl/openssl) `openssl-3.6.3` | [openssl.txt](licenses/ffmpeg/openssl.txt) |
 | `--enable-libopus` | Opus | BSD-3-Clause | [opus-codec.org](https://opus-codec.org/), built from [github.com/xiph/opus](https://github.com/xiph/opus) `3da9f7a6db1c` | [opus.txt](licenses/ffmpeg/opus.txt) |
 | `--enable-libpulse` | PulseAudio client library (libpulse) | LGPL-2.1-or-later | [www.freedesktop.org/wiki/Software/PulseAudio](https://www.freedesktop.org/wiki/Software/PulseAudio/), built from [gitlab.freedesktop.org/pulseaudio/pulseaudio](https://gitlab.freedesktop.org/pulseaudio/pulseaudio) `b096704c0d42` | [pulseaudio.txt](licenses/ffmpeg/pulseaudio.txt) |
 | `--enable-librav1e` | rav1e | BSD-2-Clause, with the AOM Patent License 1.0 | [github.com/xiph/rav1e](https://github.com/xiph/rav1e) `564ae3b0007a` | [rav1e.txt](licenses/ffmpeg/rav1e.txt) |
@@ -123,7 +123,6 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 
 - **AMD Advanced Media Framework headers**: Headers; AMD's driver is the user's system library.
 - **GNU MP (GMP)**: BtbN builds its own fork.
-- **LAME (libmp3lame)**: Not pinned by BtbN: its script follows the Subversion trunk.
 - **libdrm**: No licence file: this is the notice in xf86drm.c.
 - **libjxl**: Also builds highway and skcms (Apache-2.0, BSD-3-Clause); their notices are not reproduced here.
 - **libva (VA-API)**: The VA-API drivers are the user's system libraries.

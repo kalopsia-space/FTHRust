@@ -513,13 +513,12 @@
       "license": "LGPL-2.0-or-later",
       "url": "https://lame.sourceforge.io/",
       "pinned_repo": "https://svn.code.sf.net/p/lame/svn/trunk/lame",
-      "pinned_commit": "",
+      "pinned_commit": "r6531",
       "text": "lame.txt",
       "source_files": [
         "LICENSE",
         "COPYING"
-      ],
-      "note": "Not pinned by BtbN: its script follows the Subversion trunk."
+      ]
     },
     {
       "id": "opus",

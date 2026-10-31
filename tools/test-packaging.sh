@@ -387,6 +387,12 @@ group_ffnotice() {
     elif grep -q "stray.txt belongs to no library" <<<"$out"; then pass ffnotice_rejects_an_orphan_text
     else fail ffnotice_rejects_an_orphan_text "$out"; fi
 
+    out="$(python3 -I "$gen" 2>&1)"
+    # only a 40-digit commit id is shortened; a tag or a Subversion revision is shown whole
+    if grep -qF '`openssl-3.6.3`' <<<"$out" && grep -qF '`r6531`' <<<"$out" && grep -qF '`c150ba6c9b9b`' <<<"$out" && ! grep -qF 'openssl-3.6.`' <<<"$out"; then
+        pass ffnotice_abbreviates_only_commit_ids
+    else fail ffnotice_abbreviates_only_commit_ids "$(grep -o 'openssl-3[^|]*' <<<"$out" | head -2)"; fi
+
     printf 'ffmpeg {{ffmpeg.describe}} sha {{ffmpeg.sha256}}\n<!-- ffmpeg-libraries -->\ntail\n' > "$WORK/tpl.md"
     out="$(python3 -I "$gen" --template "$WORK/tpl.md" 2>&1)"
     if grep -q "ffmpeg $(jq -r .version "$m") sha $(jq -r .source.sha256 "$m")" <<<"$out" && grep -q "^### External libraries built into FFmpeg" <<<"$out" && [ "$(tail -1 <<<"$out")" = tail ]; then

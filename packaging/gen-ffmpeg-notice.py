@@ -34,10 +34,15 @@ def short(url):
     return url.split("://", 1)[-1].rstrip("/")
 
 
+def short_pin(commit):
+    """A 40-digit commit id is shown as its first 12; a tag or a Subversion revision (openssl-3.6.3, r6531) whole."""
+    return commit[:12] if re.fullmatch(r"[0-9a-f]{40}", commit) else commit
+
+
 def upstream(entry):
     repo = entry.get("pinned_repo", "").removesuffix(".git")
     commit = entry.get("pinned_commit", "")
-    pin = f" `{commit[:12]}`" if commit and len(commit) >= 12 else (f" `{commit}`" if commit else " (trunk)")
+    pin = f" `{short_pin(commit)}`" if commit else ""
     if repo and repo != entry["url"] and not repo.startswith("https://git.code.sf.net"):
         return f"[{short(entry['url'])}]({entry['url']}), built from [{short(repo)}]({repo}){pin}"
     return f"[{short(entry['url'])}]({entry['url']}){pin}"
