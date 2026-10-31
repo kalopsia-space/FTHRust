@@ -3,6 +3,7 @@
 //! auto-delete).
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -17,8 +18,6 @@ use crate::{Env, Response, sftp};
 
 const BOUNDARY: &str = "FTHRClipBoundary8f61d4";
 const USER_AGENT: &str = "FTHR-Clips/Desktop-Uploader";
-/// Socket timeout of an upload request (`timeout=120`).
-const IO_TIMEOUT: Duration = Duration::from_secs(120);
 /// Timeout of a connection test (`timeout=10`).
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most of a reply body that is read.
@@ -41,18 +40,29 @@ pub enum Failure {
     Settings(String),
 }
 
-fn client(timeout: Duration, follow_redirects: bool) -> Result<reqwest::Client, String> {
+/// An HTTP client. `read` is reqwest's read timeout, which is one timer from
+/// the start of the request until the response headers arrive: right for a
+/// request without a body (the connection tests), wrong for an upload, which
+/// must not be cut off while it is still moving (see [`multipart_post`]).
+fn client(
+    connect: Duration,
+    read: Option<Duration>,
+    follow_redirects: bool,
+) -> Result<reqwest::Client, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let policy = if follow_redirects {
         reqwest::redirect::Policy::default()
     } else {
         reqwest::redirect::Policy::none()
     };
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .connect_timeout(timeout)
-        .read_timeout(timeout)
-        .redirect(policy)
+        .connect_timeout(connect)
+        .redirect(policy);
+    if let Some(read) = read {
+        builder = builder.read_timeout(read);
+    }
+    builder
         .build()
         .map_err(|e| format!("The uploader could not start its HTTP client: {e}"))
 }
@@ -296,11 +306,112 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+/// The pieces of the request body are read from the file this big, so the
+/// watchdog sees the body move often even on a slow link.
+const CHUNK: usize = 256 * 1024;
+
+/// How far an upload's body has got, for the stall watchdog.
+struct Progress {
+    /// When hyper last took a piece of the body (when the request began, until it does).
+    last: tokio::time::Instant,
+    /// The last piece has been taken: the server's answer is next.
+    finished: bool,
+}
+
+/// [`Progress`], shared between the body stream and the watchdog.
+#[derive(Clone)]
+struct Watch(Arc<Mutex<Progress>>);
+
+impl Watch {
+    fn new() -> Watch {
+        Watch(Arc::new(Mutex::new(Progress {
+            last: tokio::time::Instant::now(),
+            finished: false,
+        })))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, Progress> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A piece of the body was taken.
+    fn moved(&self) {
+        self.state().last = tokio::time::Instant::now();
+    }
+
+    /// The last piece of the body is being taken.
+    fn finish(&self) {
+        let mut p = self.state();
+        p.last = tokio::time::Instant::now();
+        p.finished = true;
+    }
+}
+
+/// A request that went quiet.
+enum Quiet {
+    /// The body stopped going out.
+    Sending,
+    /// The body is out and the server does not answer.
+    Answering,
+}
+
+/// `request.send()`, given up on when the body has not moved for `limit`
+/// (or, once it is all out, when the server has not answered for `limit`).
+///
+/// reqwest's own read timeout cannot do this: it is one timer from the start
+/// of the request until the response headers, and body progress never resets
+/// it, so every upload that takes longer than the timeout to send would fail
+/// however fast it was going.
+async fn send_watched(
+    request: reqwest::RequestBuilder,
+    watch: &Watch,
+    limit: Duration,
+) -> Result<Result<reqwest::Response, reqwest::Error>, Quiet> {
+    let send = request.send();
+    tokio::pin!(send);
+    loop {
+        let due = watch.state().last + limit;
+        tokio::select! {
+            sent = &mut send => return Ok(sent),
+            () = tokio::time::sleep_until(due) => {
+                let p = watch.state();
+                if p.last + limit <= tokio::time::Instant::now() {
+                    return Err(if p.finished { Quiet::Answering } else { Quiet::Sending });
+                }
+            }
+        }
+    }
+}
+
+/// A duration for a message: whole seconds, else milliseconds.
+fn words(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms >= 1000 && ms.is_multiple_of(1000) {
+        let s = ms / 1000;
+        format!("{s} second{}", if s == 1 { "" } else { "s" })
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+/// `who` at the start of a sentence.
+fn capitalized(who: &str) -> String {
+    let mut chars = who.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// `_multipart_post`: one streamed `multipart/form-data` POST with the
 /// reference's boundary and explicit length. Returns the status, the
 /// trimmed body text and any `Location` header. `who` names the server in
 /// network errors ("Catbox", "your server").
+///
+/// There is no overall timeout: a clip is as long as it is. The request is
+/// failed when it goes quiet for `limit` instead (see [`send_watched`]).
 async fn multipart_post(
+    limit: Duration,
     who: &str,
     url: &str,
     fields: &[(&str, &str)],
@@ -332,16 +443,18 @@ async fn multipart_post(
         .map_err(|e| Failure::Permanent(format!("File size could not be checked: {e}")))?
         .len();
     let length = prefix.len() as u64 + size + footer.len() as u64;
+    let watch = Watch::new();
+    let (taken, last) = (watch.clone(), watch.clone());
     let body =
         futures_util::stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(prefix)) })
-            .chain(tokio_util::io::ReaderStream::with_capacity(
-                file,
-                1024 * 1024,
-            ))
+            .chain(tokio_util::io::ReaderStream::with_capacity(file, CHUNK))
             .chain(futures_util::stream::once(async move {
+                last.finish();
                 Ok::<Bytes, std::io::Error>(Bytes::from(footer))
-            }));
-    let client = client(IO_TIMEOUT, false).map_err(Failure::Permanent)?;
+            }))
+            .inspect(move |_| taken.moved());
+    // No read timeout: reqwest's covers the whole upload, not its silence.
+    let client = client(limit, None, false).map_err(Failure::Permanent)?;
     let mut request = client
         .post(url)
         .header(
@@ -353,12 +466,28 @@ async fn multipart_post(
     if let Some(auth) = authorization {
         request = request.header(reqwest::header::AUTHORIZATION, auth);
     }
-    let mut response = request.send().await.map_err(|e| {
-        Failure::Transient(format!(
-            "Could not reach {who}: {}",
-            sentence(&describe(&e))
-        ))
-    })?;
+    let mut response = match send_watched(request, &watch, limit).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
+            return Err(Failure::Transient(format!(
+                "Could not reach {who}: {}",
+                sentence(&describe(&e))
+            )));
+        }
+        Err(Quiet::Sending) => {
+            return Err(Failure::Transient(format!(
+                "The upload to {who} stalled: no data went out for {}.",
+                words(limit)
+            )));
+        }
+        Err(Quiet::Answering) => {
+            return Err(Failure::Transient(format!(
+                "{} did not answer within {} of the end of the upload.",
+                capitalized(who),
+                words(limit)
+            )));
+        }
+    };
     let status = response.status().as_u16();
     let location = response
         .headers()
@@ -367,13 +496,19 @@ async fn multipart_post(
         .map(str::to_owned);
     let mut raw = Vec::new();
     while raw.len() < BODY_CAP {
-        match response.chunk().await {
-            Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
-            Ok(None) => break,
-            Err(e) => {
+        match tokio::time::timeout(limit, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => raw.extend_from_slice(&chunk),
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => {
                 return Err(Failure::Transient(format!(
                     "The connection to {who} dropped: {}",
                     sentence(&describe(&e))
+                )));
+            }
+            Err(_) => {
+                return Err(Failure::Transient(format!(
+                    "The answer from {who} stalled: no data for {}.",
+                    words(limit)
                 )));
             }
         }
@@ -401,6 +536,7 @@ async fn upload_catbox(
         fields.push(("userhash", userhash.as_str()));
     }
     let (status, text, _) = multipart_post(
+        env.io_timeout,
         "Catbox",
         &env.catbox_url,
         &fields,
@@ -429,6 +565,7 @@ async fn upload_catbox(
 }
 
 async fn upload_custom(
+    env: &Env,
     settings: &Map<String, Value>,
     path: &Path,
 ) -> Result<Map<String, Value>, Failure> {
@@ -436,8 +573,16 @@ async fn upload_custom(
         validate::custom_url(setting(settings, "upload_server_url")).map_err(Failure::Settings)?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))
         .map_err(Failure::Settings)?;
-    let (status, text, location) =
-        multipart_post("your server", &url, &[], "clip", path, auth.as_deref()).await?;
+    let (status, text, location) = multipart_post(
+        env.io_timeout,
+        "your server",
+        &url,
+        &[],
+        "clip",
+        path,
+        auth.as_deref(),
+    )
+    .await?;
     if !(200..300).contains(&status) {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let to = redirect_target(&url, location.as_deref());
@@ -484,7 +629,7 @@ async fn attempt(
 ) -> Result<Map<String, Value>, Failure> {
     match provider {
         Provider::Catbox => upload_catbox(env, settings, path).await,
-        Provider::Custom => upload_custom(settings, path).await,
+        Provider::Custom => upload_custom(env, settings, path).await,
         Provider::Sftp => sftp::upload(env, settings, path).await,
     }
 }
@@ -598,7 +743,7 @@ pub async fn upload(
 
 /// Test connection to Catbox: any answer below 500 means reachable.
 pub async fn test_catbox(env: &Env) -> (bool, String) {
-    let client = match client(TEST_TIMEOUT, true) {
+    let client = match client(TEST_TIMEOUT, Some(TEST_TIMEOUT), true) {
         Ok(c) => c,
         Err(e) => return (false, e),
     };
@@ -624,7 +769,7 @@ pub async fn test_catbox(env: &Env) -> (bool, String) {
 pub async fn test_custom(settings: &Map<String, Value>) -> Result<(bool, String), String> {
     let url = validate::custom_url(setting(settings, "upload_server_url"))?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))?;
-    let client = client(TEST_TIMEOUT, false)?;
+    let client = client(TEST_TIMEOUT, Some(TEST_TIMEOUT), false)?;
     let mut request = client.head(&url);
     if let Some(a) = &auth {
         request = request.header(reqwest::header::AUTHORIZATION, a);

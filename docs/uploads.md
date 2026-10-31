@@ -111,6 +111,8 @@ A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reaso
 
 Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
 
+An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The upload as a whole still has to finish within 10 minutes, after which the app stops it.
+
 [Troubleshooting](troubleshooting.md) lists every upload error code.
 
 ## The Your server protocol

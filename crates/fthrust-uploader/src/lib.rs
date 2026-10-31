@@ -33,6 +33,9 @@ pub const RETRY_DELAYS: [Duration; 3] = [
 ];
 /// No retry starts once this much of the caller's 600 s budget is gone.
 pub const DEADLINE: Duration = Duration::from_secs(540);
+/// How long an HTTP upload may go without moving a byte, and how long a
+/// server may take to answer (`timeout=120` in the reference).
+pub const IO_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Where the uploader talks to and keeps its state.
 pub struct Env {
@@ -44,6 +47,8 @@ pub struct Env {
     pub retry_delays: Vec<Duration>,
     /// Retry budget.
     pub deadline: Duration,
+    /// The stall limit of an HTTP upload (see [`IO_TIMEOUT`]).
+    pub io_timeout: Duration,
     /// Saved passwords.
     pub vault: Box<dyn vault::Vault>,
 }
@@ -66,6 +71,7 @@ impl Env {
             catbox_url,
             retry_delays,
             deadline: DEADLINE,
+            io_timeout: IO_TIMEOUT,
             vault: Box::new(vault::SecretService),
         })
     }
@@ -77,6 +83,7 @@ impl Env {
             catbox_url: CATBOX_URL.into(),
             retry_delays: vec![Duration::ZERO; RETRY_DELAYS.len()],
             deadline: DEADLINE,
+            io_timeout: IO_TIMEOUT,
             vault: Box::new(vault::Memory::default()),
         }
     }
