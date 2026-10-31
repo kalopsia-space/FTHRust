@@ -5,7 +5,7 @@
 //! 8 px spacing, 41 px panel headers, panel bodies with 14/4/14/14 margins.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{Align, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use fthrust_core::editor::format;
@@ -328,18 +328,39 @@ fn label(
 /// The editor's Upload button (`upload_btn`): hidden while uploads are
 /// off, `Queued` and disabled for 2.5 s after a click. The reference fixed
 /// its visibility when the editor opened.
+///
+/// A clip that was uploaded without a link coming back (`again`) reads
+/// `Upload again`: the editor draws no error bar to explain a press that does
+/// nothing or to offer the way out, so the button is the way out.
 pub fn upload_button(
     enabled: bool,
     queued_until: Option<f64>,
     now: f64,
+    again: bool,
 ) -> Option<(&'static str, bool)> {
     if !enabled {
         return None;
     }
     Some(match queued_until {
         Some(t) if now < t => ("Queued", false),
+        _ if again => ("Upload again", true),
         _ => ("Upload", true),
     })
+}
+
+/// A press on the Upload button of the editor open on `path`: an upload, or
+/// (`again`) the same request as the bar's UPLOAD AGAIN.
+pub fn press_upload(state: &mut AppState, path: &Path, again: bool, now: f64) {
+    if again {
+        state.error_action_requested = Some(format!(
+            "{}{}",
+            crate::services::upload::AGAIN_ACTION,
+            path.display()
+        ));
+    } else {
+        state.upload_requested = Some(path.to_path_buf());
+    }
+    state.editor_upload_queued_until = Some(now + 2.5);
 }
 
 fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
@@ -432,7 +453,14 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
     }
     let now = state.editor_now();
     let enabled = crate::services::upload::uploader_enabled(state);
-    if let Some((text, active)) = upload_button(enabled, state.editor_upload_queued_until, now) {
+    let clip = state.editor.as_ref().map(|e| e.path.clone());
+    let again = enabled
+        && clip
+            .as_deref()
+            .is_some_and(|p| crate::services::upload::uploaded_without_link(state, p));
+    if let Some((text, active)) =
+        upload_button(enabled, state.editor_upload_queued_until, now, again)
+    {
         let r = c.rect(
             0.0,
             MARGIN_Y + 42.0 + c.quality_h + 38.0 + 19.0 + 4.0 * SPACING,
@@ -451,10 +479,9 @@ fn primary_actions(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState) {
             active,
         );
         if upload.clicked()
-            && let Some(e) = state.editor.as_ref()
+            && let Some(clip) = &clip
         {
-            state.upload_requested = Some(e.path.clone());
-            state.editor_upload_queued_until = Some(now + 2.5);
+            press_upload(state, clip, again, now);
         }
     }
     if let Some(e) = state.editor.as_mut() {

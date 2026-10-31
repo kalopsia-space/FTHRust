@@ -220,7 +220,14 @@ pub fn on_share(
         }
         None => {
             state.upload_requested = Some(path.to_path_buf());
-            "Upload requested"
+            // Uploaded already, without a link (the card promises the option
+            // to upload again): the request brings that notice, not an upload.
+            let key = upload_key(state, path);
+            if state.upload_history.is_uploaded(&key) {
+                "Already uploaded"
+            } else {
+                "Upload requested"
+            }
         }
     };
     state

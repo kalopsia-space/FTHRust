@@ -381,6 +381,43 @@ fn a_scanned_path_is_queued_under_the_librarys_spelling() {
     assert_eq!(queued, vec![&spelled]);
 }
 
+/// A link, or the reason a button does nothing, is not a "capture error":
+/// the notices that carry them are shown whatever "Show capture error
+/// messages" says.
+#[test]
+fn the_notices_that_carry_a_link_or_explain_a_button_ignore_the_error_message_setting() {
+    // The history could not be saved: the warning holds the link.
+    let reply = r#"cat >/dev/null; echo '{"ok":true,"message":"https://cdn.example/w","upload_info":{"status":"ok","provider":"custom","url":"https://cdn.example/w","raw_url":"https://cdn.example/w"},"warning":"https://cdn.example/w: uploaded, but the upload history could not be saved (disk full). The clip was kept."}'"#;
+    let mut r = rig(reply, json!({}));
+    r.state.error_bar.enabled = false;
+    let clip = r.clip("w.mp4");
+    std::fs::create_dir_all(r.state.paths.upload_history_file()).unwrap();
+    r.svc.enqueue(&mut r.state, clip);
+    r.settle();
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("the link was not shown")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert!(
+        e.detail.starts_with("https://cdn.example/w: uploaded"),
+        "{}",
+        e.detail
+    );
+
+    // Upload is pressed on a clip whose server sent no link.
+    let mut r = rig(&uploader_ok(""), json!({}));
+    let clip = r.clip("n.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    r.state.error_bar.enabled = false;
+    r.svc.enqueue(&mut r.state, clip);
+    r.settle();
+    assert_eq!(r.error_titles(), vec!["ALREADY UPLOADED"]);
+}
+
 /// Auto-delete removes the clip, and the clips folder may be reached through
 /// a symlink: the history entry is the uploader's, under the real path. The
 /// app must not add a second one under the symlink's spelling (a path that

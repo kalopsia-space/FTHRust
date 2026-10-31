@@ -97,7 +97,7 @@ When an upload finishes, a capture card shows **UPLOADED ORIGINAL** (or **UPLOAD
 
 The link isn't copied to your clipboard automatically.
 
-If a server takes a clip but doesn't send a link back, the clip still gets the **Uploaded** badge, and the bar says there is no link to copy. Pressing **Upload clip** on such a clip says so again and offers **UPLOAD AGAIN**, which sends it once more; the immediate and interval modes never do. When the clip can't be deleted after an upload, or the upload couldn't be saved to the history, the bar says that too.
+If a server takes a clip but doesn't send a link back, the clip still gets the **Uploaded** badge, and the bar says there is no link to copy. Pressing **Upload clip** on such a clip shows *Already uploaded* on the card and says so again in the bar, which offers **UPLOAD AGAIN** to send it once more; in the editor, which has no bar, the **Upload** button reads *Upload again* for such a clip. The immediate and interval modes never upload it again. When the clip can't be deleted after an upload, is kept because an export or share is still using it, or the upload couldn't be saved to the history, the bar says that too. These notices hold a link or explain a button, so they show even when *Show capture error messages* is off.
 
 ## What's stored where
 

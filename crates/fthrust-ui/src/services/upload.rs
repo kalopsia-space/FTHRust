@@ -700,12 +700,12 @@ impl UploadService {
             }
         }
         if let Some(warning) = &done.reply.warning {
-            state.error_bar.push_error(
+            notice(
+                state,
                 "UPLOAD WARNING",
                 warning,
-                Level::Warning,
                 Vec::new(),
-                Some(format!("upload-warning:{}", done.path.display())),
+                format!("upload-warning:{}", done.path.display()),
                 false,
             );
         }
@@ -890,19 +890,26 @@ fn notice(
 /// would happen): say so, and offer to upload it again.
 fn explain_no_link(state: &mut AppState, path: &Path) {
     let name = file_name(path);
-    state.error_bar.push_error(
+    notice(
+        state,
         "ALREADY UPLOADED",
         &format!(
             "{name} was uploaded, but its server sent no link back, so there is nothing to copy. Upload it again to try for one."
         ),
-        Level::Warning,
         vec![Action {
             label: "UPLOAD AGAIN".into(),
             id: format!("{AGAIN_ACTION}{}", path.display()),
         }],
-        Some(format!("{AGAIN_ACTION}{}", path.display())),
+        format!("{AGAIN_ACTION}{}", path.display()),
         true,
     );
+}
+
+/// The clip is in the upload history but has no link to copy: its server took
+/// it and sent none back. The card and the editor offer to upload it again.
+pub fn uploaded_without_link(state: &AppState, path: &Path) -> bool {
+    let key = resolved(path);
+    state.upload_history.is_uploaded(&key) && state.upload_history.link(&key).is_none()
 }
 
 fn file_name(path: &Path) -> String {

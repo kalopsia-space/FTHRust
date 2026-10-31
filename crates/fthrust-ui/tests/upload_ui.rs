@@ -1,6 +1,8 @@
 //! Upload actions on cards, the card menu and the editor
 //! (notes-uploader-reference 6.3).
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use fthrust_core::upload::history::{Entry, History};
@@ -265,23 +267,124 @@ fn share_click_copies_or_requests() {
     assert_eq!(r.state.card_feedback[&r.clip].0, "SFTP location copied");
 }
 
+/// The history entry of a server that took the clip and sent no link back.
+fn record_without_a_link(state: &mut AppState, clip: &Path) {
+    state.upload_history.record(
+        &clip.canonicalize().unwrap(),
+        Entry(
+            json!({"status": "ok", "provider": "custom", "url": ""})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    );
+}
+
+/// The card's tooltip promises the option to upload again: the press must not
+/// claim an upload was requested when the clip is uploaded already.
+#[test]
+fn pressing_upload_on_a_clip_uploaded_without_a_link_says_already_uploaded() {
+    let mut r = rig();
+    let ctx = egui::Context::default();
+    record_without_a_link(&mut r.state, &r.clip.clone());
+    page::on_share(&mut r.state, &ctx, &r.clip.clone(), 10.0, None);
+    assert_eq!(r.state.card_feedback[&r.clip].0, "Already uploaded");
+    // The request still goes out: the upload service answers it with the
+    // notice that offers UPLOAD AGAIN.
+    assert_eq!(r.state.upload_requested.as_deref(), Some(r.clip.as_path()));
+}
+
 #[test]
 fn editor_upload_button() {
     use fthrust_ui::editor::sidebar::upload_button;
     assert_eq!(
-        upload_button(false, None, 0.0),
+        upload_button(false, None, 0.0, false),
         None,
         "hidden while uploads are off"
     );
-    assert_eq!(upload_button(true, None, 0.0), Some(("Upload", true)));
     assert_eq!(
-        upload_button(true, Some(12.5), 10.0),
+        upload_button(true, None, 0.0, false),
+        Some(("Upload", true))
+    );
+    assert_eq!(
+        upload_button(true, Some(12.5), 10.0, false),
         Some(("Queued", false))
     );
     assert_eq!(
-        upload_button(true, Some(12.5), 12.6),
+        upload_button(true, Some(12.5), 12.6, false),
         Some(("Upload", true))
     );
+    // A clip that was uploaded without a link says so on the button: the
+    // editor draws no error bar to explain it or to offer the way out.
+    assert_eq!(
+        upload_button(true, None, 0.0, true),
+        Some(("Upload again", true))
+    );
+    assert_eq!(
+        upload_button(true, Some(12.5), 10.0, true),
+        Some(("Queued", false))
+    );
+    assert_eq!(upload_button(false, None, 0.0, true), None);
+}
+
+/// Pressing the editor's button uploads a clip again when it was uploaded
+/// without a link (the same request as the bar's UPLOAD AGAIN), and asks for a
+/// plain upload otherwise.
+#[test]
+fn the_editors_upload_button_uploads_again_a_clip_that_came_back_without_a_link() {
+    use fthrust_ui::editor::sidebar::press_upload;
+    use fthrust_ui::services::upload::uploaded_without_link;
+    let mut r = rig();
+    let clip = r.clip.clone();
+    assert!(!uploaded_without_link(&r.state, &clip));
+    press_upload(&mut r.state, &clip, false, 5.0);
+    assert_eq!(r.state.upload_requested.as_deref(), Some(clip.as_path()));
+    assert_eq!(r.state.error_action_requested, None);
+    assert_eq!(r.state.editor_upload_queued_until, Some(7.5));
+
+    r.state.upload_requested = None;
+    record_without_a_link(&mut r.state, &clip);
+    assert!(uploaded_without_link(&r.state, &clip));
+    press_upload(&mut r.state, &clip, true, 5.0);
+    assert_eq!(r.state.upload_requested, None);
+    assert_eq!(
+        r.state.error_action_requested,
+        Some(format!("upload-again:{}", clip.display()))
+    );
+    // With a link there is nothing to upload again.
+    r.state.upload_history.record(
+        &clip.canonicalize().unwrap(),
+        Entry(
+            json!({"status": "ok", "url": "https://x/a"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    );
+    assert!(!uploaded_without_link(&r.state, &clip));
+}
+
+/// What the open editor shows on its Upload button.
+#[test]
+fn the_open_editor_labels_its_upload_button_after_what_became_of_the_clip() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let mut r = rig();
+    r.state.tokens.reduce_motion = true;
+    r.state.uploader_settings.set("upload_enabled", json!(true));
+    r.state.editor = Some(Editor::for_tests(&r.clip, 10_000, Lifecycle::Paused));
+    let label = |state: &mut AppState| {
+        let tokens = state.tokens.clone();
+        let rendered = common::render(egui::Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+            fthrust_ui::editor::layer::ui(ui, state);
+        });
+        rendered
+            .marker("uploadBtn")
+            .and_then(|m| m.text.as_ref().map(|t| t.content.clone()))
+    };
+    assert_eq!(label(&mut r.state).as_deref(), Some("Upload"));
+    let clip = r.clip.clone();
+    record_without_a_link(&mut r.state, &clip);
+    assert_eq!(label(&mut r.state).as_deref(), Some("Upload again"));
 }
 
 #[allow(dead_code)]
