@@ -1148,6 +1148,7 @@ async fn settings_problems_are_flagged() {
 /// Uploads that are slow, or that go quiet, against servers on the tokio
 /// runtime (the stall limit is shortened through `Env::io_timeout`).
 mod stalls {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1172,8 +1173,8 @@ mod stalls {
     /// buffers: tiny when the server stops reading (the upload backs up
     /// after a few kilobytes), 64 KiB when it reads at a steady pace (a
     /// tiny window would make the transfer itself crawl). Returns the
-    /// upload URL.
-    fn serve(mode: Mode) -> String {
+    /// upload URL and a count of the connections made.
+    fn serve(mode: Mode) -> (String, Arc<AtomicUsize>) {
         let socket = tokio::net::TcpSocket::new_v4().unwrap();
         let buffer = if matches!(mode, Mode::Slow) {
             64 * 1024
@@ -1184,14 +1185,17 @@ mod stalls {
         socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let listener = socket.listen(8).unwrap();
         let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let connections = Arc::new(AtomicUsize::new(0));
+        let count = connections.clone();
         tokio::spawn(async move {
             while let Ok((mut s, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
                 tokio::spawn(async move {
                     let _ = respond(&mut s, mode).await;
                 });
             }
         });
-        url
+        (url, connections)
     }
 
     async fn respond(s: &mut tokio::net::TcpStream, mode: Mode) -> std::io::Result<()> {
@@ -1248,15 +1252,26 @@ mod stalls {
         Ok(())
     }
 
-    /// An upload of `size` bytes with the stall limit at `limit_ms` and no
-    /// retries; a hang is a failure, not a stuck test run.
+    /// What an upload came to.
+    struct Outcome {
+        ok: bool,
+        message: String,
+        took: Duration,
+        /// Connections the server saw: one per attempt.
+        connections: usize,
+    }
+
+    /// An upload of `size` bytes with the stall limit at `limit_ms` and
+    /// `retries` retries without a wait; a hang is a failure, not a stuck
+    /// test run.
     async fn upload(
         provider: &str,
         mode: Mode,
         size: usize,
         limit_ms: u64,
-    ) -> (bool, String, Duration) {
-        let url = serve(mode);
+        retries: usize,
+    ) -> Outcome {
+        let (url, connections) = serve(mode);
         let h = if provider == "catbox" {
             home(json!({"upload_provider": "catbox"}))
         } else {
@@ -1265,12 +1280,17 @@ mod stalls {
         std::fs::write(&h.clip, vec![5u8; size]).unwrap();
         let mut env = h.env(&url);
         env.io_timeout = Duration::from_millis(limit_ms);
-        env.retry_delays = Vec::new();
+        env.retry_delays = vec![Duration::ZERO; retries];
         let started = Instant::now();
-        let (ok, msg, _) = tokio::time::timeout(Duration::from_secs(20), h.upload(&env))
+        let (ok, message, _) = tokio::time::timeout(Duration::from_secs(20), h.upload(&env))
             .await
             .expect("the upload hung");
-        (ok, msg, started.elapsed())
+        Outcome {
+            ok,
+            message,
+            took: started.elapsed(),
+            connections: connections.load(Ordering::SeqCst),
+        }
     }
 
     #[tokio::test]
@@ -1278,12 +1298,13 @@ mod stalls {
         // 24 MiB at 8 MB/s takes over 3 s, twice the stall limit; the kernel's
         // buffers swallow the first few megabytes, so the pace only shows
         // in the rest, and the tail takes half a second to drain.
-        let (ok, msg, took) = upload("custom", Mode::Slow, 24 << 20, 1500).await;
-        assert!(ok, "{msg}");
-        assert_eq!(msg, "https://cdn.example/slow.mp4");
+        let o = upload("custom", Mode::Slow, 24 << 20, 1500, 0).await;
+        assert!(o.ok, "{}", o.message);
+        assert_eq!(o.message, "https://cdn.example/slow.mp4");
         assert!(
-            took > Duration::from_millis(2000),
-            "not slow enough: {took:?}"
+            o.took > Duration::from_millis(2000),
+            "not slow enough: {:?}",
+            o.took
         );
     }
 
@@ -1296,40 +1317,60 @@ mod stalls {
                 "your server"
             };
             // More than any socket buffer holds, so the upload backs up.
-            let (ok, msg, took) = upload(provider, Mode::StopsReading, 48 << 20, 500).await;
-            assert!(!ok);
+            let o = upload(provider, Mode::StopsReading, 48 << 20, 500, 0).await;
+            assert!(!o.ok);
             assert_eq!(
-                msg,
+                o.message,
                 format!("The upload to {who} stalled: no data went out for 500 ms.")
             );
-            assert!(took < Duration::from_secs(5), "{took:?}");
+            assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
         }
     }
 
     #[tokio::test]
     async fn a_server_that_never_answers_is_given_up_on() {
-        let (ok, msg, took) = upload("custom", Mode::NeverAnswers, 1000, 500).await;
-        assert!(!ok);
+        let o = upload("custom", Mode::NeverAnswers, 1000, 500, 0).await;
+        assert!(!o.ok);
         assert_eq!(
-            msg,
+            o.message,
             "Your server did not answer within 500 ms of the end of the upload."
         );
-        assert!(took < Duration::from_secs(5), "{took:?}");
-        let (_, msg, _) = upload("catbox", Mode::NeverAnswers, 1000, 500).await;
+        assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
+        let o = upload("catbox", Mode::NeverAnswers, 1000, 500, 0).await;
         assert_eq!(
-            msg,
+            o.message,
             "Catbox did not answer within 500 ms of the end of the upload."
         );
     }
 
     #[tokio::test]
     async fn an_answer_that_stalls_is_given_up_on() {
-        let (ok, msg, took) = upload("custom", Mode::StallsAnswering, 1000, 500).await;
-        assert!(!ok);
+        let o = upload("custom", Mode::StallsAnswering, 1000, 500, 0).await;
+        assert!(!o.ok);
         assert_eq!(
-            msg,
+            o.message,
             "The answer from your server stalled: no data for 500 ms."
         );
-        assert!(took < Duration::from_secs(5), "{took:?}");
+        assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
+    }
+
+    /// A stall is a network problem like any other: the upload is tried
+    /// again (the other tests here run without retries, and would not notice
+    /// it turning into a permanent failure).
+    #[tokio::test]
+    async fn a_stall_is_retried_like_any_network_error() {
+        for (mode, size, what) in [
+            (Mode::StopsReading, 48 << 20, "stalled while sending"),
+            (Mode::NeverAnswers, 1000, "never answered"),
+            (Mode::StallsAnswering, 1000, "stalled while answering"),
+        ] {
+            let o = upload("custom", mode, size, 300, 2).await;
+            assert!(!o.ok, "{what}");
+            assert_eq!(
+                o.connections, 3,
+                "{what}: one attempt and two retries, got {}",
+                o.message
+            );
+        }
     }
 }
