@@ -144,6 +144,7 @@ struct Inner {
     record_overflow: AtomicBool,
     normalized_frames: AtomicU64,
     encoder_conversions: AtomicU64,
+    zero_copy: AtomicBool,
 }
 
 impl Inner {
@@ -200,6 +201,7 @@ impl CaptureEngine {
             record_overflow: AtomicBool::new(false),
             normalized_frames: AtomicU64::new(0),
             encoder_conversions: AtomicU64::new(0),
+            zero_copy: AtomicBool::new(false),
         });
         Self {
             config,
@@ -383,6 +385,13 @@ impl CaptureEngine {
     #[doc(hidden)]
     pub fn encoder_conversions(&self) -> u64 {
         self.inner.encoder_conversions.load(Ordering::Relaxed)
+    }
+
+    /// Whether the compositor renders into the encoder's surfaces right
+    /// now (tests).
+    #[doc(hidden)]
+    pub fn zero_copy_in_use(&self) -> bool {
+        self.inner.zero_copy.load(Ordering::Relaxed)
     }
 
     /// The encoded ring.
@@ -958,6 +967,18 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     );
                 }
             }
+            if zero_copy_active && !backend.uses_dmabuf() {
+                // The backend went back to shm on its own (the compositor
+                // filled none of the surfaces): free them, keep capturing.
+                zero_copy_active = false;
+                surface_proven = false;
+                enc.release_dmabuf_targets();
+                log_zero_copy_off(
+                    &mut zero_copy_logged,
+                    "the compositor filled none of the dmabuf capture buffers",
+                );
+            }
+            inner.zero_copy.store(zero_copy_active, Ordering::Relaxed);
             if let Some(wait) = capture_pacing_wait(next_encode_ns, monotonic_ns()) {
                 std::thread::sleep(wait);
             }
@@ -1204,6 +1225,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
 
         // Generation end.
         drop(backend);
+        inner.zero_copy.store(false, Ordering::Relaxed);
         match end {
             GenerationEnd::Stop => break 'generations,
             GenerationEnd::EncoderFailed(reason) => {

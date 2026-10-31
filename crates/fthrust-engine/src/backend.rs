@@ -66,6 +66,11 @@ pub trait CaptureBackend: Send {
     }
     /// Captures through shared memory from now on.
     fn use_shm(&mut self) {}
+    /// Whether frames go into the images from `use_dmabuf`. A backend may
+    /// go back to shm on its own (the compositor filled none of them).
+    fn uses_dmabuf(&self) -> bool {
+        false
+    }
 }
 
 /// Creates backends.
@@ -204,6 +209,9 @@ impl CaptureBackend for ExtAdapter {
     fn use_shm(&mut self) {
         self.0.use_shm();
     }
+    fn uses_dmabuf(&self) -> bool {
+        self.0.uses_dmabuf()
+    }
 }
 
 /// The grey level of fresh frame `index` when `SyntheticScript::solid` is set.
@@ -262,6 +270,10 @@ pub struct SyntheticScript {
     pub dmabuf: Option<DmabufConstraints>,
     /// In dmabuf mode, report `DmabufInvalidated` once after this many frames.
     pub dmabuf_invalidate_after: Option<u64>,
+    /// In dmabuf mode, fill none of the images: repeat the shm frame this
+    /// many times, then go back to shm on its own, as ext-image-copy does
+    /// when the compositor never fills them.
+    pub dmabuf_never_filled_for: Option<u64>,
     /// `use_dmabuf` calls that succeeded (tests read it).
     pub dmabuf_uses: u64,
     /// `capture` calls so far, each one a frame the compositor would copy
@@ -289,6 +301,7 @@ impl SyntheticScript {
             unchanged: None,
             dmabuf: None,
             dmabuf_invalidate_after: None,
+            dmabuf_never_filled_for: None,
             dmabuf_uses: 0,
             captures: 0,
             opens: 0,
@@ -381,6 +394,7 @@ impl BackendFactory for SyntheticFactory {
             dmabuf_next: 0,
             dmabuf_invalidated: false,
             unchanged_reported: 0,
+            unfilled_reported: 0,
         }))
     }
 }
@@ -401,6 +415,7 @@ struct SyntheticBackend {
     dmabuf_next: usize,
     dmabuf_invalidated: bool,
     unchanged_reported: u64,
+    unfilled_reported: u64,
 }
 
 impl CaptureBackend for SyntheticBackend {
@@ -476,17 +491,28 @@ impl CaptureBackend for SyntheticBackend {
         let lag = if is_static { 0 } else { lag.as_nanos() as i64 };
         let ts = (monotonic_ns() - lag).max(self.last_ts + 1);
         self.last_ts = ts;
+        let mut unfilled_repeat = false;
         if self.dmabuf_images > 0 {
-            let invalidate_after = self
-                .script
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .dmabuf_invalidate_after;
+            let (invalidate_after, never_filled_for) = {
+                let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+                (s.dmabuf_invalidate_after, s.dmabuf_never_filled_for)
+            };
             if !self.dmabuf_invalidated && invalidate_after.is_some_and(|n| self.frames > n) {
                 self.dmabuf_invalidated = true;
                 self.dmabuf_images = 0;
                 return Err(CaptureError::DmabufInvalidated);
             }
+            if let Some(n) = never_filled_for {
+                if self.unfilled_reported < n {
+                    // Held dmabuf requests: the shm frame repeats.
+                    self.unfilled_reported += 1;
+                    unfilled_repeat = true;
+                } else {
+                    self.dmabuf_images = 0;
+                }
+            }
+        }
+        if self.dmabuf_images > 0 && !unfilled_repeat {
             let index = self.dmabuf_next;
             self.dmabuf_next = (index + 1) % self.dmabuf_images;
             return Ok(FrameView {
@@ -511,9 +537,13 @@ impl CaptureBackend for SyntheticBackend {
             y_invert: false,
             transform,
             timestamp_ns: ts,
-            repeated: is_static,
+            repeated: is_static || unfilled_repeat,
             source: FrameSource::Shm,
         })
+    }
+
+    fn uses_dmabuf(&self) -> bool {
+        self.dmabuf_images > 0
     }
 
     fn native_size(&self) -> (u32, u32) {

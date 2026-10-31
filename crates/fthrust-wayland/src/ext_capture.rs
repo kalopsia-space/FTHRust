@@ -39,6 +39,10 @@ pub const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(2);
 /// Time allowed for new constraints after a `buffer_constraints` failure.
 pub const CONSTRAINTS_DEADLINE: Duration = Duration::from_secs(2);
+/// How long dmabuf mode may go without its first frame before capture
+/// goes back to shm: a compositor that accepts the buffers but never
+/// fills them would otherwise leave the probe frame repeating forever.
+pub const DMABUF_FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct SessionInfo {
@@ -213,6 +217,8 @@ pub struct ExtImageCopy {
     native: (u32, u32),
     linux_dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     dmabuf: Option<DmabufMode>,
+    /// When dmabuf mode started, until its first frame arrives.
+    dmabuf_waiting_since: Option<Instant>,
 }
 
 /// Dmabuf mode: one `wl_buffer` per caller image, used round-robin.
@@ -352,6 +358,7 @@ impl ExtImageCopy {
             native: (0, 0),
             linux_dmabuf,
             dmabuf: None,
+            dmabuf_waiting_since: None,
         };
         this.wait_constraints(deadline, 0)
             .map_err(|e| open_failure("buffer constraints", e))?;
@@ -416,7 +423,9 @@ impl ExtImageCopy {
     /// round-robin so the most recently delivered image is never
     /// re-attached. Views then carry `FrameSource::Dmabuf(index)`. Until
     /// the first dmabuf frame arrives, the last shm frame (the probe, at
-    /// first) stays the one a static screen repeats.
+    /// first) stays the one a static screen repeats; if no dmabuf frame
+    /// arrives within [`DMABUF_FIRST_FRAME_DEADLINE`], capture goes back to
+    /// shm on its own (see [`uses_dmabuf`](Self::uses_dmabuf)).
     ///
     /// On any error, validation included, the session is left in shm mode
     /// (the previous dmabuf buffers and their delivered frame are dropped).
@@ -432,6 +441,7 @@ impl ExtImageCopy {
                     "ext-image-copy-capture using dmabuf buffers"
                 );
                 self.dmabuf = Some(mode);
+                self.dmabuf_waiting_since = Some(Instant::now());
                 Ok(())
             }
             Err(e) => {
@@ -522,6 +532,13 @@ impl ExtImageCopy {
         }
     }
 
+    /// Whether frames are captured into the dmabuf images. Turns false on
+    /// its own when the compositor filled none of them in
+    /// [`DMABUF_FIRST_FRAME_DEADLINE`]; the caller can then free them.
+    pub fn uses_dmabuf(&self) -> bool {
+        self.dmabuf.is_some()
+    }
+
     /// Drops the in-flight frame and the dmabuf buffers with their
     /// delivered frame, if any. A delivered shm frame stays: the shm pool
     /// is untouched, so it is still a valid frame to repeat.
@@ -532,6 +549,7 @@ impl ExtImageCopy {
         if let Some(mode) = self.dmabuf.take() {
             mode.destroy();
         }
+        self.dmabuf_waiting_since = None;
     }
 
     /// Captures one frame. On a static screen the previous frame is
@@ -555,6 +573,14 @@ impl ExtImageCopy {
     /// the previous frame with a fresh timestamp, or say nothing changed
     /// when the buffers changed since it was delivered.
     fn held(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
+        if dmabuf_never_filled(self.dmabuf_waiting_since, Instant::now()) {
+            tracing::warn!(
+                "the compositor took the dmabuf capture buffers but filled none in {} s; capturing through shared memory",
+                DMABUF_FIRST_FRAME_DEADLINE.as_secs()
+            );
+            // The shm frame is still there to repeat until shm delivers.
+            self.use_shm();
+        }
         if self.last_frame_available() {
             return Ok(self.last_view(true));
         }
@@ -752,6 +778,7 @@ impl ExtImageCopy {
     fn store_frame(&mut self) {
         if let Some(mode) = &mut self.dmabuf {
             mode.ring.delivered(self.pending_slot);
+            self.dmabuf_waiting_since = None;
             // The dmabuf frame is newer: the shm one is never repeated again.
             self.slots.reset();
             self.last_geometry = None;
@@ -815,6 +842,13 @@ impl ExtImageCopy {
             source: FrameSource::Shm,
         }
     }
+}
+
+/// Whether dmabuf mode, waiting for its first frame since `waiting_since`,
+/// has waited [`DMABUF_FIRST_FRAME_DEADLINE`] in vain.
+fn dmabuf_never_filled(waiting_since: Option<Instant>, now: Instant) -> bool {
+    waiting_since
+        .is_some_and(|since| now.saturating_duration_since(since) >= DMABUF_FIRST_FRAME_DEADLINE)
 }
 
 /// Checks `images` against the session: at least two, each the session's
@@ -937,6 +971,21 @@ mod tests {
         assert_eq!((s.width, s.height), (2560, 1440));
         // Only a failure that came before its batch waits for it.
         assert!(!s.batch_after(s.done_serial));
+    }
+
+    #[test]
+    fn dmabuf_mode_gives_up_after_its_first_frame_deadline() {
+        let start = Instant::now();
+        assert!(!dmabuf_never_filled(None, start + Duration::from_secs(60)));
+        assert!(!dmabuf_never_filled(Some(start), start));
+        assert!(!dmabuf_never_filled(
+            Some(start),
+            start + DMABUF_FIRST_FRAME_DEADLINE - Duration::from_millis(1)
+        ));
+        assert!(dmabuf_never_filled(
+            Some(start),
+            start + DMABUF_FIRST_FRAME_DEADLINE
+        ));
     }
 
     #[test]

@@ -936,6 +936,37 @@ fn dmabuf_geometry_change_reallocates_or_falls_back() {
 }
 
 #[test]
+fn zero_copy_that_is_never_filled_falls_back_without_a_restart() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The compositor takes the dmabuf images and fills none of them: the
+    // backend repeats its shm frame, then goes back to shm on its own (ext
+    // does after DMABUF_FIRST_FRAME_DEADLINE). The engine frees the
+    // surfaces and keeps the generation.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.dmabuf_never_filled_for = Some(30);
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    assert!(h.engine.zero_copy_in_use(), "zero copy started");
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 60
+    });
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(
+        !zero_copy,
+        "the surfaces were kept after the backend left them"
+    );
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "no reallocation");
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
 fn zero_copy_off_for_another_gpu_copies_frames() {
     let Some(mut c) = vaapi_dmabuf_constraints(320, 180) else {
         return eprintln!("skipping: no VA-API device");
