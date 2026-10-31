@@ -98,16 +98,6 @@ pub fn share_action(d: &CardData) -> Option<ShareAction> {
             enabled: d.ready,
             link: true,
         },
-        // Uploaded, but the server gave no link (or the history kept none):
-        // there is nothing to copy, and asking again would be ignored because
-        // the clip counts as uploaded. Say so instead of a button that
-        // answers "Upload requested" and does nothing.
-        None if d.uploaded => ShareAction {
-            label: "Uploaded, no link",
-            tooltip: "Uploaded, but the server returned no link to copy",
-            enabled: false,
-            link: false,
-        },
         None if !d.upload_enabled => ShareAction {
             label: "Upload clip",
             tooltip: "Enable the uploader in Settings to upload this clip",
@@ -171,9 +161,7 @@ pub fn menu_items(d: &CardData) -> Vec<MenuItem> {
     match d.upload_link.as_deref() {
         Some(l) if l.starts_with("sftp://") => v.push(MenuItem::OpenSftp),
         Some(_) => v.push(MenuItem::OpenLink),
-        None if d.is_video && d.upload_enabled && !d.uploading && !d.uploaded => {
-            v.push(MenuItem::Upload);
-        }
+        None if d.is_video && d.upload_enabled && !d.uploading => v.push(MenuItem::Upload),
         None => {}
     }
     v.push(MenuItem::Delete);
