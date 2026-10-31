@@ -320,15 +320,18 @@ impl DiagnosticsSession {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
+        let events = events_tail(&self.events_path(), self.max_event_bytes);
         let mut summary = self.summary();
         summary.insert(
             "export".into(),
             json!({
                 "created_utc": utc_now_text(),
                 "files": ["diagnostic-summary.json", "events.jsonl", "ui.log", "engine.log", "README.txt"],
+                "events_truncated": events.truncated,
+                "events_invalid_lines": events.invalid_lines,
             }),
         );
-        let events = bounded_tail(&self.events_path(), self.max_event_bytes);
+        let events = events.text;
         let ui_log = bounded_tail(app_log, self.export_log_bytes);
         let engine_log = bounded_tail(&self.engine_log_path(), self.export_log_bytes);
         let mut tmp_name = dest.as_os_str().to_owned();
@@ -446,6 +449,81 @@ fn write_pretty_sorted(path: &Path, map: &Map<String, Value>) -> Result<()> {
     fs::write(&tmp, text)?;
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// The exported `events.jsonl`.
+struct EventsTail {
+    /// One JSON object per line.
+    text: String,
+    /// Older records were left out to stay within the byte limit.
+    truncated: bool,
+    /// Lines that were not valid JSON (a record cut short by a crash) and
+    /// were dropped.
+    invalid_lines: usize,
+}
+
+/// The newest records of `events.jsonl` that fit in `max_bytes`, as valid
+/// JSON lines. Each line is parsed, redacted again as JSON (so a rule added
+/// since a session wrote it still applies) and written back; text-level
+/// redaction would turn `"auth":"<redacted>"` into `"auth":<redacted>`, which
+/// is not JSON. A line cut off by the byte limit or by a crash is dropped,
+/// and a missing file is an empty one: the file never holds a line that is
+/// not a record.
+fn events_tail(path: &Path, max_bytes: u64) -> EventsTail {
+    let mut out = EventsTail {
+        text: String::new(),
+        truncated: false,
+        invalid_lines: 0,
+    };
+    let Ok(mut file) = File::open(path) else {
+        return out;
+    };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = size.saturating_sub(max_bytes);
+    let mut data = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err()
+        || file.take(max_bytes).read_to_end(&mut data).is_err()
+    {
+        return out;
+    }
+    if start > 0 {
+        // The first line starts before the window: drop its tail end.
+        out.truncated = true;
+        let skip = data
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(data.len(), |p| p + 1);
+        data.drain(..skip);
+    }
+    let mut lines: std::collections::VecDeque<String> = String::from_utf8_lossy(&data)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| match serde_json::from_str::<Value>(line) {
+            Ok(mut record) => {
+                redact_json(&mut record);
+                serde_json::to_string(&record).ok()
+            }
+            Err(_) => {
+                out.invalid_lines += 1;
+                None
+            }
+        })
+        .collect();
+    // Redaction can lengthen a line ("<redacted>" for a short secret): keep
+    // the newest records within the limit.
+    let mut total: u64 = lines.iter().map(|l| l.len() as u64 + 1).sum();
+    while total > max_bytes {
+        let Some(oldest) = lines.pop_front() else {
+            break;
+        };
+        total -= oldest.len() as u64 + 1;
+        out.truncated = true;
+    }
+    for line in lines {
+        out.text.push_str(&line);
+        out.text.push('\n');
+    }
+    out
 }
 
 /// Reads at most `max_bytes` from the end of `path`, redacted, prefixed with
