@@ -1084,8 +1084,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 let result = if !upright {
                     Err("the output is rotated or flipped".to_string())
                 } else {
-                    // Only the 16x9 sample pixels are read from the
-                    // surface, never the whole frame.
+                    // Only the 16x9 sample pixels are read: from a direct
+                    // mapping of the surface where the driver allows one,
+                    // else from FFmpeg's copy of the whole surface (logged
+                    // once).
                     let (columns, rows) = (ContentWatchdog::COLUMNS, ContentWatchdog::ROWS);
                     if watchdog.tick()
                         && enc
