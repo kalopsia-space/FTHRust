@@ -933,3 +933,96 @@ fn a_leftover_engine_is_asked_to_stop() {
     // Nothing listening: nothing to do, and quickly.
     rt.block_on(fthrust_ui::services::engine::retire_stale_engine(&path));
 }
+
+/// Review of the audit fixes: quitting right after Apply, or within the
+/// auto-restart delay, must not start a new engine.
+#[test]
+fn stop_is_final() {
+    use fthrust_ui::services::engine::AUTO_RESTART_DELAY_S;
+    // Apply, then quit before the restart gap ends.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 90, &mut now);
+    sv.handle(restart(144), now);
+    let mut fx = sv.handle(Input::Stop, now + 0.2);
+    fx.extend(sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.5));
+    fx.extend(sv.handle(Input::Tick, now + 3.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    // A crash, then quit inside the auto-restart delay.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 91, &mut now);
+    sv.handle(Input::ProcessExited { code: Some(139) }, now + 1.0);
+    let mut fx = sv.handle(Input::Stop, now + 1.5);
+    fx.extend(sv.handle(Input::Tick, now + 1.0 + AUTO_RESTART_DELAY_S + 1.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+}
+
+/// A stop that arrives while the process is still being spawned kills the
+/// process once it appears.
+#[test]
+fn a_process_spawned_after_a_stop_is_killed() {
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Stop, 0.1);
+    let fx = sv.handle(Input::Spawned { pid: 92 }, 0.2);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Kill {
+                graceful: false,
+                ..
+            }
+        )),
+        "{fx:?}"
+    );
+}
+
+/// Settings merged into a restart that hasn't configured its process yet
+/// are the ones reported active.
+#[test]
+fn a_merged_restart_reports_the_settings_it_ran() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 93, &mut now);
+    sv.handle(restart(90), now);
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.2);
+    sv.handle(Input::Tick, now + 1.5);
+    sv.handle(restart(144), now + 1.55);
+    sv.handle(Input::Spawned { pid: 94 }, now + 1.6);
+    sv.handle(
+        Input::Hello {
+            pid: 94,
+            version: "x".into(),
+        },
+        now + 1.7,
+    );
+    let mut fx = Vec::new();
+    let mut t = now + 1.7;
+    let mut frames = 0;
+    for _ in 0..6 {
+        t += 0.5;
+        frames += 30;
+        fx.extend(sv.handle(Input::Status(status(frames, flags::ACTIVE, 1)), t));
+    }
+    let active = fx.iter().rev().find_map(|e| match e {
+        Effect::Ui(Event::ActiveConfig(Some(c))) => Some(c.fps),
+        _ => None,
+    });
+    assert_eq!(active, Some(144), "{fx:?}");
+}
+
+/// While the old process is still stopping, an overdue restart doesn't make
+/// the supervisor wake every 10 ms.
+#[test]
+fn an_overdue_restart_waits_for_the_stop() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 95, &mut now);
+    sv.handle(restart(144), now);
+    let later = now + 5.0;
+    sv.handle(Input::Tick, later);
+    if let Some(at) = sv.next_deadline() {
+        assert!(at > now + 1.0, "deadline {at} is the overdue restart");
+    }
+}

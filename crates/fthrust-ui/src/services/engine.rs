@@ -180,6 +180,8 @@ pub struct Supervisor {
     queued_restart: Option<(EngineConfig, bool, bool)>,
     /// When the engine was last restarted on its own (crash or hang).
     auto_restarts: Vec<f64>,
+    /// The app is quitting: nothing starts the engine again.
+    final_stop: bool,
     applying: bool,
     apply_deadline: Option<f64>,
     last_event_at: f64,
@@ -223,6 +225,7 @@ impl Supervisor {
             deferred_restart: None,
             queued_restart: None,
             auto_restarts: Vec::new(),
+            final_stop: false,
             applying: false,
             apply_deadline: None,
             last_event_at: 0.0,
@@ -243,6 +246,11 @@ impl Supervisor {
     /// The save service reports whether a save is in flight.
     pub fn set_save_busy(&mut self, busy: bool) {
         self.save_busy = busy;
+    }
+
+    /// Whether a clip save is in flight.
+    pub fn save_busy(&self) -> bool {
+        self.save_busy
     }
 
     /// The recording service reports whether a recording is not idle.
@@ -357,6 +365,9 @@ impl Supervisor {
     }
 
     fn begin_start(&mut self, config: EngineConfig, out: &mut Vec<Effect>, now: f64) {
+        if self.final_stop {
+            return;
+        }
         self.generation += 1;
         self.process_generation = Some(self.generation);
         self.exit_code = None;
@@ -429,9 +440,7 @@ impl Supervisor {
     /// RESTART ENGINE, so capture silently ended mid-game. It now comes back
     /// on its own a few times; the error bar still says what happened.
     fn schedule_auto_restart(&mut self, out: &mut Vec<Effect>, now: f64) {
-        self.auto_restarts
-            .retain(|t| now - t < AUTO_RESTART_WINDOW_S);
-        if self.auto_restarts.len() >= AUTO_RESTART_LIMIT || self.config.is_none() {
+        if !self.auto_restart_allowed(now) {
             return;
         }
         self.auto_restarts.push(now);
@@ -439,11 +448,22 @@ impl Supervisor {
         out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
     }
 
+    /// Whether an automatic restart is still in the budget.
+    fn auto_restart_allowed(&mut self, now: f64) -> bool {
+        self.auto_restarts
+            .retain(|t| now - t < AUTO_RESTART_WINDOW_S);
+        !self.final_stop && self.config.is_some() && self.auto_restarts.len() < AUTO_RESTART_LIMIT
+    }
+
     /// When the supervisor next has something to do on its own (a timer);
     /// `None` when only inputs can change anything.
     pub fn next_deadline(&self) -> Option<f64> {
         let mut at: Vec<f64> = Vec::new();
-        at.extend(self.restart_at);
+        // A restart waits for the old process to be gone: due while it is
+        // still stopping, it must not make the loop spin.
+        if self.phase == Phase::Stopped {
+            at.extend(self.restart_at);
+        }
         at.extend(self.defer_restart_until);
         at.extend(self.apply_deadline);
         if let Phase::Connecting { since } = self.phase {
@@ -472,6 +492,14 @@ impl Supervisor {
                 }
             }
             Input::Stop => {
+                // Quitting: nothing may start the engine again (an armed
+                // restart used to spawn a new engine after the stop).
+                self.final_stop = true;
+                self.restart_at = None;
+                self.defer_restart_until = None;
+                self.deferred_restart = None;
+                self.queued_restart = None;
+                self.finish_apply(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
                     // Quitting mid-save: let the engine finish the clip.
                     let grace_s = if self.save_busy {
@@ -487,6 +515,9 @@ impl Supervisor {
                 allow_recording_prepare,
                 explicit,
             } => {
+                if self.final_stop {
+                    return out;
+                }
                 if self.recording && !(allow_recording_prepare && self.recording_preparing) {
                     self.error(
                         &mut out,
@@ -520,8 +551,14 @@ impl Supervisor {
                     // after that, they need one more restart once this one
                     // settles (both used to be dropped).
                     if self.pending_launch.is_some() {
+                        let explicit =
+                            explicit || self.queued_restart.as_ref().is_some_and(|q| q.2);
                         self.queued_restart = Some((config, allow_recording_prepare, explicit));
                     } else {
+                        // The tracker must hold what Configure will send, or
+                        // the old settings are reported as active.
+                        self.tracker.request(config.capture.clone());
+                        let _ = self.tracker.begin_apply();
                         self.config = Some(config);
                     }
                     return out;
@@ -560,6 +597,15 @@ impl Supervisor {
                     self.phase = Phase::Connecting { since: now };
                     self.last_event_at = now;
                     out.push(Effect::Connect);
+                } else if matches!(self.phase, Phase::Stopping | Phase::Stopped) {
+                    // A stop arrived while the process was still being
+                    // spawned: the kill found no child then, so the process
+                    // that just appeared would run unseen.
+                    self.phase = Phase::Stopping;
+                    out.push(Effect::Kill {
+                        graceful: false,
+                        grace_s: 0.0,
+                    });
                 }
             }
             Input::SpawnFailed { detail, missing } => {
@@ -869,12 +915,13 @@ impl Supervisor {
             && self.silence_reported
             && now - self.last_event_at >= HANG_RESTART_S
         {
-            tracing::warn!("engine silent for {HANG_RESTART_S} s; restarting it");
-            self.engine_gone(
-                &mut out,
-                "The capture engine stopped answering and was restarted.".into(),
-                now,
-            );
+            tracing::warn!("engine silent for {HANG_RESTART_S} s; stopping it");
+            let detail = if self.auto_restart_allowed(now) {
+                "The capture engine stopped answering; it is being restarted."
+            } else {
+                "The capture engine stopped answering and was stopped. Clips cannot be saved until it is restarted."
+            };
+            self.engine_gone(&mut out, detail.into(), now);
             // engine_gone marked it stopped; the process is still there.
             self.phase = Phase::Stopping;
             self.generation += 1;
@@ -1089,8 +1136,20 @@ impl EngineDriver {
     /// it is done, so a save in flight is finished rather than cut off by
     /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
+        let save_busy = self
+            .supervisor
+            .lock()
+            .map(|s| s.save_busy())
+            .unwrap_or(false);
         let _ = self.inputs.send(Input::Stop);
-        let deadline = Instant::now() + Duration::from_secs_f64(SAVE_EXIT_GRACE_S + 3.0);
+        // The kill task's own bound: the graceful wait it was given, then
+        // 1 s after SIGTERM and 0.5 s after SIGKILL, plus some slack.
+        let grace = if save_busy {
+            SAVE_EXIT_GRACE_S
+        } else {
+            KILL_GRACE_S
+        };
+        let deadline = Instant::now() + Duration::from_secs_f64(grace + 3.0);
         // The supervisor picks the Stop up within one loop turn; give it
         // that long before trusting "no process" to mean "already gone".
         std::thread::sleep(Duration::from_millis(150));
