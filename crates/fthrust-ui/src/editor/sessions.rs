@@ -168,6 +168,10 @@ fn release_active(state: &mut AppState, keep: bool) {
     let Some(mut e) = state.editor.take() else {
         return;
     };
+    // The frame goes whatever else happens: the editor is gone either way, and
+    // its texture (and the live preview's last frame) must not outlive it.
+    state.editor_video = None;
+    state.editor_filmstrip.clear();
     let Some(st) = store(state) else {
         return;
     };
@@ -178,8 +182,6 @@ fn release_active(state: &mut AppState, keep: bool) {
     {
         slot.state = keep.then_some(captured);
     }
-    state.editor_video = None;
-    state.editor_filmstrip.clear();
 }
 
 /// App exit: the active editor flushes its details, gesture and draft

@@ -706,6 +706,29 @@ fn the_details_panel_does_not_open_the_database_every_frame() {
     );
 }
 
+#[test]
+fn closing_the_editor_frees_its_frame_even_when_its_details_cannot_be_saved() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("clip.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    s.editor_video = Some(fthrust_ui::video_texture::VideoTexture::new());
+    // A directory where the details database belongs: the editor's state
+    // cannot be saved, and the close used to stop there with the frame (and,
+    // with Live edit preview on, the preview's bind group on it) still held.
+    std::fs::create_dir_all(s.paths.clip_metadata_db()).unwrap();
+    sessions::shutdown(&mut s);
+    assert!(s.editor.is_none(), "the editor is gone");
+    assert!(
+        s.editor_video.is_none(),
+        "the editor's video frame is still held"
+    );
+}
+
 /// Ticks the editor with `rs` until its first video frame is a texture.
 fn first_video_texture(r: &mut Rig, rs: &egui_wgpu::RenderState) -> Option<egui::TextureId> {
     for _ in 0..500 {
