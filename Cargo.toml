@@ -24,7 +24,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 fast_image_resize = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 nix = { version = "0.31", features = ["fs", "user", "poll", "signal", "time"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 uuid = { version = "1", features = ["v4"] }
@@ -54,7 +53,6 @@ zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 getrandom = "0.3"
 hmac = "0.13"
 sha1 = "0.11"
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "wayland", "default_fonts", "accesskit"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }
 resvg = { version = "0.45", default-features = false }
@@ -62,7 +60,7 @@ egui-wgpu = { version = "0.37", features = ["wayland", "winit"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links", "wayland"] }
 winit = { version = "0.30", default-features = false, features = ["wayland", "rwh_06"] }
 pollster = "0.4"
-egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
 
 # CI linkers ran out of space/memory on full debug info for the large test
 # binaries (ld: Bus error); line tables keep backtraces useful.
