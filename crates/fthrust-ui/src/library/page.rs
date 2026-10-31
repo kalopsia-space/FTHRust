@@ -531,9 +531,12 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         ui.set_width(area_rect.width());
         let origin = ui.cursor().min;
         // egui hands over the visible part in content coordinates (0,0 is the
-        // content's top left); the rows below are laid out from `origin` in
-        // screen coordinates, which moves up as the area scrolls.
-        let viewport = viewport.translate(origin.to_vec2());
+        // content's top left, before the area's content margin); the rows below
+        // are laid out from `origin` in screen coordinates, which moves up as
+        // the area scrolls and starts below that margin. What is visible, in
+        // those coordinates, is the area itself: its top left whatever the
+        // offset or the margin, and the size egui reports.
+        let viewport = Rect::from_min_size(area_rect.min, viewport.size());
         let x0 = origin.x;
         let mut y = origin.y;
         if let Some(empty) = state.library.empty.clone() {

@@ -634,17 +634,22 @@ fn a_failed_thumbnail_is_asked_for_again_after_a_while() {
     assert_eq!(s.thumb_requests_total, 1, "tried again once it is due");
 }
 
-#[test]
-fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
+/// Scrolls a 60-clip, two-day Clips page from the top to its end and checks
+/// at every step that the cards and day headers cover the visible area.
+/// `margin` is a content margin on the scroll area's style: the page lays
+/// its rows out below it and must draw the same. With `fine`, once the second
+/// day's header has shown up the steps shrink to 16 px, so that the header
+/// crosses the top edge of the area in several of them.
+fn scroll_the_grid_to_the_end(size: Vec2, ppp: f32, margin: egui::Margin, fine: bool) {
     let (tmp, mut s) = state(serde_json::json!({}));
-    let root = tmp.path().join("clips");
     // 60 clips over two days: 40 on the newer one.
-    s.library.records = two_day_records(&root, 40, 20);
+    s.library.records = two_day_records(&tmp.path().join("clips"), 40, 20);
     s.library_dirty = true;
     let tokens = s.tokens.clone();
     let offset = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
     let seen = offset.clone();
-    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+    let mut h = common::harness(size, ppp, &tokens, |ui| {
+        ui.style_mut().spacing.scroll.content_margin = margin;
         shell::frame(ui, &mut s);
         seen.set(s.library_scroll);
     });
@@ -653,41 +658,43 @@ fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
         let m = markers_after(&mut h);
         m.iter().find(|m| m.name == "filterBar").unwrap().rect.max.y + 8.0
     };
-    let area_bottom = 900.0;
-    h.hover_at(Pos2::new(700.0, 500.0));
+    let area_bottom = size.y;
+    h.hover_at(Pos2::new(size.x / 2.0, (area_top + area_bottom) / 2.0));
     let mut headers_seen = std::collections::BTreeSet::new();
+    let mut step_px = 400.0;
     let mut last = -1.0f32;
-    for step in 0..30 {
+    let mut reached_end = false;
+    for step in 0..600 {
         let m = markers_after(&mut h);
         for m in m.iter().filter(|m| m.name.starts_with("sectionHeader[")) {
             headers_seen.insert(m.name.clone());
         }
+        if fine && headers_seen.len() == 2 {
+            step_px = 16.0;
+        }
+        // The margin above the first row is empty by design.
+        let content_top = area_top + (f32::from(margin.top) - offset.get()).max(0.0);
         let on_screen = drawn(&m);
-        let blank = blank_bands(&on_screen, area_top, area_bottom);
+        let blank = blank_bands(&on_screen, content_top, area_bottom);
         assert!(
             blank.is_empty(),
-            "step {step}, scrolled {:.0} px: nothing is drawn at {blank:?} (drawn: {:?})",
+            "{size:?} at {ppp}, step {step}, scrolled {:.0} px: nothing is drawn at {blank:?} (drawn: {:?})",
             offset.get(),
             on_screen
                 .iter()
                 .map(|(n, r)| (n.clone(), r.min.y as i32))
                 .collect::<Vec<_>>()
         );
-        if (offset.get() - last).abs() < 0.5 && step > 0 {
-            break; // the end of the content
+        if step > 0 && (offset.get() - last).abs() < 0.5 {
+            reached_end = true;
+            break;
         }
         last = offset.get();
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: Vec2::new(0.0, -400.0),
-            phase: egui::TouchPhase::Move,
-            source: egui::MouseWheelSource::Wheel,
-            modifiers: egui::Modifiers::NONE,
-        });
-        h.run_steps(10);
+        wheel_down(&mut h, step_px);
+        h.run_steps(if step_px < 100.0 { 6 } else { 10 });
     }
     assert!(
-        offset.get() > 6000.0,
+        reached_end && offset.get() > 4000.0,
         "scrolled to the end of the content: {}",
         offset.get()
     );
@@ -696,4 +703,29 @@ fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
         2,
         "both day headers were drawn: {headers_seen:?}"
     );
+}
+
+#[test]
+fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
+    scroll_the_grid_to_the_end(Vec2::new(1440.0, 900.0), 1.0, egui::Margin::ZERO, false);
+}
+
+#[test]
+fn the_grid_draws_at_a_small_window_and_a_scaled_screen_too() {
+    // Two columns, a 300 px band under the filter bar, 1.5 pixels per point.
+    scroll_the_grid_to_the_end(Vec2::new(800.0, 500.0), 1.5, egui::Margin::ZERO, false);
+}
+
+#[test]
+fn the_grid_does_not_depend_on_the_scroll_areas_content_margin() {
+    // egui hands over the visible part relative to the content before its
+    // margin, while the rows are laid out inside it: with a margin the page
+    // used to cull headers that were still in view at the top edge.
+    let margin = egui::Margin {
+        left: 0,
+        right: 0,
+        top: 120,
+        bottom: 0,
+    };
+    scroll_the_grid_to_the_end(Vec2::new(1440.0, 900.0), 1.0, margin, true);
 }
