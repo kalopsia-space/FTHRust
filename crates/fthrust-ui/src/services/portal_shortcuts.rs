@@ -180,7 +180,12 @@ async fn run(
                 return;
             }
         };
-    let session = match proxy.create_session(Default::default()).await {
+    // Every portal call is bounded: a portal that stops answering used to
+    // park this task (and every hotkey it delivers) for good.
+    let session = match tokio::time::timeout(CALL_TIMEOUT, proxy.create_session(Default::default()))
+        .await
+        .unwrap_or(Err(ashpd::Error::NoResponse))
+    {
         Ok(s) => s,
         Err(e) => {
             outbox.send(Event::PortalShortcutsFailed(format!(
@@ -189,7 +194,10 @@ async fn run(
             return;
         }
     };
-    let mut activated = match proxy.receive_activated().await {
+    let mut activated = match tokio::time::timeout(CALL_TIMEOUT, proxy.receive_activated())
+        .await
+        .unwrap_or(Err(ashpd::Error::NoResponse))
+    {
         Ok(s) => s,
         Err(e) => {
             outbox.send(Event::PortalShortcutsFailed(format!(
@@ -198,7 +206,10 @@ async fn run(
             return;
         }
     };
-    let mut changed = proxy.receive_shortcuts_changed().await.ok();
+    let mut changed = tokio::time::timeout(CALL_TIMEOUT, proxy.receive_shortcuts_changed())
+        .await
+        .ok()
+        .and_then(Result::ok);
     let bind = |list: Vec<(String, String, String)>| {
         let proxy = &proxy;
         let session = &session;
@@ -227,7 +238,7 @@ async fn run(
             )
         }
     };
-    match tokio::time::timeout(std::time::Duration::from_secs(60), bind(shortcuts)).await {
+    match tokio::time::timeout(BIND_TIMEOUT, bind(shortcuts)).await {
         Ok(Ok(bound)) => outbox.send(Event::PortalShortcutsBound(bound)),
         Ok(Err(e)) => {
             outbox.send(Event::PortalShortcutsFailed(format!(
@@ -246,13 +257,17 @@ async fn run(
         tokio::select! {
             msg = rx.recv() => match msg {
                 Some(Msg::Configure) => {
-                    if let Err(e) = proxy.configure_shortcuts(&session, None, Default::default()).await {
-                        outbox.send(Event::PortalShortcutsFailed(format!("Could not open the desktop shortcut settings: {e}")));
+                    let configure = proxy.configure_shortcuts(&session, None, Default::default());
+                    match tokio::time::timeout(CALL_TIMEOUT, configure).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => outbox.send(Event::PortalShortcutsFailed(format!("Could not open the desktop shortcut settings: {e}"))),
+                        Err(_) => outbox.send(Event::PortalShortcutsFailed("The desktop shortcut settings did not open.".into())),
                     }
                 }
-                Some(Msg::Rebind(list)) => match bind(list).await {
-                    Ok(bound) => outbox.send(Event::PortalShortcutsBound(bound)),
-                    Err(e) => outbox.send(Event::PortalShortcutsFailed(format!("GlobalShortcuts bind failed: {e}"))),
+                Some(Msg::Rebind(list)) => match tokio::time::timeout(BIND_TIMEOUT, bind(list)).await {
+                    Ok(Ok(bound)) => outbox.send(Event::PortalShortcutsBound(bound)),
+                    Ok(Err(e)) => outbox.send(Event::PortalShortcutsFailed(format!("GlobalShortcuts bind failed: {e}"))),
+                    Err(_) => outbox.send(Event::PortalShortcutsFailed("GlobalShortcuts bind timed out.".into())),
                 },
                 Some(Msg::Stop) | None => break,
             },
@@ -277,5 +292,10 @@ async fn run(
             }
         }
     }
-    let _ = session.close().await;
+    let _ = tokio::time::timeout(CALL_TIMEOUT, session.close()).await;
 }
+
+/// How long one GlobalShortcuts call may take.
+const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a bind may take (the desktop may ask the user).
+const BIND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);

@@ -435,3 +435,47 @@ fn low_disk_space_stops_the_recording() {
     let e = s.error_bar.current().unwrap();
     assert_eq!(e.title, "RECORDING STOPPED — LOW DISK SPACE");
 }
+
+/// Audit 2026-10-31: a finished-recording check that never answers ends
+/// in a failure after 30 s instead of "Finalizing…" for good.
+#[test]
+fn a_stuck_finalize_check_times_out() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.set_recording_check_for_tests(|_| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        Ok(())
+    });
+    connected(&mut services, &mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StartRecording { path, request_id } =
+        services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id,
+        path: path.clone(),
+    }));
+    services.tick(&mut s);
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StopRecording { request_id } = services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStopped {
+        request_id,
+        path,
+        bytes: 1,
+    }));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Finalizing);
+    services.advance_clock_for_tests(31.0);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);
+}

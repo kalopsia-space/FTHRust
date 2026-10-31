@@ -743,6 +743,14 @@ impl Services {
         self.screenshot.pending()
     }
 
+    /// Stands in the finished-recording check (tests).
+    pub fn set_recording_check_for_tests(
+        &mut self,
+        check: fn(&std::path::Path) -> Result<(), String>,
+    ) {
+        self.recording.set_finalize_check(check);
+    }
+
     /// The recording state.
     pub fn recording_state(&self) -> recording::RecordState {
         self.recording.state()
