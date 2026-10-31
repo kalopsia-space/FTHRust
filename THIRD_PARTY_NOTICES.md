@@ -6630,7 +6630,7 @@ DEALINGS IN THE SOFTWARE.
 ### MIT License
 
 - `argon2` 0.6.0
-- `crypto-bigint` 0.7.6
+- `crypto-bigint` 0.7.10
 - `pkcs5` 0.8.1
 - `scrypt` 0.12.0
 - `sec1` 0.8.1
@@ -7224,7 +7224,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### MIT License
 
-- `ctutils` 0.4.5
+- `ctutils` 0.4.7
 
 ```text
 Copyright (c) 2025-2026 The RustCrypto Project Developers
