@@ -769,16 +769,35 @@ impl Supervisor {
                 let explicit = code != "ENGINE_START_FAILED";
                 self.tracker.fail(&detail);
                 self.finish_apply(&mut out);
-                let (title, public) = if explicit {
-                    ("CAPTURE FAILED", "Error 001")
+                let (title, public, text, status) = if code == "CAPTURE_NOT_RESTORED" {
+                    // The app restarted capture on its own, and the portal
+                    // could only have gone on with its dialog.
+                    (
+                        "SCREEN SHARING NOT RESTORED",
+                        "Error 001",
+                        NOT_RESTORED_DETAIL.to_owned(),
+                        "CAPTURE STOPPED",
+                    )
+                } else if explicit {
+                    (
+                        "CAPTURE FAILED",
+                        "Error 001",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 } else {
-                    ("ENGINE NOT RESPONDING", "Error 004")
+                    (
+                        "ENGINE NOT RESPONDING",
+                        "Error 004",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 };
-                self.status(&mut out, "CAPTURE FAILED", StatusStyle::Warning);
+                self.status(&mut out, status, StatusStyle::Warning);
                 self.error(
                     &mut out,
                     title,
-                    format!("{code}: {detail}"),
+                    text,
                     Level::Error,
                     vec![("RESTART ENGINE", "restart")],
                     Some("engine-launch"),
@@ -1052,6 +1071,9 @@ impl Supervisor {
         }
     }
 }
+
+/// The error bar's text for `CAPTURE_NOT_RESTORED`.
+pub const NOT_RESTORED_DETAIL: &str = "FTHRust restarted capture on its own, and your desktop would have to ask again which screen to share. FTHRust doesn't bring that dialog up without you: press RESTART ENGINE to choose a screen.";
 
 fn startup_warning_title(code: &str) -> String {
     match code {

@@ -729,6 +729,30 @@ fn an_engine_the_app_restarted_on_its_own_never_opens_with_a_dialog() {
 }
 
 #[test]
+fn an_automatic_start_the_portal_cannot_restore_is_coded() {
+    // The app restarted the engine on its own, and the portal has no saved
+    // choice: going on would mean its dialog. Capture stops with a code of
+    // its own, not as if the user had dismissed the picker. (No portal is
+    // contacted: without a token the restore-only open fails at once.)
+    let home = tempfile::tempdir().unwrap();
+    let deps = EngineDeps {
+        backends: Arc::new(
+            RealFactory::assume_wayland(true).with_paths(fthrust_core::FthrPaths::new(home.path())),
+        ),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+    };
+    let mut cfg = config(|_| {});
+    cfg.backend_override = Some(BackendKind::PortalScreenCast);
+    cfg.automatic_start = true;
+    let mut engine = CaptureEngine::new(cfg, deps);
+    let err = engine.start().unwrap_err();
+    engine.shutdown();
+    assert_eq!(err.code, "CAPTURE_NOT_RESTORED", "{err:?}");
+    assert!(err.detail.contains("dialog"), "{err:?}");
+}
+
+#[test]
 fn startup_without_wayland_is_coded() {
     let deps = EngineDeps {
         backends: Arc::new(RealFactory::assume_wayland(false)),

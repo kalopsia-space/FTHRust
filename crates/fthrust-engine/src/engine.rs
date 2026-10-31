@@ -778,7 +778,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         report_first(
                             &inner,
                             FirstOutcome::Failed(StartupError {
-                                code: "CAPTURE_DECLINED",
+                                // A dismissed picker, or (an automatic start)
+                                // a portal that would have had to ask again.
+                                code: if f.needs_dialog {
+                                    "CAPTURE_NOT_RESTORED"
+                                } else {
+                                    "CAPTURE_DECLINED"
+                                },
                                 detail: reason,
                             }),
                         );

@@ -1349,3 +1349,57 @@ fn a_restart_merged_with_one_of_the_users_is_the_users() {
     );
     assert_eq!(configured_automatic(&fx), Some(false));
 }
+
+/// An automatic start the portal could only have continued with its
+/// dialog: its own title and words, not a dismissed picker's.
+#[test]
+fn a_restore_only_startup_failure_has_its_own_message() {
+    use fthrust_ui::services::engine::NOT_RESTORED_DETAIL;
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Spawned { pid: 1 }, 0.1);
+    sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        0.2,
+    );
+    let fx = sv.handle(
+        Input::StartupError {
+            code: "CAPTURE_NOT_RESTORED".into(),
+            detail: "the screen-sharing session could not be restored without the desktop's dialog"
+                .into(),
+        },
+        0.3,
+    );
+    let bar = fx.iter().find_map(|e| match e {
+        Effect::Ui(Event::ErrorBar {
+            title,
+            detail,
+            actions,
+            ..
+        }) => Some((
+            title.clone(),
+            detail.clone(),
+            actions.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
+        )),
+        _ => None,
+    });
+    assert_eq!(
+        bar,
+        Some((
+            "SCREEN SHARING NOT RESTORED".to_string(),
+            NOT_RESTORED_DETAIL.to_string(),
+            vec!["restart".to_string()],
+        ))
+    );
+    assert_eq!(
+        status_events(&fx).last().map(|s| s.0.as_str()),
+        Some("CAPTURE STOPPED")
+    );
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+}

@@ -41,22 +41,26 @@ fn failure(e: PortalFailure) -> BackendFailure {
             kind: FailureKind::Error,
             reason: "the screen picker was dismissed".into(),
             retry_pointless: true,
+            needs_dialog: false,
         },
         // Only the user can bring the dialog back (by restarting capture).
         e @ PortalFailure::NeedsDialog => BackendFailure {
             kind: FailureKind::Error,
             reason: e.to_string(),
             retry_pointless: true,
+            needs_dialog: true,
         },
         PortalFailure::Cancelled => BackendFailure {
             kind: FailureKind::Cancelled,
             reason: "capture cancelled".into(),
             retry_pointless: false,
+            needs_dialog: false,
         },
         e => BackendFailure {
             kind: FailureKind::Error,
             reason: e.to_string(),
             retry_pointless: false,
+            needs_dialog: false,
         },
     }
 }
@@ -76,6 +80,7 @@ pub fn open(
             kind: FailureKind::Error,
             reason: e.to_string(),
             retry_pointless: false,
+            needs_dialog: false,
         })?,
     };
     let dialog = match reason {

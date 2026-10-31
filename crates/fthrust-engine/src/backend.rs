@@ -23,6 +23,10 @@ pub struct BackendFailure {
     pub reason: String,
     /// Only user action can resolve it (a dismissed portal dialog).
     pub retry_pointless: bool,
+    /// With `retry_pointless`: the portal could only go on by showing its
+    /// dialog, which this open may not ([`OpenReason::Recovery`]). Capture
+    /// stops with `CAPTURE_NOT_RESTORED` instead of `CAPTURE_DECLINED`.
+    pub needs_dialog: bool,
 }
 
 impl From<wb::BackendError> for BackendFailure {
@@ -31,6 +35,7 @@ impl From<wb::BackendError> for BackendFailure {
             kind: e.kind,
             reason: e.reason,
             retry_pointless: false,
+            needs_dialog: false,
         }
     }
 }
@@ -121,6 +126,14 @@ impl RealFactory {
             paths: None,
         }
     }
+
+    /// Uses `paths` for the portal's restore token (tests).
+    pub fn with_paths(self, paths: fthrust_core::FthrPaths) -> Self {
+        Self {
+            paths: Some(paths),
+            ..self
+        }
+    }
 }
 
 impl BackendFactory for RealFactory {
@@ -170,6 +183,7 @@ impl BackendFactory for RealFactory {
                         kind: FailureKind::Error,
                         reason: "the synthetic backend needs FTHRUST_SYNTHETIC_BACKEND=1".into(),
                         retry_pointless: true,
+                        needs_dialog: false,
                     })
                 }
             }
@@ -379,6 +393,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: FailureKind::Error,
                 reason: format!("{} is not available in this script", kind.name()),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         };
         if let Some(f) = k.fail_inits.pop_front() {
@@ -386,6 +401,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: f,
                 reason: format!("scripted {f:?} on {}", kind.name()),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         }
         let outputs = k
@@ -401,6 +417,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: FailureKind::OutputAbsent,
                 reason: format!("output {} is not advertised right now", cfg.monitor),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         } else {
             outputs.first().cloned().unwrap_or_default()
