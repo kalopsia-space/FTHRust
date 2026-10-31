@@ -593,7 +593,15 @@ fn a_panicking_save_is_answered_and_frees_the_worker() {
         } => assert!(msg.contains("injected window failure"), "{msg}"),
         other => panic!("{other:?}"),
     }
-    assert!(!r.save.is_busy());
+    // The worker clears its busy flag just after sending the result.
+    let freed = Instant::now();
+    while r.save.is_busy() {
+        assert!(
+            freed.elapsed() < Duration::from_secs(2),
+            "the worker stays busy"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(!first.exists());
     assert!(
         !fthrust_media::transactional_save::temporary_path_for(&first).exists(),
