@@ -1874,6 +1874,7 @@ dependencies = [
  "egui",
  "idna",
  "image",
+ "log",
  "md-5",
  "nix",
  "regex",

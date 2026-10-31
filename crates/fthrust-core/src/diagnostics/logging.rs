@@ -9,14 +9,17 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
-use time::OffsetDateTime;
 use time::macros::format_description;
+use time::{OffsetDateTime, UtcOffset};
 use tracing::Subscriber;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use super::redact::redact;
 use crate::error::{CoreError, Result};
@@ -25,10 +28,39 @@ use crate::paths::FthrPaths;
 const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
+/// The local UTC offset, read once. The `time` crate refuses to read it once
+/// other threads exist, so asking per line would give local time for the
+/// start banner and UTC for everything after it; the first call (the banner,
+/// while the app is still single-threaded) decides for the whole log.
+fn local_offset() -> UtcOffset {
+    static OFFSET: OnceLock<UtcOffset> = OnceLock::new();
+    *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
+}
+
 fn local_now_text() -> String {
-    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    now.format(DATE_FORMAT)
+    OffsetDateTime::now_utc()
+        .to_offset(local_offset())
+        .format(DATE_FORMAT)
         .unwrap_or_else(|_| "0000-00-00 00:00:00".into())
+}
+
+/// What the app logs without `RUST_LOG`: info for FTHRust's own crates (every
+/// target starting with `fthrust`, the binary included) and warnings from
+/// everything else.
+pub const DEFAULT_LOG_FILTER: &str = "warn,fthrust=info";
+
+/// The filter for `rust_log` (the value of `RUST_LOG`), or
+/// [`DEFAULT_LOG_FILTER`] when it is unset or not a valid filter.
+pub fn env_filter_from(rust_log: Option<&str>) -> EnvFilter {
+    rust_log
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| EnvFilter::try_new(s).ok())
+        .unwrap_or_else(|| EnvFilter::new(DEFAULT_LOG_FILTER))
+}
+
+/// [`env_filter_from`] the process's `RUST_LOG`.
+pub fn default_env_filter() -> EnvFilter {
+    env_filter_from(std::env::var("RUST_LOG").ok().as_deref())
 }
 
 /// Size-rotating log file that redacts each line and mirrors it to stderr.
@@ -233,13 +265,32 @@ impl Logger {
         })
     }
 
-    /// A `tracing` subscriber that writes every event through this log.
-    pub fn subscriber(&self) -> impl Subscriber + Send + Sync + 'static {
-        tracing_subscriber::fmt()
+    /// The layer that formats every event into this log. No terminal escape
+    /// codes: the file (and the stderr mirror of it) is plain text.
+    fn fmt_layer<S>(&self) -> impl tracing_subscriber::Layer<S> + Send + Sync + 'static
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        tracing_subscriber::fmt::layer()
             .event_format(FthrFormat)
             .with_writer(self.writer.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .finish()
+            .with_ansi(false)
+    }
+
+    /// A `tracing` subscriber that writes every event through this log.
+    pub fn subscriber(&self) -> impl Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry().with(self.fmt_layer())
+    }
+
+    /// Like [`subscriber`](Self::subscriber), but only the events `filter`
+    /// lets through (see [`default_env_filter`]).
+    pub fn subscriber_with_filter(
+        &self,
+        filter: EnvFilter,
+    ) -> impl Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(self.fmt_layer())
     }
 
     /// Flushes buffered output.
@@ -266,11 +317,18 @@ impl Drop for LogGuard {
     }
 }
 
-/// Opens the application log and installs it as the global `tracing`
-/// subscriber. Fails if a global subscriber is already installed.
+/// Opens the application log (`logs/fthr.log`, also mirrored to stderr) and
+/// installs it as the global `tracing` subscriber, filtered by `RUST_LOG` or
+/// else [`DEFAULT_LOG_FILTER`]. Records from the `log` crate (wgpu, winit...)
+/// are forwarded too. Fails if a global subscriber is already installed.
+///
+/// Call it while the process is still single-threaded: the log's timestamps
+/// use the local offset read then.
 pub fn init_logging(paths: &FthrPaths, app_version: &str) -> Result<LogGuard> {
     let logger = Logger::open(paths, app_version)?;
-    tracing::subscriber::set_global_default(logger.subscriber())
+    logger
+        .subscriber_with_filter(default_env_filter())
+        .try_init()
         .map_err(|e| CoreError::Invalid(format!("global logger already installed: {e}")))?;
     Ok(LogGuard { logger })
 }

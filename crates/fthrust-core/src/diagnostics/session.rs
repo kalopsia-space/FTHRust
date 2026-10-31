@@ -1,16 +1,19 @@
 //! Field-diagnostics sessions under `~/.fthr/diagnostics`.
 //!
 //! Ports the session parts of `reference/FTHR_UI/core/field_diagnostics.py`:
-//! one `session-<utc>-<id>` directory per run holding `events.jsonl`,
-//! `engine.log` and `diagnostic-summary.json`, an `active-session.json`
-//! marker that reveals unclean shutdowns, retention of the five newest
-//! sessions, and the privacy-bounded zip export.
+//! one `session-<utc>-<id>` directory per run holding `events.jsonl` and
+//! `diagnostic-summary.json`, an `active-session.json` marker that reveals
+//! unclean shutdowns (removed by [`DiagnosticsSession::close`]), retention of
+//! the five newest sessions, and the privacy-bounded zip export, whose
+//! `ui.log` and `engine.log` are the tails of `logs/fthr.log` and of the
+//! engine's captured stderr, `logs/engine.log`.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use serde_json::{Map, Value, json};
@@ -76,7 +79,10 @@ pub struct DiagnosticsSession {
     started_at: Instant,
     max_event_bytes: u64,
     export_log_bytes: u64,
+    /// The engine's captured stderr, `logs/engine.log`.
+    engine_log: PathBuf,
     previous: Option<Value>,
+    closed: AtomicBool,
     inner: Mutex<Inner>,
 }
 
@@ -153,7 +159,9 @@ impl DiagnosticsSession {
             started_at: Instant::now(),
             max_event_bytes,
             export_log_bytes,
+            engine_log: paths.engine_log(),
             previous,
+            closed: AtomicBool::new(false),
             inner: Mutex::new(Inner {
                 event_bytes: 0,
                 dropped_events: 0,
@@ -198,9 +206,10 @@ impl DiagnosticsSession {
         &self.started_utc
     }
 
-    /// Where the engine's stdout is captured for this session.
+    /// The engine's captured stderr, `logs/engine.log` (the file the UI's
+    /// engine driver writes); its tail becomes `engine.log` in the report.
     pub fn engine_log_path(&self) -> PathBuf {
-        self.dir.join("engine.log")
+        self.engine_log.clone()
     }
 
     /// The `events.jsonl` path.
@@ -302,6 +311,40 @@ impl DiagnosticsSession {
             .clone()
     }
 
+    /// Ends the session. The app calls this when its event loop has ended,
+    /// `clean` being false when it ended on an error.
+    ///
+    /// Records `session_ended`, writes `diagnostic-summary.json` with the
+    /// status `closed_cleanly` (or `abnormal`) and, for a clean end, removes
+    /// `active-session.json` if it still names this session. The marker is
+    /// what the next launch reads to say that the previous session "did not
+    /// shut down cleanly": without this it stays forever and every launch
+    /// reports the one before as a crash. Calling it again does nothing.
+    pub fn close(&self, clean: bool) {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.emit(
+            "application",
+            "session_ended",
+            Some(if clean { "clean" } else { "abnormal" }),
+            json!({}),
+        );
+        let ended = json!({
+            "status": if clean { "closed_cleanly" } else { "abnormal" },
+            "session_end": {
+                "clean": clean,
+                "elapsed_ms": self.started_at.elapsed().as_millis() as u64,
+            },
+        });
+        if let Err(e) = self.write_summary(&ended) {
+            tracing::warn!("could not write the diagnostics summary: {e}");
+        }
+        if clean {
+            remove_marker_if_ours(&self.root.join(MARKER_NAME), &self.session_id);
+        }
+    }
+
     /// Writes the privacy-bounded report zip (`.zip` is appended when
     /// missing) and returns its path. `app_log` is the application log whose
     /// bounded tail becomes `ui.log`.
@@ -379,6 +422,18 @@ fn read_previous_marker(marker: &Path, session_id: &str) -> Option<Value> {
         return None;
     }
     Some(value)
+}
+
+/// Removes the marker when it names `session_id`: one that names another
+/// session belongs to a run that is still going (or crashed) and stays.
+fn remove_marker_if_ours(marker: &Path, session_id: &str) {
+    let ours = fs::read_to_string(marker)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|v| v.get("session_id").and_then(Value::as_str) == Some(session_id));
+    if ours && let Err(e) = fs::remove_file(marker) {
+        tracing::warn!("could not remove {}: {e}", marker.display());
+    }
 }
 
 fn write_marker(marker: &Path, session_id: &str, started_utc: &str) -> Result<()> {
