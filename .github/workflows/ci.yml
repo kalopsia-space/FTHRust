@@ -47,6 +47,9 @@ jobs:
       # The quick checks first: they fail in seconds, before the long builds.
       - run: cargo fmt --all --check
       - run: cargo deny --locked check
+      # The isolation check's own tests first: it must fail loudly whenever it
+      # cannot show the app's dependency trees are clean (stub cargo, no build).
+      - run: tools/test-check-upload-isolation.sh
       - run: tools/check-upload-isolation.sh
       - run: tools/check-workspace-deps.sh
       - run: tools/check-assets.sh
@@ -125,6 +128,10 @@ jobs:
       # takes seconds per frame on first page visits and misses the
       # scenarios' 5 s waits.
       - run: cargo build --locked --release -p fthrust-ui -p fthrust-engine -p fthrust-uploader
+      # The uploader's test-only environment overrides (Catbox address, retry
+      # delay) must be compiled out of release builds. The release artifacts
+      # above are reused, so this only builds the test.
+      - run: cargo test --locked --release -p fthrust-uploader --test contract a_release_build_ignores_the_test_overrides
       - run: cd tools/uidrive && cargo build --locked
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/smoke.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
       - run: tools/uidrive/bench.sh run tools/uidrive/scenarios/save_clip.sh --release --renderer pixman --settings tools/uidrive/ci-settings.json
