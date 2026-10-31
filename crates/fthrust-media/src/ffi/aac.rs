@@ -122,6 +122,13 @@ impl AacEncoder {
         self.sample_rate
     }
 
+    /// Samples per channel the encoder puts before the first input sample
+    /// (its priming; the first packet starts that far before input pts 0).
+    pub fn priming_samples(&self) -> u32 {
+        // SAFETY: ctx is a valid, open codec context.
+        unsafe { (*self.ctx).initial_padding.max(0) as u32 }
+    }
+
     /// Allocates codec parameters describing this encoder (caller frees via
     /// [`AacEncoder::free_parameters`]).
     pub(crate) fn parameters(&self) -> Result<*mut ffi::AVCodecParameters> {

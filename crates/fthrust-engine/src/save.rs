@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use fthrust_core::capture_health::flags;
 use fthrust_ipc::{Event, RecordingState, SavedClip, SourceStatus, StatusSnapshot};
+use fthrust_media::audio_timing::{CHANNELS, SAMPLE_RATE};
 use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
 use fthrust_media::recorder::{Recorder, RecorderAudio, RecorderConfig};
 use fthrust_media::ring::EncodedPacket;
@@ -246,8 +247,8 @@ fn run_save(
         .iter()
         .map(|(title, samples)| ClipAudio {
             samples,
-            sample_rate: fthrust_media::audio_timing::SAMPLE_RATE,
-            channels: fthrust_media::audio_timing::CHANNELS as u32,
+            sample_rate: SAMPLE_RATE,
+            channels: CHANNELS as u32,
             title,
         })
         .collect();
@@ -292,10 +293,87 @@ fn run_save(
 
 /// Packets queued for the recorder before it is considered stalled.
 pub const RECORD_BACKLOG_SECONDS: u64 = 8;
-/// Audio is pulled in windows of this length.
+/// Audio is pulled in windows of at least this length.
 pub const RECORD_AUDIO_STEP_MS: u32 = 100;
 /// Audio is pulled this far behind wall time so late blocks still land.
-const RECORD_AUDIO_LAG_NS: i64 = 200_000_000;
+pub const RECORD_AUDIO_LAG_NS: i64 = 200_000_000;
+/// Largest audio window pulled in one piece.
+const RECORD_AUDIO_MAX_MS: u32 = 1000;
+/// Frames per millisecond at the capture rate.
+const FRAMES_PER_MS: u64 = SAMPLE_RATE as u64 / 1000;
+
+/// A recording's audio clock. It starts at the capture time of the
+/// track's first sample and counts the frames handed out, always whole
+/// milliseconds (48 frames at 48 kHz), so every window starts exactly where
+/// the last one ended and the track stays as long as the video however the
+/// pulls fall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioCursor {
+    start_ns: i64,
+    frames: u64,
+}
+
+impl AudioCursor {
+    /// A cursor whose first frame was captured at `start_ns`.
+    pub fn new(start_ns: i64) -> Self {
+        Self {
+            start_ns,
+            frames: 0,
+        }
+    }
+
+    /// Frames (per channel) handed out so far.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// Capture time of the next frame.
+    pub fn next_ns(&self) -> i64 {
+        self.start_ns + (self.frames / FRAMES_PER_MS) as i64 * 1_000_000
+    }
+
+    /// The next window, `(end_ns, duration_ms)`, for audio captured up to
+    /// `until_ns`: whole milliseconds, at most a second, or `None` while
+    /// less than `min_ms` is due.
+    pub fn due(&self, until_ns: i64, min_ms: u32) -> Option<(i64, u32)> {
+        let due_ms = (until_ns - self.next_ns()).div_euclid(1_000_000);
+        if due_ms < i64::from(min_ms.max(1)) {
+            return None;
+        }
+        let ms = due_ms.min(i64::from(RECORD_AUDIO_MAX_MS)) as u32;
+        Some((self.next_ns() + i64::from(ms) * 1_000_000, ms))
+    }
+
+    /// Counts the window from [`AudioCursor::due`] as handed out.
+    pub fn advance(&mut self, duration_ms: u32) {
+        self.frames += u64::from(duration_ms) * FRAMES_PER_MS;
+    }
+}
+
+/// Pulls every window due for audio captured up to `until_ns` (the first
+/// at least `min_ms` long) from each of `sources` and hands it to `write`
+/// as `(track, samples)`, track `i` being `sources[i]`. A source with
+/// nothing for a window (reconnecting, or not capturing) gets silence of
+/// the window's length, so the audio after the gap keeps its place.
+pub fn pump_audio<E>(
+    cursor: &mut AudioCursor,
+    audio: &dyn AudioProvider,
+    sources: &[AudioSourceKind],
+    until_ns: i64,
+    min_ms: u32,
+    mut write: impl FnMut(usize, &[f32]) -> Result<(), E>,
+) -> Result<(), E> {
+    while let Some((end_ns, ms)) = cursor.due(until_ns, min_ms) {
+        let samples = (u64::from(ms) * FRAMES_PER_MS) as usize * CHANNELS;
+        for (track, kind) in sources.iter().enumerate() {
+            let mut pcm = audio.window(*kind, end_ns, ms).unwrap_or_default();
+            pcm.resize(samples, 0.0);
+            write(track, &pcm)?;
+        }
+        cursor.advance(ms);
+    }
+    Ok(())
+}
 
 /// Where a recording is in its life. `Starting` covers opening the file on
 /// the record thread; the status reports it as `Idle`.
@@ -521,8 +599,8 @@ impl RecordJob {
             audio: sources
                 .iter()
                 .map(|(_, title)| RecorderAudio {
-                    sample_rate: fthrust_media::audio_timing::SAMPLE_RATE,
-                    channels: fthrust_media::audio_timing::CHANNELS as u32,
+                    sample_rate: SAMPLE_RATE,
+                    channels: CHANNELS as u32,
                     title: (*title).to_string(),
                 })
                 .collect(),
@@ -561,52 +639,50 @@ impl RecordJob {
             path: self.path.clone(),
         });
         let audio = self.engine.audio();
-        let mut audio_cursor_ns = monotonic_ns() - RECORD_AUDIO_LAG_NS;
-        let mut failure: Option<String> = None;
-        let mut stopped = false;
-        'run: loop {
-            match rx.recv_timeout(Duration::from_millis(50)) {
+        let priming_ns =
+            i64::from(recorder.audio_priming_frames()) * 1_000_000_000 / i64::from(SAMPLE_RATE);
+        let mut session = Session {
+            recorder: &mut recorder,
+            cursor: None,
+            generation,
+            priming_ns,
+            audio_tracks: !sources.is_empty(),
+        };
+        let end = loop {
+            match rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(p) => {
-                    if p.generation != generation {
-                        failure = Some("the encoder was reopened; the recording was closed".into());
-                        break;
-                    }
-                    if let Err(e) = recorder.write_video(&p) {
-                        failure = Some(e.to_string());
-                        break;
+                    if let Err(e) = session.write(&p) {
+                        break LoopEnd::Failed(e);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Disconnected) => break LoopEnd::TapClosed,
             }
-            if !sources.is_empty() {
-                let now = monotonic_ns() - RECORD_AUDIO_LAG_NS;
-                let elapsed_ms = ((now - audio_cursor_ns).max(0) / 1_000_000) as u32;
-                if elapsed_ms >= RECORD_AUDIO_STEP_MS {
-                    for (track, kind) in sources.iter().enumerate() {
-                        if let Some(samples) = audio.window(*kind, now, elapsed_ms)
-                            && let Err(e) = recorder.write_audio(track, &samples)
-                        {
-                            failure = Some(e.to_string());
-                            break 'run;
-                        }
-                    }
-                    audio_cursor_ns = now;
-                }
+            let until_ns = monotonic_ns() - RECORD_AUDIO_LAG_NS;
+            if let Err(e) = session.pump(audio.as_ref(), &sources, until_ns, RECORD_AUDIO_STEP_MS) {
+                break LoopEnd::Failed(e);
             }
             if self.engine.take_record_overflow() {
-                failure = Some(format!(
+                break LoopEnd::Failed(format!(
                     "the recorder fell more than {} s behind; the file keeps every committed fragment",
                     self.backlog_seconds
                 ));
-                break;
             }
             if self.shared.stop.load(Ordering::SeqCst) {
-                stopped = true;
-                break;
+                break LoopEnd::Stopped;
             }
-        }
-        self.engine.set_packet_tap(None);
+        };
+        let stopped = matches!(end, LoopEnd::Stopped);
+        let failure = match end {
+            LoopEnd::Stopped | LoopEnd::TapClosed => {
+                self.engine.set_packet_tap(None);
+                None
+            }
+            LoopEnd::Failed(e) => {
+                self.engine.set_packet_tap(None);
+                Some(e)
+            }
+        };
         let path = recorder.path().to_path_buf();
         let finished = recorder.finish().map_err(|e| e.to_string());
         *self.shared.phase() = Phase::Idle;
@@ -636,4 +712,61 @@ struct Opened {
     rx: Receiver<EncodedPacket>,
     sources: Vec<AudioSourceKind>,
     generation: u64,
+}
+
+/// Why the recording loop ended.
+enum LoopEnd {
+    /// `stop` or `shutdown` asked for it.
+    Stopped,
+    /// Nothing will send packets any more.
+    TapClosed,
+    /// The recording cannot go on.
+    Failed(String),
+}
+
+/// The live state of one recording's writer.
+struct Session<'a> {
+    recorder: &'a mut Recorder,
+    /// Created at the first written keyframe.
+    cursor: Option<AudioCursor>,
+    generation: u64,
+    priming_ns: i64,
+    audio_tracks: bool,
+}
+
+impl Session<'_> {
+    /// Writes one video packet; the first written keyframe starts the audio
+    /// clock. The encoder's priming plays before the first sample handed to
+    /// it, so the audio starts that long after the keyframe and every
+    /// sample plays at its capture time.
+    fn write(&mut self, p: &EncodedPacket) -> Result<(), String> {
+        if p.generation != self.generation {
+            return Err("the encoder was reopened; the recording was closed".into());
+        }
+        self.recorder.write_video(p).map_err(|e| e.to_string())?;
+        if self.cursor.is_none()
+            && self.audio_tracks
+            && let Some(start) = self.recorder.video_start_ns()
+        {
+            self.cursor = Some(AudioCursor::new(start + self.priming_ns));
+        }
+        Ok(())
+    }
+
+    fn pump(
+        &mut self,
+        audio: &dyn AudioProvider,
+        sources: &[AudioSourceKind],
+        until_ns: i64,
+        min_ms: u32,
+    ) -> Result<(), String> {
+        let Some(cursor) = self.cursor.as_mut() else {
+            return Ok(());
+        };
+        let recorder = &mut *self.recorder;
+        pump_audio(cursor, audio, sources, until_ns, min_ms, |track, pcm| {
+            recorder.write_audio(track, pcm)
+        })
+        .map_err(|e| e.to_string())
+    }
 }

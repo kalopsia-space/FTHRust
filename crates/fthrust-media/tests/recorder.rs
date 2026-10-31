@@ -343,3 +343,50 @@ fn tracks_are_written_with_their_titles() {
         .collect();
     assert_eq!(titles, ["Default Mix", "Microphone"]);
 }
+
+#[test]
+fn the_first_audio_sample_plays_after_the_encoder_priming() {
+    // The fragmented MP4 cannot carry an edit list, so the AAC priming plays
+    // at the start of every track: a sample handed to the encoder first
+    // plays `audio_priming_frames()` into the recording. The engine starts
+    // each track's audio that long after the first keyframe.
+    let Some(src) = encode(3, vec![track("Default Mix")]) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("onset.mp4");
+    let mut rec = Recorder::start(&out, &src.config).unwrap();
+    let priming = rec.audio_priming_frames() as usize;
+    assert!(priming > 0, "the AAC encoder primes");
+    // Half a second of silence, then a loud tone.
+    let onset = 24_000usize;
+    let pcm: Vec<f32> = (0..3 * 48_000usize)
+        .flat_map(|i| {
+            let v = if i < onset {
+                0.0
+            } else {
+                (i as f32 * 1000.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.8
+            };
+            [v, v]
+        })
+        .collect();
+    let per_packet = pcm.len() / src.packets.len() / 2 * 2;
+    for (i, p) in src.packets.iter().enumerate() {
+        rec.write_video(p).unwrap();
+        let from = (i * per_packet).min(pcm.len());
+        let to = ((i + 1) * per_packet).min(pcm.len());
+        rec.write_audio(0, &pcm[from..to]).unwrap();
+    }
+    rec.finish().unwrap();
+    let decoded = fthrust_media::audio_decode::decode_to_pcm(&out).unwrap();
+    let heard = decoded
+        .samples
+        .chunks_exact(2)
+        .position(|f| f[0].abs() > 0.2)
+        .expect("the tone is in the recording");
+    let expected = onset + priming;
+    assert!(
+        heard.abs_diff(expected) <= 256,
+        "the tone starts at sample {heard}, expected about {expected} (onset {onset} + priming {priming})"
+    );
+}

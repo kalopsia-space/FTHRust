@@ -66,6 +66,7 @@ pub struct Recorder {
     video_index: usize,
     fps: u32,
     first_video_pts: Option<i64>,
+    first_video_wall_ns: Option<i64>,
     video_packets: u64,
     audio: Vec<AudioTrack>,
     failed: bool,
@@ -149,6 +150,7 @@ impl Recorder {
             video_index,
             fps: cfg.fps,
             first_video_pts: None,
+            first_video_wall_ns: None,
             video_packets: 0,
             audio,
             failed: false,
@@ -182,9 +184,12 @@ impl Recorder {
                 }
                 // Decoding starts at 0 (a fragmented MP4 cannot start
                 // earlier); with a reorder delay the keyframe presents
-                // `pts - dts` ticks in.
+                // `pts - dts` ticks in, and time zero is that much before
+                // its capture.
                 let first = packet.dts.min(packet.pts);
+                let lead_ns = (packet.pts - first) * 1_000_000_000 / i64::from(self.fps.max(1));
                 self.first_video_pts = Some(first);
+                self.first_video_wall_ns = Some(packet.wall_time_ns - lead_ns);
                 first
             }
         };
@@ -201,6 +206,21 @@ impl Recorder {
             })?;
         self.video_packets += 1;
         Ok(())
+    }
+
+    /// The capture time that plays at time zero: that of the first keyframe
+    /// written (less any reorder delay).
+    pub fn video_start_ns(&self) -> Option<i64> {
+        self.first_video_wall_ns
+    }
+
+    /// Samples the AAC encoder puts before the first sample it is given:
+    /// a track's first sample plays this far into the recording, so the
+    /// caller starts each track's audio that much after the first keyframe.
+    pub fn audio_priming_frames(&self) -> u32 {
+        self.audio
+            .first()
+            .map_or(0, |t| t.encoder.priming_samples())
     }
 
     /// Audio tracks configured.
