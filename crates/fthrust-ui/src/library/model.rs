@@ -103,6 +103,8 @@ pub struct Library {
     pub clips_root: PathBuf,
     /// Every known record (unfiltered).
     pub records: Vec<LibraryRecord>,
+    /// Position of each record by path, rebuilt with the sections.
+    index: HashMap<PathBuf, usize>,
     /// Current filter.
     pub filter: Filter,
     /// Current sort.
@@ -132,6 +134,7 @@ impl Library {
         Library {
             clips_root,
             records: Vec::new(),
+            index: HashMap::new(),
             filter: Filter::All,
             sort: Sort::Newest,
             sections: Vec::new(),
@@ -141,8 +144,26 @@ impl Library {
         }
     }
 
+    /// The record of `path`, found without a scan of the library (the
+    /// page asks once per card and frame).
+    pub fn record(&self, path: &Path) -> Option<&LibraryRecord> {
+        self.index
+            .get(path)
+            .and_then(|&i| self.records.get(i))
+            .filter(|r| r.path == path)
+            // The index is as old as the last rebuild: after an upsert or a
+            // removal the lookup falls back to the slow, always right way.
+            .or_else(|| self.records.iter().find(|r| r.path == path))
+    }
+
     /// Rebuilds the sections for the current filter and sort.
     pub fn rebuild(&mut self, screenshot_key: &str) {
+        self.index = self
+            .records
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.path.clone(), i))
+            .collect();
         let visible = apply(&self.records, self.filter, self.sort);
         self.count = visible.len();
         self.sections.clear();

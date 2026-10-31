@@ -137,6 +137,19 @@ impl ClipReadinessRegistry {
         )
     }
 
+    /// Whether any tracked clip is not usable yet (committed, finalising or
+    /// failed). While none is, a listed clip is accessible without asking
+    /// the file system about it: [`Self::can_access`] canonicalises and
+    /// stats, which a page of cards cannot afford every frame.
+    pub fn has_blocked(&self) -> bool {
+        self.handles.values().any(|h| {
+            !matches!(
+                h.state,
+                ReadinessState::Ready | ReadinessState::ReadyWithWarning
+            )
+        })
+    }
+
     /// Warnings recorded for `path`.
     pub fn warnings(&self, path: &Path) -> Vec<String> {
         self.handles

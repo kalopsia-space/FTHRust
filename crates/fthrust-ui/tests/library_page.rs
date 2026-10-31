@@ -154,6 +154,40 @@ fn only_visible_rows_request_thumbnails() {
     );
 }
 
+/// The fastest of ten settled frames with `n` records.
+fn settled_frame_time(n: usize) -> std::time::Duration {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), n);
+    s.library_dirty = true;
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(4);
+    (0..10)
+        .map(|_| {
+            let started = Instant::now();
+            h.step();
+            started.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn a_frame_costs_about_the_same_in_a_big_library_as_in_a_small_one() {
+    let small = settled_frame_time(300);
+    let large = settled_frame_time(12_000);
+    eprintln!("frame with 300 records: {small:?}, with 12000: {large:?}");
+    // The same 15 or so cards are built either way; only work proportional to
+    // the library (cloning every section, scanning every record for each
+    // card, laying out every day's header) tells the two apart.
+    assert!(
+        large < small * 3 + std::time::Duration::from_millis(4),
+        "a frame took {large:?} with 12000 records and {small:?} with 300"
+    );
+}
+
 #[test]
 fn filter_and_sort_rebuild_sections() {
     let (tmp, mut s) = state(serde_json::json!({}));

@@ -49,9 +49,7 @@ fn screenshot_key(state: &AppState) -> String {
 fn fingerprint(state: &AppState, path: &Path) -> String {
     state
         .library
-        .records
-        .iter()
-        .find(|r| r.path == path)
+        .record(path)
         .map(|r| format!("{}|{}", r.size, r.mtime_ns))
         .unwrap_or_default()
 }
@@ -506,6 +504,11 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     if let Some(step) = kb_step {
         scroll_area = scroll_area.vertical_scroll_offset((state.library_scroll + step).max(0.0));
     }
+    // What every card asks the same way: once per frame, not once per card.
+    let upload_enabled = crate::services::upload::uploader_enabled(state);
+    let any_blocked = state.readiness.has_blocked();
+    // Taken, not cloned: the closure never reads them through the state.
+    let sections = std::mem::take(&mut state.library.sections);
     let output = scroll_area.show_viewport(&mut area, |ui, viewport| {
         ui.set_width(area_rect.width());
         let origin = ui.cursor().min;
@@ -567,22 +570,34 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         let card_h = card_height(widths[0]);
         let row_h = card_h + GRID_SPACING;
         let mut card_index = 0usize;
-        let sections = state.library.sections.clone();
+        // Header row: date (17/600) + "·  game" (15 TEXT_DIM), spacing 10, then 8 px.
+        let hh = crate::fonts::qt_wrapped_line_height(size::BODY_L, Weight::W600);
+        let margin = OVERSCAN_ROWS as f32 * row_h;
         for (si, section) in sections.iter().enumerate() {
             if si > 0 {
                 y += SECTION_SPACING;
             }
-            // Header row: date (17/600) + "·  game" (15 TEXT_DIM), spacing 10, then 8 px.
-            let hh = crate::fonts::qt_wrapped_line_height(size::BODY_L, Weight::W600);
-            let dg = galley(
-                ui,
-                &section.label,
-                size::BODY_L,
-                Weight::W600,
-                t.color(Color::Text),
-            );
-            let drect = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(dg.size().x.ceil(), hh));
-            if drect.intersects(viewport) {
+            let rows = section.paths.len().div_ceil(cols);
+            // A section wholly outside the built range costs nothing: no text
+            // layout and no walk over its rows.
+            let section_h = hh + 8.0 + (rows as f32 * row_h - GRID_SPACING);
+            if y > viewport.max.y + margin || y + section_h < viewport.min.y - margin {
+                card_index += section.paths.len();
+                y += hh + 8.0;
+                y += rows as f32 * row_h - GRID_SPACING;
+                continue;
+            }
+            if Rect::from_min_size(Pos2::new(x0, y), Vec2::new(content_w, hh)).intersects(viewport)
+            {
+                let dg = galley(
+                    ui,
+                    &section.label,
+                    size::BODY_L,
+                    Weight::W600,
+                    t.color(Color::Text),
+                );
+                let drect =
+                    Rect::from_min_size(Pos2::new(x0, y), Vec2::new(dg.size().x.ceil(), hh));
                 paint_text(ui, dg, drect, Align::Min, 0.0, t.color(Color::Text));
                 fidelity::mark(ui, format!("sectionHeader[{}]", section.label), drect)
                     .text(&section.label, size::BODY_L, Weight::W600)
@@ -598,7 +613,6 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                 }
             }
             y += hh + 8.0;
-            let rows = section.paths.len().div_ceil(cols);
             for row in 0..rows {
                 let row_top = y + row as f32 * row_h;
                 let row_rect =
@@ -649,12 +663,9 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                                 state.thumb_requests_total += 1;
                             }
                         }
-                        let imported = state
-                            .library
-                            .records
-                            .iter()
-                            .any(|r| r.path == *path && r.imported);
-                        let ready = state.readiness.can_access(path);
+                        let imported = state.library.record(path).is_some_and(|r| r.imported);
+                        // Listed files exist; only a tracked, unfinished clip is not ready.
+                        let ready = !any_blocked || state.readiness.can_access(path);
                         let key = upload_key(state, path);
                         let link = state.upload_history.link(&key).map(|l| l.url);
                         let uploaded = state.upload_history.is_uploaded(&key);
@@ -672,7 +683,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             imported,
                             uploaded,
                             upload_link: link,
-                            upload_enabled: crate::services::upload::uploader_enabled(state),
+                            upload_enabled,
                             uploading: upload_status.is_some(),
                             ready,
                             feedback: upload_status
@@ -734,6 +745,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             Sense::hover(),
         );
     });
+    state.library.sections = sections;
     state.library_scroll = output.state.clamped_offset().y;
     if (content_h - last_h).abs() > 0.5 {
         ui.ctx().data_mut(|d| d.insert_temp(height_id, content_h));
