@@ -18,7 +18,7 @@ use egui::Key;
 use fthrust_core::hotkeys::hyprland::{
     bind_actions, bind_line, to_hyprland_bind, write_lua_block, write_managed_conf,
 };
-use fthrust_core::hotkeys::{HotkeyBindings, to_portal_trigger, unshifted_key_name};
+use fthrust_core::hotkeys::{HotkeyBindings, same_chord, to_portal_trigger, unshifted_key_name};
 
 const SOCK: &str = "/run/user/1000/fthrust/hotkey.sock";
 const EXE: &str = "/opt/fthrust/bin/fthrust";
@@ -388,6 +388,47 @@ fn shifted_punctuation_is_recorded_as_the_key_it_is_typed_on() {
     // Letters, digits and the unshifted punctuation stay as they are.
     for name in ["S", "1", "Slash", "Equals", "Semicolon", "F9", "PageUp"] {
         assert_eq!(unshifted_key_name(name), None, "{name}");
+    }
+}
+
+#[test]
+fn chords_are_compared_by_their_keys_not_their_spelling() {
+    for (a, b) in [
+        ("Ctrl+Pageup", "Ctrl+Page Up"),
+        ("Ctrl+Pageup", "Ctrl+PgUp"),
+        ("Ctrl+Pageup", "Ctrl+Prior"),
+        ("Ctrl+Shift+S", "shift+CTRL+s"),
+        ("Ctrl+Equals", "ctrl+equal"),
+        ("Win+F5", "Meta+F5"),
+        ("Win+F5", "Super+f5"),
+        ("Alt+Comma", "Alt+,"),
+        ("F9", "f9"),
+        ("", ""),
+    ] {
+        assert!(same_chord(a, b), "{a} = {b}");
+        assert!(same_chord(b, a), "{b} = {a}");
+    }
+    for (a, b) in [
+        ("Ctrl+F5", "Ctrl+F6"),
+        ("Ctrl+F5", "Alt+F5"),
+        ("Ctrl+Shift+S", "Ctrl+S"),
+        ("Ctrl+Pageup", "Ctrl+Pagedown"),
+        ("F9", ""),
+        ("Ctrl+F9", "F9"),
+    ] {
+        assert!(!same_chord(a, b), "{a} != {b}");
+    }
+    // What the popup stores for every egui key is the same chord as the
+    // chord it was recorded from.
+    for &key in Key::ALL {
+        let recorded = format!("Ctrl+Alt+{}", key.name());
+        let mut b = HotkeyBindings::defaults();
+        b.set_keyboard("save_clip", &recorded);
+        let stored = b.get("save_clip").unwrap();
+        assert!(
+            same_chord(stored, &recorded),
+            "{key:?}: {stored} = {recorded}"
+        );
     }
 }
 

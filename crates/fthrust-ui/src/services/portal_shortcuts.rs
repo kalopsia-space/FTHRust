@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fthrust_core::hotkeys::{
-    HotkeyAction, HotkeyBindings, normalize_keyboard_combo, to_portal_trigger,
+    HotkeyAction, HotkeyBindings, normalize_keyboard_combo, same_chord, to_portal_trigger,
 };
 use futures_util::StreamExt;
 
@@ -12,7 +12,10 @@ use super::{Event, Outbox};
 
 /// `_on_portal_bound`: adopts the desktop's triggers (first alternative,
 /// normalised) and lists the actions where the desktop kept a different key.
-/// Returns `(changed, kept)`.
+/// Chords are compared as keys, not as spelled ([`same_chord`]): the desktop
+/// describing `Ctrl+Pageup` as `Ctrl+Page Up`, `Ctrl+PgUp` or `Ctrl+Prior`
+/// has not changed it, so that is neither a "kept" warning nor a rewrite of
+/// the stored binding. Returns `(changed, kept)`.
 pub fn adopt_bound(
     bindings: &mut HotkeyBindings,
     requested: &BTreeMap<String, String>,
@@ -32,14 +35,14 @@ pub fn adopt_bound(
         let actual = normalize_keyboard_combo(first).unwrap_or_default();
         if let Some(req) = requested.get(action)
             && !req.is_empty()
-            && actual != *req
+            && !same_chord(&actual, req)
         {
             let desc = HotkeyAction::parse(action)
                 .map(|a| a.description())
                 .unwrap_or_else(|| action.clone());
             kept.push(format!("{desc}: {trigger}"));
         }
-        if actual != current {
+        if !same_chord(&actual, &current) {
             bindings.set_keyboard(action, &actual);
             changed = true;
         }

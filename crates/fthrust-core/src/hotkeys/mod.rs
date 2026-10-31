@@ -262,6 +262,35 @@ fn normalize_controller_combo(input: &str) -> String {
     out.join("+")
 }
 
+/// Whether two keyboard combos are the same chord: the same modifiers and
+/// the same key, the key compared as a key (by its keysym) and not by how it
+/// is spelled. `Ctrl+Pageup` (what the hotkey popup stores), `Ctrl+Page Up`,
+/// `Ctrl+PgUp` and `Ctrl+Prior` are one chord, and a desktop that describes
+/// its trigger in its own words has not changed it.
+pub fn same_chord(a: &str, b: &str) -> bool {
+    fn split(combo: &str) -> (BTreeSet<&'static str>, String) {
+        let mut mods = BTreeSet::new();
+        let mut key = String::new();
+        for part in combo.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+            let lower = part.to_lowercase().replace('_', " ");
+            let modifier = modifier_alias(&lower).or(match lower.as_str() {
+                "super" | "logo" => Some("Win"),
+                _ => None,
+            });
+            match modifier {
+                Some(m) => {
+                    mods.insert(m);
+                }
+                None => key = part.to_owned(),
+            }
+        }
+        (mods, key)
+    }
+    let (mods_a, key_a) = split(a);
+    let (mods_b, key_b) = split(b);
+    mods_a == mods_b && keys::same_key(&key_a, &key_b)
+}
+
 /// The key to record when the key egui calls `name` was pressed with Shift
 /// held: for shifted punctuation (`Exclamationmark`, `Questionmark`, `Colon`,
 /// `Pipe`, the curly brackets, `Plus`) the key it is typed on in a US layout

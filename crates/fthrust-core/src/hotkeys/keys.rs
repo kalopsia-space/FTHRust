@@ -182,6 +182,17 @@ pub(crate) fn keysym(key: &str) -> Option<Cow<'static, str>> {
         .map(|(_, keysym)| Cow::Borrowed(*keysym))
 }
 
+/// Whether two key names are the same key: the same keysym, so `PageUp`,
+/// `Page Up` and `Prior` are one key; names with no keysym are compared by
+/// their canonical spelling.
+pub(crate) fn same_key(a: &str, b: &str) -> bool {
+    match (keysym(a), keysym(b)) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => canonical(a) == canonical(b),
+        _ => false,
+    }
+}
+
 /// The punctuation egui reports as a key of its own when it is typed with
 /// Shift held on a US-style layout, and the key it sits on (as egui names it).
 const SHIFTED_ON: &[(&str, &str)] = &[
