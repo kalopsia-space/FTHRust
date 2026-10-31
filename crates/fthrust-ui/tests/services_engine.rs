@@ -274,6 +274,7 @@ fn process_exit_pushes_engine_stopped_and_restart_recovers() {
             config: config(),
             allow_recording_prepare: false,
             explicit: true,
+            automatic: false,
         },
         now,
     );
@@ -342,6 +343,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -367,6 +369,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now + 0.7,
     );
@@ -381,6 +384,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -403,6 +407,7 @@ fn apply_timeout_after_30s() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -710,6 +715,7 @@ fn restart(fps: u32) -> Input {
         config: config_fps(fps),
         allow_recording_prepare: false,
         explicit: false,
+        automatic: false,
     }
 }
 
@@ -1201,6 +1207,7 @@ fn only_the_restart_after_a_crash_or_hang_is_automatic() {
             config: config(),
             allow_recording_prepare: false,
             explicit: true,
+            automatic: false,
         },
         now,
     );
@@ -1248,9 +1255,97 @@ fn restart_engine_over_a_waiting_automatic_restart_is_the_users() {
             config: config(),
             allow_recording_prepare: false,
             explicit: true,
+            automatic: false,
         },
         now + 0.1,
     );
     now += AUTO_RESTART_DELAY_S + 0.01;
     assert_eq!(configure_of_next_start(&mut sv, 21, now), Some(false));
+}
+
+/// A settings-apply style restart, the app's own (`automatic`) or not.
+fn restart_as(automatic: bool) -> Input {
+    Input::Restart {
+        config: config(),
+        allow_recording_prepare: false,
+        explicit: false,
+        automatic,
+    }
+}
+
+/// Game detection and the clips profile coming back restart the engine on
+/// the app's own initiative; a settings apply is the user's.
+#[test]
+fn the_apps_own_restarts_are_automatic_and_the_users_are_not() {
+    use fthrust_ui::services::engine::RESTART_GAP_S;
+    for automatic in [true, false] {
+        let mut sv = Supervisor::new();
+        let mut now = 0.0;
+        bring_up(&mut sv, 30, &mut now);
+        now += 1.0;
+        sv.handle(restart_as(automatic), now);
+        sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+        now += RESTART_GAP_S + 0.01;
+        assert_eq!(
+            configure_of_next_start(&mut sv, 31, now),
+            Some(automatic),
+            "automatic {automatic}"
+        );
+    }
+}
+
+/// Restarts that merge (behind a save, or into a restart under way) are the
+/// user's when any of them was.
+#[test]
+fn a_restart_merged_with_one_of_the_users_is_the_users() {
+    use fthrust_ui::services::engine::{RESTART_DEFER_S, RESTART_GAP_S};
+    // Deferred behind a save in flight.
+    for (asks, expected) in [
+        ([true, false], false),
+        ([false, true], false),
+        ([true, true], true),
+    ] {
+        let mut sv = Supervisor::new();
+        let mut now = 0.0;
+        bring_up(&mut sv, 40, &mut now);
+        sv.set_save_busy(true);
+        for automatic in asks {
+            sv.handle(restart_as(automatic), now);
+        }
+        sv.set_save_busy(false);
+        now += RESTART_DEFER_S + 0.01;
+        let fx = sv.handle(Input::Tick, now);
+        assert!(
+            fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+            "{fx:?}"
+        );
+        sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+        now += RESTART_GAP_S + 0.01;
+        assert_eq!(
+            configure_of_next_start(&mut sv, 41, now),
+            Some(expected),
+            "{asks:?}"
+        );
+    }
+    // Game detection's restart has spawned the new engine; the user applies
+    // settings before it is configured: that start is now the user's.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 50, &mut now);
+    now += 1.0;
+    sv.handle(restart_as(true), now);
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+    now += RESTART_GAP_S + 0.01;
+    let fx = sv.handle(Input::Tick, now);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    sv.handle(Input::Spawned { pid: 51 }, now);
+    sv.handle(restart_as(false), now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid: 51,
+            version: "x".into(),
+        },
+        now,
+    );
+    assert_eq!(configured_automatic(&fx), Some(false));
 }

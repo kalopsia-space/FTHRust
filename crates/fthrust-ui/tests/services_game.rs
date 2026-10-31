@@ -106,7 +106,7 @@ fn prompt_mode_shows_card_and_confirm_switches() {
     assert!(
         services
             .drain_requests_for_tests()
-            .contains(&Request::RestartEngine)
+            .contains(&Request::AutoRestartEngine)
     );
     // The same game again does not re-prompt.
     services.inject(Event::Toplevels(vec![tl(
@@ -179,7 +179,7 @@ fn auto_mode_switches_and_restarts_engine() {
     assert!(
         services
             .drain_requests_for_tests()
-            .contains(&Request::RestartEngine)
+            .contains(&Request::AutoRestartEngine)
     );
     // Disabled: nothing happens.
     let (_tmp2, mut s2) =
@@ -220,7 +220,7 @@ fn game_closed_falls_back_to_desktop_when_enabled() {
     assert!(
         services
             .drain_requests_for_tests()
-            .contains(&Request::RestartEngine)
+            .contains(&Request::AutoRestartEngine)
     );
     // Without the fallback the window source stays.
     let (_tmp2, mut s2) = state(
