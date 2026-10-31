@@ -132,7 +132,7 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 - **libX11**: Loaded from the system at run time (libavdevice dlopens libX11.so.6, libXext.so.6 and libXv.so.1); none of it is compiled into FFmpeg.
 - **libxcb**: Loaded from the system at run time (libavdevice dlopens libxcb.so.1 and its shm, shape and xfixes extensions); none of it is compiled into FFmpeg.
 - **nv-codec-headers (ffnvcodec)**: No licence file: this is the notice at the top of include/ffnvcodec/dynlink_loader.h. NVENC itself is NVIDIA's driver on the user's system (see licenses/NVIDIA-NVENC-SDK-LICENSE.txt).
-- **OpenCL-Headers**: Headers; the OpenCL runtime is the user's system library.
+- **OpenCL-Headers**: Headers. FFmpeg links the OpenCL ICD loader statically (listed below); the OpenCL drivers it finds through that are the user's system libraries.
 - **SDL 2**: No trace of SDL is in the shipped libraries (it serves BtbN's ffplay, which is not shipped); it is listed because the configure line enables it.
 - **shaderc**: Builds glslang and SPIRV-Tools (Apache-2.0, BSD-3-Clause, MIT) with it; their notices are not reproduced here.
 - **Vulkan-Headers**: Headers; the Vulkan loader is the user's system library.
@@ -150,6 +150,7 @@ Libraries that BtbN's build scripts also build, for the libraries above:
 | Little CMS 2 | MIT | libjxl | [www.littlecms.com](https://www.littlecms.com/), built from [github.com/mm2/Little-CMS](https://github.com/mm2/Little-CMS) `5cc0eec7ae83` | [lcms2.txt](licenses/ffmpeg/lcms2.txt) |
 | LV2 | ISC | Lilv | [lv2plug.in](https://lv2plug.in/), built from [github.com/lv2/lv2](https://github.com/lv2/lv2) `3c57dae600a5` | [lv2.txt](licenses/ffmpeg/lv2.txt) |
 | Mbed TLS | Apache-2.0 OR GPL-2.0-or-later | librist | [github.com/Mbed-TLS/mbedtls](https://github.com/Mbed-TLS/mbedtls), built from [github.com/ARMmbed/mbedtls](https://github.com/ARMmbed/mbedtls) `v4.1.0` | [mbedtls.txt](licenses/ffmpeg/mbedtls.txt) |
+| OpenCL-ICD-Loader | Apache-2.0 | OpenCL support | [github.com/KhronosGroup/OpenCL-ICD-Loader](https://github.com/KhronosGroup/OpenCL-ICD-Loader) `18fdcd582863` | [opencl-icd-loader.txt](licenses/ffmpeg/opencl-icd-loader.txt) |
 | Serd | ISC | Lilv | [drobilla.net/software/serd.html](https://drobilla.net/software/serd.html), built from [github.com/drobilla/serd](https://github.com/drobilla/serd) `b6053bb2a453` | [serd.txt](licenses/ffmpeg/serd.txt) |
 | Sord | ISC | Lilv | [drobilla.net/software/sord.html](https://drobilla.net/software/sord.html), built from [github.com/drobilla/sord](https://github.com/drobilla/sord) `4b5232bb91e7` | [sord.txt](licenses/ffmpeg/sord.txt) |
 | SPIRV-Cross | Apache-2.0 | libplacebo, shaderc | [github.com/KhronosGroup/SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) `81fc2ea76c2b` | [spirv-cross.txt](licenses/ffmpeg/spirv-cross.txt) |

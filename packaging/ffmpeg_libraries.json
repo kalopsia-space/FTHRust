@@ -319,7 +319,7 @@
       "source_files": [
         "LICENSE"
       ],
-      "note": "Headers; the OpenCL runtime is the user's system library."
+      "note": "Headers. FFmpeg links the OpenCL ICD loader statically (listed below); the OpenCL drivers it finds through that are the user's system libraries."
     },
     {
       "id": "amf",
@@ -1107,6 +1107,21 @@
       ],
       "needed_by": [
         "Vulkan support"
+      ]
+    },
+    {
+      "id": "opencl-icd-loader",
+      "name": "OpenCL-ICD-Loader",
+      "license": "Apache-2.0",
+      "url": "https://github.com/KhronosGroup/OpenCL-ICD-Loader",
+      "pinned_repo": "https://github.com/KhronosGroup/OpenCL-ICD-Loader.git",
+      "pinned_commit": "18fdcd58286376124f938948aa8ed156079c1c16",
+      "text": "opencl-icd-loader.txt",
+      "source_files": [
+        "LICENSE"
+      ],
+      "needed_by": [
+        "OpenCL support"
       ]
     },
     {
