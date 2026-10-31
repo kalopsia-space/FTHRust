@@ -176,6 +176,35 @@ fn export_before_the_player_loaded_is_refused_not_a_one_millisecond_clip() {
 }
 
 #[test]
+fn a_clip_whose_loaded_player_reports_one_millisecond_is_not_still_loading() {
+    // The length is known once the player has loaded, whatever it is: a
+    // real 0 or 1 ms length used to read as the placeholder for good.
+    let (tmp, mut s, _cap) = editor_state();
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        1,
+        Lifecycle::Paused,
+    ));
+    assert!(s.editor.as_ref().unwrap().duration_known());
+    assert!(
+        export_ui::spec_for(&s).is_ok(),
+        "{:?}",
+        export_ui::spec_for(&s).err()
+    );
+    // And one that has not loaded is not known, with the length it has.
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        10_000,
+        Lifecycle::PlayQueued,
+    ));
+    assert!(!s.editor.as_ref().unwrap().duration_known());
+    assert_eq!(
+        export_ui::spec_for(&s).err().as_deref(),
+        Some(export_ui::STILL_LOADING)
+    );
+}
+
+#[test]
 fn a_clip_that_failed_to_load_is_not_exported_either() {
     let (tmp, mut s, _cap) = editor_state();
     s.editor = Some(Editor::for_tests(

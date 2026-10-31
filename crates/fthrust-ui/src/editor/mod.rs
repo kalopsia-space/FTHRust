@@ -225,6 +225,10 @@ pub struct Editor {
     last_now: f64,
     source_gains: Vec<(String, u8, bool)>,
     duration_ms: u64,
+    /// The player has reported the clip's real length (`loaded` ran). Until
+    /// then `duration_ms` is a 1 ms placeholder; after it, whatever the player
+    /// says is the length, even a 0 or 1 ms one.
+    duration_loaded: bool,
     src_size: (u32, u32),
 }
 
@@ -290,6 +294,12 @@ impl Editor {
     pub fn for_tests(path: &Path, duration_ms: u64, lifecycle: Lifecycle) -> Editor {
         let mut e = Editor::blank(path, duration_ms);
         e.lifecycle = lifecycle;
+        // A fixture has no player: it counts as loaded when its lifecycle is
+        // one a loaded editor has.
+        e.duration_loaded = !matches!(
+            lifecycle,
+            Lifecycle::Preparing | Lifecycle::PlayQueued | Lifecycle::Failed
+        );
         e.status = match lifecycle {
             Lifecycle::PlayQueued => "Preparing · play queued".into(),
             Lifecycle::Preparing => "Preparing clip…".into(),
@@ -345,6 +355,7 @@ impl Editor {
             last_now: 0.0,
             source_gains: Vec::new(),
             duration_ms,
+            duration_loaded: false,
             src_size: PLACEHOLDER_SIZE,
         }
     }
@@ -394,10 +405,11 @@ impl Editor {
         self.duration_ms
     }
 
-    /// The player has reported the real duration (until then it is the 1 ms
-    /// placeholder, which an export must never take for a clip's length).
+    /// The player has reported the clip's length. Until then the duration is
+    /// a 1 ms placeholder, which an export must never take for it; once the
+    /// player has loaded, its length is known whatever it is.
     pub fn duration_known(&self) -> bool {
-        self.duration_ms > 1
+        self.duration_loaded
     }
 
     /// Source size (a 1920×1080 placeholder until loaded).
@@ -605,6 +617,7 @@ impl Editor {
             self.duration_ms = player.duration_ms().max(1);
             self.timeline.duration_ms = self.duration_ms;
         }
+        self.duration_loaded = true;
         player.set_master_percent(self.master_volume);
         player.set_rate(self.speed as f32, self.preserve_pitch);
         for (id, gain, muted) in &self.source_gains {

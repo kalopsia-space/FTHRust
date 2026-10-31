@@ -150,6 +150,7 @@ fn lifecycle_reaches_ready_and_play_queues() {
     };
     let mut e = r.open(&clip);
     assert_eq!(e.status_text(), "Preparing clip…");
+    assert!(!e.duration_known(), "the length is a placeholder until then");
     assert_eq!(e.play_label(), "PLAY");
     e.toggle_play(r.now());
     assert_eq!(e.lifecycle, Lifecycle::PlayQueued);
@@ -159,6 +160,7 @@ fn lifecycle_reaches_ready_and_play_queues() {
     assert_eq!(e.lifecycle, Lifecycle::Preparing, "a second click cancels");
     e.toggle_play(r.now());
     r.wait_loaded(&mut e);
+    assert!(e.duration_known(), "the player reported the length");
     assert_eq!(e.lifecycle, Lifecycle::Playing);
     assert_eq!(e.play_label(), "PAUSE");
     assert_eq!(e.status_text(), "Ready");
