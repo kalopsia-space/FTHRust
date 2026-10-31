@@ -40,7 +40,7 @@ The buffer always holds the longest length you've set up, plus two seconds of he
 
 The buffer is encoded video, so its size is roughly *bitrate × length*. At the defaults (25 Mbps for 30 s) that's about 100 MB. Long lengths at high bitrates add up fast: 5 minutes at 50 Mbps is close to 2 GB. The rest of the app is small next to that: at 1080p180 and 50 Mbps with 45-second clips, the capture engine uses about 9% of one CPU core and roughly 250–450 MB depending on how busy the picture is (most of it the buffer), or about 60 MB with the buffer on disk; the window is about 185 MB. FTHRust never lets the buffer go past half your RAM, and the popup reminds you that *longer clips can use a lot of memory, especially at high quality*.
 
-**Replay buffer on disk.** In the capture settings popup, *Replay buffer* can be set to **Disk**. The engine then writes the buffer's video into `~/.cache/fthrust/replay/<pid>/` (or `$XDG_CACHE_HOME`), readable only by you, and keeps only a small index in RAM. At 50 Mbps that's about 22 GB of writes per hour of capture, which a modern SSD shrugs off. The folder is deleted when the engine exits, and any left behind by a crash are removed at the next start. If the folder can't be written, the buffer quietly stays in memory. The default is **Memory**.
+**Replay buffer on disk.** In the capture settings popup, *Replay buffer* can be set to **Disk**. The engine then writes the buffer's video into `~/.cache/fthrust/replay/<pid>/` (or `$XDG_CACHE_HOME`), readable only by you, and keeps only a small index in RAM. The writes happen beside capture, so a busy disk never holds up the frames. At 50 Mbps that's about 22 GB of writes per hour of capture, which a modern SSD shrugs off. The folder is deleted when the engine exits, and any left behind by a crash are removed at the next start. If the folder can't be written, the buffer quietly stays in memory. The default is **Memory**.
 
 ### When a save is refused
 
@@ -55,6 +55,7 @@ You'll get a capture card instead of a clip if:
 **Record** in the toolbar (or the *Start recording* / *Stop recording* hotkeys, unbound by default) captures until you stop it. Recordings have their own quality settings on the **Recording** tab of the capture popup, so you can keep a light replay buffer and record at full quality, or the other way round.
 
 - Recordings are saved as `FTHR_recording_YYYY-MM-DD_HH-MM-SS.mp4` in `~/Videos/FTHR Clips/Recordings`. You can change the folder in **Settings → Clip → Folders**.
+- A recording gets the same audio tracks as a clip: **Default Mix**, and **Microphone** when you've chosen an input device. The audio stays in sync however long you record, and stopping keeps everything up to the moment you pressed stop.
 - A recording needs 512 MB free to start, and stops itself cleanly if free space drops below 256 MB.
 - If the recording quality differs from the replay quality, capture restarts once at the recording settings, and again when you stop. The replay buffer starts empty after each restart.
 
@@ -143,7 +144,7 @@ Audio settings live in **Settings → Audio**.
 
 - **Desktop audio** is on by default (*Enable audio capture*). FTHRust records what your speakers or headphones play by tapping your default output's monitor. Pick a specific device under **Playback device to capture**; if it's missing when capture starts, the default output is used instead.
 - **Microphone** is off until you choose an **Input device**. **Live level** shows a meter so you can check it's picking you up.
-- Each clip gets up to two AAC tracks: **Default Mix** (desktop) and **Microphone**. Most players and editors let you mute or mix them separately.
+- Each clip and recording gets up to two AAC tracks: **Default Mix** (desktop) and **Microphone**. Most players and editors let you mute or mix them separately.
 
 If PipeWire can't be reached, capture carries on silently and the bar at the bottom shows **DESKTOP AUDIO UNAVAILABLE** with a shortcut to the audio settings.
 
