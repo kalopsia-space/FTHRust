@@ -322,8 +322,19 @@ impl CaptureEngine {
         );
     }
 
-    /// Current status (audio and save fields are filled by the daemon).
+    /// Current status (save fields are filled by the daemon).
     pub fn status(&self) -> StatusSnapshot {
+        // The audio sources are read before the status lock is taken: their
+        // locks are shared with the capture callback and window extraction,
+        // and the capture thread needs the status lock for every frame.
+        let audio = if self.started {
+            self.audio.status()
+        } else {
+            AudioStatus {
+                system: SourceStatus::Disabled,
+                microphone: SourceStatus::Disabled,
+            }
+        };
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -345,14 +356,7 @@ impl CaptureEngine {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: if self.started {
-                self.audio.status()
-            } else {
-                AudioStatus {
-                    system: SourceStatus::Disabled,
-                    microphone: SourceStatus::Disabled,
-                }
-            },
+            audio,
             last_save: None,
         }
     }
@@ -486,6 +490,8 @@ pub struct EngineHandle {
 impl EngineHandle {
     /// Current capture status (no save fields).
     pub fn status(&self) -> StatusSnapshot {
+        // Read outside the status lock, as in `CaptureEngine::status`.
+        let audio = self.inner.audio.status();
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -507,7 +513,7 @@ impl EngineHandle {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: self.inner.audio.status(),
+            audio,
             last_save: None,
         }
     }

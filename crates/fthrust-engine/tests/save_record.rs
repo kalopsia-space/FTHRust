@@ -614,3 +614,73 @@ fn a_panicking_save_is_answered_and_frees_the_worker() {
     assert!(second.exists());
     r.engine.shutdown();
 }
+
+/// Synthetic audio whose status takes a while, like PipeWire's per-source
+/// locks when the capture callback or a long window holds them.
+struct SlowStatusAudio {
+    inner: SyntheticAudio,
+    delay: Duration,
+}
+
+impl fthrust_engine::audio::AudioProvider for SlowStatusAudio {
+    fn start(&self, cfg: &fthrust_engine::audio::AudioConfig) -> Vec<(String, String)> {
+        self.inner.start(cfg)
+    }
+    fn window(
+        &self,
+        kind: fthrust_engine::audio::AudioSourceKind,
+        end_ns: i64,
+        duration_ms: u32,
+    ) -> Option<Vec<f32>> {
+        self.inner.window(kind, end_ns, duration_ms)
+    }
+    fn status(&self) -> fthrust_ipc::AudioStatus {
+        std::thread::sleep(self.delay);
+        self.inner.status()
+    }
+    fn stop(&self) {
+        self.inner.stop()
+    }
+}
+
+#[test]
+fn a_slow_audio_status_does_not_stall_capture() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // status() held the engine's status lock while it asked the audio
+    // sources for theirs; the capture thread takes that lock for every
+    // frame, so a slow source status (its locks held by a long save or the
+    // capture callback) stalled capture.
+    let mut r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(SlowStatusAudio {
+            inner: SyntheticAudio::new(),
+            delay: Duration::from_millis(150),
+        }),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 10);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let poller = {
+        let (handle, stop) = (r.engine.handle(), stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = handle.status();
+            }
+        })
+    };
+    let ring = r.engine.ring();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = ring.stats().packets;
+    std::thread::sleep(Duration::from_secs(2));
+    let during = ring.stats().packets - before;
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    poller.join().unwrap();
+    assert!(
+        during >= 60,
+        "{during} frames in 2 s at a 16 ms frame interval while status was polled"
+    );
+    r.engine.shutdown();
+}
