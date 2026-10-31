@@ -111,15 +111,16 @@ fn copy_unless_same(source: &Path, dest: &Path) -> Result<()> {
 impl ThemeStore {
     /// Creates the theme folders and loads `theme.json`.
     ///
-    /// A missing or unparsable file yields defaults (a copy of an unparsable
-    /// one is kept as `theme.json.corrupt`). Migrations run in memory only;
+    /// A missing file yields defaults. An unparsable one is moved to
+    /// `theme.json.corrupt` (as `settings.json` is) and defaults are used, so
+    /// the next load finds nothing to report. Migrations run in memory only;
     /// the file is not rewritten.
     ///
     /// Loading does not fail when the folders cannot be created or the file
     /// cannot be read (a full disk must not stop the app from opening): the
     /// problem is logged and kept in [`startup_issues`](Self::startup_issues).
-    /// A file that could not be read is never replaced: [`save`](Self::save)
-    /// refuses.
+    /// A file that could not be read, or could not be set aside, is never
+    /// replaced: [`save`](Self::save) refuses.
     ///
     /// A theme import that was cut short between its renames (the app was
     /// killed) is undone first: a missing icons, sounds or fonts folder is
@@ -153,19 +154,21 @@ impl ThemeStore {
         let data = match load_json(&file) {
             Loaded::Value(v) if v.is_object() => migrate::merge_and_migrate(&v),
             Loaded::Missing => ThemeData::default(),
+            // Set aside like settings.json: once moved, the next load finds
+            // nothing damaged to report.
             Loaded::Value(_) | Loaded::Corrupt => {
-                let kept = fsutil::keep_copy(&file);
-                match &kept {
-                    Ok(copy) => issues.push(format!(
-                        "theme.json was damaged. A copy was kept as {} and the default theme is used.",
-                        copy.display()
+                match fsutil::quarantine(&file) {
+                    Ok(target) => issues.push(format!(
+                        "theme.json was damaged. It was moved to {} and the default theme is used.",
+                        target.display()
                     )),
                     Err(e) => {
+                        tracing::warn!("could not quarantine {}: {e}", file.display());
                         save_blocked = Some(format!(
-                            "it is damaged and a copy could not be kept ({e}); the default theme is used for this session"
+                            "it is damaged and could not be set aside ({e}); the default theme is used for this session"
                         ));
                         issues.push(format!(
-                            "theme.json is damaged and a copy could not be kept ({e}). The default theme is used and the file is left as it is."
+                            "theme.json is damaged and could not be set aside ({e}). The default theme is used and the file is left as it is, so theme changes are not saved this session."
                         ));
                     }
                 }

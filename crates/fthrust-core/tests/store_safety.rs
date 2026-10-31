@@ -260,15 +260,45 @@ fn unreadable_theme_is_not_replaced_by_the_default_one() {
 }
 
 #[test]
-fn damaged_theme_is_copied_before_it_is_replaced() {
+fn damaged_theme_is_set_aside_once_like_settings() {
     let (_t, p) = home();
     fs::create_dir_all(p.theme_dir()).unwrap();
     fs::write(p.theme_file(), "{\"colors\": {").unwrap();
     let store = ThemeStore::load(p.clone()).unwrap();
-    store.save().unwrap();
     let mut name = p.theme_file().into_os_string();
     name.push(".corrupt");
-    assert_eq!(fs::read_to_string(name).unwrap(), "{\"colors\": {");
+    assert_eq!(fs::read_to_string(&name).unwrap(), "{\"colors\": {");
+    assert!(!p.theme_file().exists(), "moved, not copied");
+    assert!(
+        store
+            .startup_issues()
+            .iter()
+            .any(|m| m.contains("theme.json was damaged")),
+        "{:?}",
+        store.startup_issues()
+    );
+    // Saving writes a fresh file, and the next load has nothing to report.
+    store.save().unwrap();
+    let again = ThemeStore::load(p.clone()).unwrap();
+    assert!(again.startup_issues().is_empty());
+    assert_eq!(fs::read_to_string(&name).unwrap(), "{\"colors\": {");
+}
+
+#[test]
+fn a_damaged_theme_that_cannot_be_set_aside_is_left_alone() {
+    let (_t, p) = home();
+    fs::create_dir_all(p.theme_dir()).unwrap();
+    fs::write(p.theme_file(), "{\"colors\": {").unwrap();
+    // A directory in the way makes the rename fail everywhere.
+    let mut name = p.theme_file().into_os_string();
+    name.push(".corrupt");
+    fs::create_dir_all(Path::new(&name).join("occupied")).unwrap();
+    let store = ThemeStore::load(p.clone()).unwrap();
+    assert!(is_protected(store.save()));
+    assert_eq!(
+        fs::read_to_string(p.theme_file()).unwrap(),
+        "{\"colors\": {"
+    );
 }
 
 #[test]

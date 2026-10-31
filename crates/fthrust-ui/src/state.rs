@@ -633,7 +633,10 @@ impl AppState {
             let _ = settings.save();
         }
         let upload_history = fthrust_core::upload::history::History::load(&paths);
-        let mut tokens = theme::load(&paths);
+        // Loaded once: a damaged theme.json is set aside by the load that
+        // meets it, and a second load would find nothing to report.
+        let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
+        let mut tokens = theme::tokens_for(&theme);
         tokens.reduce_motion = settings.get_bool("reduce_ui_animations").unwrap_or(false);
         let error_bar = crate::shell::error_bar::ErrorBarState::new(
             settings
@@ -648,7 +651,6 @@ impl AppState {
         let clips_root = settings
             .clips_directory()
             .unwrap_or_else(|_| paths.default_clips_directory());
-        let theme = fthrust_core::theme::ThemeStore::load(paths.clone())?;
         let nav = fthrust_core::navigation::NavigationBindings::from_settings(&settings);
         let client_exe = crate::hotkey_client_exe(
             std::env::var_os("APPIMAGE").as_deref(),
