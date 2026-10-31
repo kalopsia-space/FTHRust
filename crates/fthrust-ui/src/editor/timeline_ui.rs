@@ -416,11 +416,12 @@ fn input(ui: &mut Ui, resp: &egui::Response, w: Rect, state: &mut AppState, now:
             let dp = tl.source_to_display(pct);
             let ds = (dp - tl.source_to_display(tl.trim_start)).abs() * px_per;
             let de = (dp - tl.source_to_display(tl.trim_end)).abs() * px_per;
-            if ds <= f64::from(HANDLE_GRAB_PX) {
-                drag = Some((Drag::Start, p.x));
-                e.begin_gesture();
-            } else if de <= f64::from(HANDLE_GRAB_PX) {
-                drag = Some((Drag::End, p.x));
+            let grab = f64::from(HANDLE_GRAB_PX);
+            if ds <= grab || de <= grab {
+                // Close handles can both be in reach: the nearer wins (the
+                // start handle on an exact tie).
+                let mode = if ds <= de { Drag::Start } else { Drag::End };
+                drag = Some((mode, p.x));
                 e.begin_gesture();
             } else {
                 drag = Some((Drag::Playhead, p.x));

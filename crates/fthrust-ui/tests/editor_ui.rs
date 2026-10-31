@@ -312,6 +312,79 @@ fn linked_import_delete_is_protected() {
     );
 }
 
+/// A long clip whose trim handles sit 5 px apart (its 250 ms minimum is a
+/// small fraction of the track).
+fn long_clip_with_close_handles() -> (tempfile::TempDir, AppState) {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.tokens.reduce_motion = true;
+    let mut e = Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        120_000,
+        Lifecycle::Paused,
+    );
+    e.timeline.set_trim_end(0.5046);
+    e.timeline.set_trim_start(0.5);
+    assert!(
+        (e.timeline.trim_end - e.timeline.trim_start - 0.0046).abs() < 1e-9,
+        "{} {}",
+        e.timeline.trim_start,
+        e.timeline.trim_end
+    );
+    s.editor = Some(e);
+    (tmp, s)
+}
+
+fn drag_from(h: &mut egui_kittest::Harness<'_>, from: Pos2, to_pct: f32) {
+    h.hover_at(from);
+    h.step();
+    h.drag_at(from);
+    h.step();
+    for i in 1..=4 {
+        let pct = to_pct * i as f32 / 4.0;
+        h.hover_at(Pos2::new(track_x(pct), TRACK_Y));
+        h.step();
+    }
+    h.drop_at(Pos2::new(track_x(to_pct), TRACK_Y));
+    h.run_steps(2);
+}
+
+#[test]
+fn pressing_between_close_handles_grabs_the_nearer_one() {
+    // Both handles are within the 9 px grab radius of the press: the end
+    // handle is the nearer, and the start handle used to win regardless.
+    let (_tmp, mut s) = long_clip_with_close_handles();
+    let mut h = harness_for(&mut s);
+    drag_from(&mut h, Pos2::new(track_x(0.5046), TRACK_Y), 0.60);
+    drop(h);
+    let e = s.editor.as_ref().unwrap();
+    assert!(
+        (e.timeline.trim_end - 0.60).abs() < 0.003,
+        "the end handle followed the pointer: {}",
+        e.timeline.trim_end
+    );
+    assert!(
+        (e.timeline.trim_start - 0.5).abs() < 1e-9,
+        "the start handle stayed: {}",
+        e.timeline.trim_start
+    );
+}
+
+#[test]
+fn pressing_on_the_start_handle_of_a_close_pair_still_grabs_the_start() {
+    let (_tmp, mut s) = long_clip_with_close_handles();
+    let mut h = harness_for(&mut s);
+    drag_from(&mut h, Pos2::new(track_x(0.5), TRACK_Y), 0.40);
+    drop(h);
+    let e = s.editor.as_ref().unwrap();
+    assert!(
+        (e.timeline.trim_start - 0.40).abs() < 0.003,
+        "the start handle followed the pointer: {}",
+        e.timeline.trim_start
+    );
+    assert!((e.timeline.trim_end - 0.5046).abs() < 1e-9);
+}
+
 #[test]
 fn click_beside_a_handle_does_not_move_it() {
     let (_tmp, mut s) = editor_state(Lifecycle::Paused);
