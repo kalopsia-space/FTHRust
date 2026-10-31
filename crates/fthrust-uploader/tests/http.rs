@@ -10,7 +10,7 @@ use std::time::Duration;
 use fthrust_core::FthrPaths;
 use fthrust_core::upload::history::History;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_uploader::{Env, handle};
+use fthrust_uploader::{Env, Response, handle};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Default)]
@@ -133,13 +133,18 @@ impl Home {
         env
     }
 
-    async fn upload(&self, env: &Env) -> (bool, String, Value) {
+    /// The whole reply to an upload request for the clip.
+    async fn respond(&self, env: &Env) -> Response {
         let req = json!({
             "action": "upload",
             "path": self.clip,
             "allowed_roots": [self.dir.path().join("clips")],
         });
-        let r = handle(env, &req).await;
+        handle(env, &req).await
+    }
+
+    async fn upload(&self, env: &Env) -> (bool, String, Value) {
+        let r = self.respond(env).await;
         let info = r.upload_info.map(Value::Object).unwrap_or(Value::Null);
         (r.ok, r.message, info)
     }
@@ -660,6 +665,39 @@ async fn auto_delete_failure_still_succeeds() {
     assert!(
         msg.starts_with("Uploaded, but local delete failed: "),
         "{msg}"
+    );
+}
+
+/// The upload worked but nothing records it: deleting the clip would leave
+/// a copy on the server, no local file and no link anywhere.
+#[tokio::test]
+async fn a_history_that_cannot_be_saved_keeps_the_clip_and_hands_over_the_link() {
+    let srv = server(vec![(200, "https://cdn.example/a")]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    // A folder where the history file belongs: it cannot be written.
+    std::fs::create_dir_all(h.paths.upload_history_file()).unwrap();
+    let real = h.real_clip();
+    let r = h.respond(&h.env("x")).await;
+    assert!(real.exists(), "the clip was deleted: {r:?}");
+    assert!(r.ok, "the upload itself worked: {}", r.message);
+    assert_eq!(r.message, "https://cdn.example/a");
+    let warning = r.warning.clone().expect("no warning");
+    assert!(
+        warning.starts_with(
+            "Uploaded to https://cdn.example/a, but the upload history could not be saved ("
+        ),
+        "{warning}"
+    );
+    assert!(warning.ends_with("). The clip was kept."), "{warning}");
+    assert_eq!(
+        r.upload_info.as_ref().unwrap()["url"],
+        json!("https://cdn.example/a")
+    );
+    assert!(
+        r.to_line()
+            .contains(r#""warning":"Uploaded to https://cdn.example/a"#)
     );
 }
 

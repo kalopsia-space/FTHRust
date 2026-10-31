@@ -101,6 +101,10 @@ pub struct Response {
     /// The failure is in the upload settings (URL, token): retrying the
     /// same request cannot help. Written only when true.
     pub settings_problem: bool,
+    /// What the user should know about an upload that worked: no link came
+    /// back, the clip could not be deleted, the history could not be saved.
+    /// Written only when there is one.
+    pub warning: Option<String>,
 }
 
 impl Response {
@@ -111,6 +115,7 @@ impl Response {
             message: message.into(),
             upload_info: None,
             settings_problem: false,
+            warning: None,
         }
     }
 
@@ -121,6 +126,7 @@ impl Response {
             message: message.into(),
             upload_info: None,
             settings_problem: false,
+            warning: None,
         }
     }
 
@@ -134,6 +140,9 @@ impl Response {
         }
         if self.settings_problem {
             m.insert("settings_problem".into(), Value::Bool(true));
+        }
+        if let Some(warning) = &self.warning {
+            m.insert("warning".into(), Value::String(warning.clone()));
         }
         Value::Object(m).to_string()
     }

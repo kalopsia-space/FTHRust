@@ -646,6 +646,7 @@ pub async fn upload(
         message,
         upload_info: Some(Map::new()),
         settings_problem: false,
+        warning: None,
     };
     if !path.is_file() {
         return failed("File no longer exists.".into());
@@ -710,9 +711,7 @@ pub async fn upload(
         json!(fthrust_core::upload::utc_now_iso()),
     );
     entry.extend(result);
-    if let Err(e) = History::update(&env.paths, |h| h.record(path, Entry(entry.clone()))) {
-        eprintln!("[Uploader] Upload history could not be saved: {e}");
-    }
+    let saved = History::update(&env.paths, |h| h.record(path, Entry(entry.clone())));
     let url = entry.get("url").and_then(Value::as_str).unwrap_or("");
     let message = if url.is_empty() && provider == Provider::Custom {
         "Uploaded, but your server didn't reply with a link.".to_owned()
@@ -721,6 +720,27 @@ pub async fn upload(
     } else {
         url.to_owned()
     };
+    if let Err(e) = saved {
+        // The upload exists, but nothing records it, and the app learns a
+        // clip's link only from the history. Deleting the clip now would
+        // leave a copy on the server, no local file and no link anywhere:
+        // keep it, and hand the link over in the reply.
+        eprintln!("[Uploader] Upload history could not be saved: {e}");
+        let was = if url.is_empty() {
+            "Uploaded".to_owned()
+        } else {
+            format!("Uploaded to {url}")
+        };
+        return Response {
+            ok: true,
+            message,
+            upload_info: Some(entry),
+            settings_problem: false,
+            warning: Some(format!(
+                "{was}, but the upload history could not be saved ({e}). The clip was kept."
+            )),
+        };
+    }
     // Without a link the upload is not confirmed: keep the only copy.
     if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
         && !url.is_empty()
@@ -731,6 +751,7 @@ pub async fn upload(
             message: format!("Uploaded, but local delete failed: {e}"),
             upload_info: Some(entry),
             settings_problem: false,
+            warning: None,
         };
     }
     Response {
@@ -738,6 +759,7 @@ pub async fn upload(
         message,
         upload_info: Some(entry),
         settings_problem: false,
+        warning: None,
     }
 }
 
