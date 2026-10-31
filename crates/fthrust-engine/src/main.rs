@@ -9,6 +9,7 @@ use fthrust_ipc::BackendKind;
 
 fn main() -> ExitCode {
     fthrust_media::capabilities::handle_probe_argv();
+    fthrust_media::init_ffmpeg_logging();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match classify(&args) {
         CliMode::Version => {

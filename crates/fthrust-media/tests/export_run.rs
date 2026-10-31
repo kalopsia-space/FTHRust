@@ -13,6 +13,12 @@ use fthrust_media::export::{ExportState, Job, Quality, run};
 
 /// A 160×90 30 fps clip with `tracks` AAC tones (0 = video only).
 fn clip(dir: &Path, name: &str, seconds: u32, tracks: usize) -> Option<PathBuf> {
+    clip_with_audio(dir, name, seconds, &vec![f64::from(seconds); tracks])
+}
+
+/// [`clip`] with one tone per entry of `audio_s`, each that many seconds
+/// long.
+fn clip_with_audio(dir: &Path, name: &str, seconds: u32, audio_s: &[f64]) -> Option<PathBuf> {
     use fthrust_core::capture_config::{Codec, EncoderPref};
     use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
     use fthrust_media::encoder::{Encoder, EncoderConfig};
@@ -61,12 +67,14 @@ fn clip(dir: &Path, name: &str, seconds: u32, tracks: usize) -> Option<PathBuf> 
         width: 160,
         height: 90,
         bitrate_kbps: 300,
-        separate_audio: tracks > 1,
+        separate_audio: audio_s.len() > 1,
     };
-    let tones: Vec<Vec<f32>> = (0..tracks)
-        .map(|t| {
+    let tones: Vec<Vec<f32>> = audio_s
+        .iter()
+        .enumerate()
+        .map(|(t, &len)| {
             let hz = 440.0 * (t + 1) as f32;
-            (0..u64::from(seconds) * 48_000)
+            (0..(len * 48_000.0).round() as u64)
                 .flat_map(|i| {
                     let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
                     [v, v]
@@ -513,6 +521,309 @@ fn late_ranges_of_a_long_clip_do_not_time_out() {
         "{} {:?}",
         p.duration_s,
         p.streams
+    );
+}
+
+/// Bytes this thread has read so far (`rchar` of `/proc/thread-self/io`).
+fn thread_read_bytes() -> u64 {
+    std::fs::read_to_string("/proc/thread-self/io")
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("rchar:"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn a_stream_copy_trim_stops_reading_at_its_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "long.mp4", 40, 1) else {
+        return;
+    };
+    let size = std::fs::metadata(&src).unwrap().len();
+    let out = tmp.path().join("first-second.mp4");
+    let mut j = job(&src, out.clone(), &spec(&[(0.0, 1.0)]), Quality::Quality);
+    j.inactivity_s = Some(5.0);
+    // The export runs on this thread, so its reads show up here.
+    let before = thread_read_bytes();
+    let (r, statuses, _) = run_job(&j);
+    let read = thread_read_bytes() - before;
+    eprintln!("read {read} bytes of a {size}-byte source");
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    assert!(
+        statuses.contains(&"Exporting · stream copy".to_owned()),
+        "{statuses:?}"
+    );
+    let p = probe(&out);
+    assert_eq!((p.video, p.audio), (1, 1));
+    assert!(
+        read < size / 4,
+        "read {read} bytes of a {size}-byte source for its first second"
+    );
+}
+
+/// A video-only re-encode through `graph` (its output pad is `[v]`).
+fn graph_job(src: &Path, out: PathBuf, graph: &str, expected_duration_s: f64) -> Job {
+    use fthrust_core::export::graph::{AudioOut, GraphPlan, MapRef, VideoOut};
+    Job {
+        expected_duration_s,
+        copy_metadata: false,
+        ..rewrite_job(
+            src,
+            out,
+            GraphPlan {
+                seek_s: None,
+                duration_s: None,
+                filter_graph: Some(graph.to_owned()),
+                video_map: MapRef::Label("v".into()),
+                audio_map: None,
+                video: VideoOut::Encode,
+                audio: AudioOut::None,
+                audio_filter: None,
+                shortest: false,
+            },
+        )
+    }
+}
+
+#[test]
+fn a_truncated_export_fails_instead_of_replacing_anything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "three.mp4", 3, 0) else {
+        return;
+    };
+    let out = tmp.path().join("short.mp4");
+    // The graph ends the video after 0.2 s of a 3 s clip, as an encoder or
+    // filter that gives up early would; the first frame still decodes.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=0.2[v]",
+        3.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("s long"), "{}", r.detail);
+    assert!(!out.exists());
+    assert!(leftovers(tmp.path()).is_empty());
+
+    // The same graph is fine when that is the length asked for.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=0.2[v]",
+        0.2,
+    ));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_long_export_short_by_more_than_a_frame_fails() {
+    // 0.8 s short of 50 s: within the old 0.5 s + 1% allowance (1.0 s).
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "fifty.mp4", 50, 0) else {
+        return;
+    };
+    let out = tmp.path().join("short.mp4");
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=49.2[v]",
+        50.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("s long"), "{}", r.detail);
+    assert!(!out.exists());
+}
+
+#[test]
+fn an_export_whose_audio_stops_early_fails() {
+    use fthrust_core::export::graph::{AudioOut, GraphPlan, MapRef, VideoOut};
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "talk.mp4", 2, 1) else {
+        return;
+    };
+    let out = tmp.path().join("silent_end.mp4");
+    let j = Job {
+        expected_duration_s: 2.0,
+        copy_metadata: false,
+        ..rewrite_job(
+            &src,
+            out.clone(),
+            GraphPlan {
+                seek_s: None,
+                duration_s: None,
+                filter_graph: Some("[0:v]null[v];[0:a:0]atrim=duration=0.5[a]".into()),
+                video_map: MapRef::Label("v".into()),
+                audio_map: Some(MapRef::Label("a".into())),
+                video: VideoOut::Encode,
+                audio: AudioOut::Encode { kbps: 128 },
+                audio_filter: None,
+                shortest: false,
+            },
+        )
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("audio"), "{}", r.detail);
+    assert!(!out.exists());
+}
+
+#[test]
+fn audio_that_ends_inside_the_last_range_is_not_a_short_export() {
+    // 6 s of video, 4.5 s of audio, kept as (0, 2) + (3.5, 6): the last
+    // range holds one second of audio, so 3 s of audio is all there is.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "early.mp4", 6, &[4.5]) else {
+        return;
+    };
+    let out = tmp.path().join("ranges.mp4");
+    let j = Job {
+        expected_duration_s: 4.5,
+        ..job(
+            &src,
+            out.clone(),
+            &spec(&[(0.0, 2.0), (3.5, 6.0)]),
+            Quality::Fast,
+        )
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let p = probe(&out);
+    let audio = p.streams.iter().find(|(k, _)| k == "Audio").unwrap().1;
+    assert!((audio - 3.0).abs() < 0.2, "{:?}", p.streams);
+}
+
+#[test]
+fn several_ranges_without_a_manifest_carry_only_the_first_track() {
+    // Track 0 ends at 4.5 s, track 1 lasts the whole 6 s.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "two.mp4", 6, &[4.5, 6.0]) else {
+        return;
+    };
+    let out = tmp.path().join("ranges.mp4");
+    let j = Job {
+        expected_duration_s: 4.5,
+        ..job(&src, out, &spec(&[(0.0, 2.0), (3.5, 6.0)]), Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_mix_without_a_track_that_does_not_decode_is_not_short() {
+    // Track 0 ends at 4.5 s; track 1, which lasts the whole 6 s, does not
+    // decode, so the mix leaves it out.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "two.mp4", 6, &[4.5, 6.0]) else {
+        return;
+    };
+    let mut s = spec(&[(0.0, 6.0)]);
+    s.has_manifest_tracks = true;
+    s.sources = (0..2)
+        .map(|i| MixSource {
+            audio_index: Some(i),
+            available: i == 0,
+            role: MixRole::Direct,
+            gain_percent: 100,
+            muted: false,
+        })
+        .collect();
+    let out = tmp.path().join("mix.mp4");
+    let j = Job {
+        expected_duration_s: 6.0,
+        ..job(&src, out, &s, Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_sped_up_range_past_the_end_of_the_audio_is_not_short() {
+    // (2, 6) at double speed: 2 s of video, and the 2.5 s of audio left
+    // after 2 s play in 1.25 s.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "early.mp4", 6, &[4.5]) else {
+        return;
+    };
+    let mut s = spec(&[(2.0, 6.0)]);
+    s.speed = 2.0;
+    let out = tmp.path().join("fast.mp4");
+    let j = Job {
+        expected_duration_s: 2.0,
+        ..job(&src, out, &s, Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn an_export_never_needs_more_than_the_clip_has() {
+    // Finalize asks for the requested clip length, which a replay buffer
+    // holding less than that does not reach.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "two.mp4", 2, 1) else {
+        return;
+    };
+    let out = tmp.path().join("whole.mp4");
+    let (r, _, _) = run_job(&graph_job(&src, out.clone(), "[0:v]null[v]", 30.0));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_filter_graph_error_fails_the_export_with_its_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "bad.mp4", 2, 0) else {
+        return;
+    };
+    let out = tmp.path().join("bad_out.mp4");
+    // `colorspace` refuses HLG input when it filters the first frame, which
+    // surfaces where the export pulls frames from the graph.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]setparams=color_trc=arib-std-b67,colorspace=all=bt709[v]",
+        2.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(
+        r.detail.starts_with("The filter graph failed: "),
+        "{}",
+        r.detail
+    );
+    assert!(!out.exists());
+}
+
+#[test]
+fn a_size_preset_caps_the_peak_rate() {
+    use fthrust_media::encoder::encoder_exists;
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "rate.mp4", 2, 0) else {
+        return;
+    };
+    // x264 writes its rate control settings into the stream, so the test
+    // can see them; OpenH264 would be picked first and writes none.
+    if encoder_exists("libopenh264") || !encoder_exists("libx264") {
+        eprintln!("skipping: the software H.264 encoder is not x264");
+        return;
+    }
+    let out = tmp.path().join("capped.mp4");
+    let mut s = spec(&[(0.0, 2.0)]);
+    s.force_video_encode = true;
+    let mut j = job(&src, out.clone(), &s, Quality::Quality);
+    j.expected_duration_s = 2.0;
+    j.video_bitrate_kbps = Some(1000);
+    j.max_rate_kbps = Some(1150);
+    // Straight to the software encoder.
+    j.fail_first_encoder = true;
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let bytes = std::fs::read(&out).unwrap();
+    let needle = b"vbv_maxrate=1150 vbv_bufsize=2000";
+    assert!(
+        bytes.windows(needle.len()).any(|w| w == needle),
+        "the encoder ran without the preset's peak rate"
     );
 }
 

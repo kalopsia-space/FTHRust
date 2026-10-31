@@ -10,7 +10,7 @@ use fthrust_core::capture_config::{Codec, EncoderPref};
 use crate::encoder_policy::{encoder_candidates, preset_options};
 use crate::ffi::capture_surfaces::{CaptureSurfaces, ExportedImage};
 use crate::ffi::codec::{HwInput, OpenParams, RawEncoder};
-use crate::ffi::frame::OwnedFrame;
+use crate::ffi::frame::{OwnedFrame, check_bgra_geometry};
 use crate::ffi::hw::{POOL_SURFACES, VaapiFrames, candidate_devices};
 use crate::ffi::scaler::Scaler;
 use crate::ffi::vpp::VaapiConverter;
@@ -40,10 +40,40 @@ pub struct EncoderConfig {
     pub preset: u8,
 }
 
+/// A peak bitrate and the rate-control (VBV) buffer it holds over, FFmpeg's
+/// `-maxrate` and `-bufsize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RateCap {
+    /// Peak bitrate.
+    pub max_kbps: u32,
+    /// Buffer size.
+    pub buffer_kbits: u32,
+}
+
+/// How an encoder opens, besides its [`EncoderConfig`].
+#[derive(Clone, Copy, Debug, Default)]
+struct Opening {
+    /// Keyframe interval in frames (`None`: two seconds).
+    gop: Option<u32>,
+    /// Convert on the CPU even where the GPU could.
+    force_cpu: bool,
+    /// Test hook.
+    inject: Option<GpuFailure>,
+    rate_cap: Option<RateCap>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FrameTiming {
     pts: i64,
     wall_time_ns: i64,
+}
+
+/// What choosing a frame's pts and keyframe changes.
+#[derive(Clone, Copy, Debug)]
+struct Clock {
+    epoch_ns: Option<i64>,
+    last_input_pts: i64,
+    keyframe_requested: bool,
 }
 
 /// Where BGRA is converted to the encoder's pixel format.
@@ -99,6 +129,7 @@ pub struct Encoder {
     /// was last (re)built.
     gpu_proven: bool,
     inject_convert_failure: bool,
+    inject_send_failure: bool,
     hw_frame: Option<OwnedFrame>,
     /// Scratch frame holding a fresh reference to the last frame for repeats.
     repeat_frame: OwnedFrame,
@@ -138,9 +169,23 @@ impl Encoder {
         self.inject_convert_failure = true;
     }
 
+    /// Makes the next frame fail before it reaches the codec, on any path
+    /// (tests).
+    #[doc(hidden)]
+    pub fn inject_send_failure(&mut self) {
+        self.inject_send_failure = true;
+    }
+
+    fn injected_send_failure(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.inject_send_failure) {
+            return Err(MediaError::Invalid("injected send failure".into()));
+        }
+        Ok(())
+    }
+
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
-        Self::open_inner(cfg, devices, None, false, None)
+        Self::open_inner(cfg, devices, Opening::default())
     }
 
     /// [`Encoder::open`] with the CPU colour conversion forced (tests and
@@ -148,7 +193,11 @@ impl Encoder {
     #[doc(hidden)]
     pub fn open_forcing_cpu_conversion(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(cfg, &candidate_devices(), None, true, None)
+        let opening = Opening {
+            force_cpu: true,
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
     }
 
     /// Makes frame uploads use the staging copy and `av_hwframe_transfer_data`
@@ -164,13 +213,27 @@ impl Encoder {
     /// (playback proxies and tests; capture keeps the two-second default).
     pub fn open_with_gop(cfg: &EncoderConfig, gop_frames: u32) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(
-            cfg,
-            &candidate_devices(),
-            Some(gop_frames.max(1)),
-            false,
-            None,
-        )
+        let opening = Opening {
+            gop: Some(gop_frames.max(1)),
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
+    }
+
+    /// [`Encoder::open_with_gop`] with a peak bitrate (size-targeted
+    /// exports).
+    pub fn open_with_gop_and_cap(
+        cfg: &EncoderConfig,
+        gop_frames: u32,
+        cap: RateCap,
+    ) -> Result<Self> {
+        crate::init()?;
+        let opening = Opening {
+            gop: Some(gop_frames.max(1)),
+            rate_cap: Some(cap),
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
     }
 
     /// [`Encoder::open`] with a GPU conversion failure injected (tests).
@@ -180,18 +243,16 @@ impl Encoder {
         failure: GpuFailure,
     ) -> Result<Self> {
         crate::init()?;
-        let mut enc = Self::open_inner(cfg, &candidate_devices(), None, false, Some(failure))?;
+        let opening = Opening {
+            inject: Some(failure),
+            ..Opening::default()
+        };
+        let mut enc = Self::open_inner(cfg, &candidate_devices(), opening)?;
         enc.inject_convert_failure = failure == GpuFailure::FirstConvert;
         Ok(enc)
     }
 
-    fn open_inner(
-        cfg: &EncoderConfig,
-        devices: &[String],
-        gop: Option<u32>,
-        force_cpu: bool,
-        inject: Option<GpuFailure>,
-    ) -> Result<Self> {
+    fn open_inner(cfg: &EncoderConfig, devices: &[String], opening: Opening) -> Result<Self> {
         crate::init()?;
         if cfg.fps == 0 || cfg.enc_width == 0 || cfg.enc_height == 0 {
             return Err(MediaError::Invalid(
@@ -206,7 +267,7 @@ impl Encoder {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg, devices, gop, force_cpu, inject, &mut logged) {
+            match Self::try_open(name, cfg, devices, opening, &mut logged) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -214,10 +275,11 @@ impl Encoder {
                         height = cfg.enc_height,
                         fps = cfg.fps,
                         bitrate_kbps = cfg.bitrate_kbps,
+                        max_kbps = opening.rate_cap.map(|c| c.max_kbps),
                         preset = cfg.preset,
                         "encoder opened"
                     );
-                    return Self::finish_open(raw, cfg, gop);
+                    return Self::finish_open(raw, cfg, opening.gop);
                 }
                 Err(e) => failures.push(format!("{name}: {e}")),
             }
@@ -241,11 +303,15 @@ impl Encoder {
         name: &'static str,
         cfg: &EncoderConfig,
         devices: &[String],
-        gop: Option<u32>,
-        force_cpu: bool,
-        inject: Option<GpuFailure>,
+        opening: Opening,
         logged: &mut bool,
     ) -> Result<RawEncoder> {
+        let Opening {
+            gop,
+            force_cpu,
+            inject,
+            rate_cap,
+        } = opening;
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
             is_vaapi || name.contains("nvenc") || name.contains("amf") || name.contains("qsv");
@@ -254,6 +320,12 @@ impl Encoder {
             height: cfg.enc_height,
             fps: cfg.fps,
             bitrate_bps: i64::from(cfg.bitrate_kbps) * 1000,
+            rate_cap: rate_cap.map(|c| {
+                (
+                    i64::from(c.max_kbps) * 1000,
+                    i64::from(c.buffer_kbits) * 1000,
+                )
+            }),
             options: preset_options(name, cfg.preset).unwrap_or_default(),
             gop_frames: gop,
             pix_fmt: if is_hw {
@@ -308,9 +380,13 @@ impl Encoder {
     fn gpu_input(hw: VaapiFrames, cfg: &EncoderConfig) -> Result<HwInput> {
         let (src_w, src_h) = (cfg.src_width.max(1), cfg.src_height.max(1));
         let mut converter = VaapiConverter::new(&hw, src_w, src_h, cfg.enc_width, cfg.enc_height)?;
-        let black = vec![0u8; src_w as usize * src_h as usize * 4];
+        let row = src_w as usize * 4;
+        let len = row
+            .checked_mul(src_h as usize)
+            .ok_or_else(|| MediaError::Invalid(format!("source {src_w}x{src_h} is too large")))?;
+        let black = vec![0u8; len];
         let mut out = OwnedFrame::empty()?;
-        converter.convert(&black, src_w as usize * 4, &mut out)?;
+        converter.convert(&black, row, &mut out)?;
         Ok(HwInput::Converter(hw, converter))
     }
 
@@ -330,6 +406,7 @@ impl Encoder {
             cpu,
             gpu_proven: false,
             inject_convert_failure: false,
+            inject_send_failure: false,
             hw_frame,
             repeat_frame: OwnedFrame::empty()?,
             last_frame_valid: false,
@@ -347,7 +424,8 @@ impl Encoder {
     }
 
     /// Whether `name` exists and completes a real one-frame 640×360 encode
-    /// (registration alone does not prove a driver works).
+    /// that yields a packet with data (registration alone does not prove a
+    /// driver works, and accepting a frame does not prove it encodes).
     pub fn encoder_works(name: &'static str) -> bool {
         if crate::init().is_err() || !RawEncoder::exists(name) {
             return false;
@@ -367,9 +445,7 @@ impl Encoder {
             name,
             &cfg,
             &candidate_devices(),
-            None,
-            false,
-            None,
+            Opening::default(),
             &mut false,
         ) else {
             return false;
@@ -383,6 +459,7 @@ impl Encoder {
             .encode(&black, 640 * 4, 640, 360, 0, &mut out)
             .is_ok()
             && encoder.flush(&mut out).is_ok()
+            && out.iter().any(|p| !p.data.is_empty())
     }
 
     /// Name of the encoder in use.
@@ -426,14 +503,28 @@ impl Encoder {
 
     /// Frees the capture surfaces from [`Encoder::dmabuf_targets`] once the
     /// compositor no longer writes into them (zero copy fell back to shm).
+    /// The converter built on their pool goes too, so it frees with them;
+    /// the next shared-memory frame builds one for uploads.
     pub fn release_dmabuf_targets(&mut self) {
         self.surfaces = None;
+        if self.cpu.is_none() && !self.raw.converter_takes_uploads() {
+            self.raw.drop_converter();
+        }
+    }
+
+    /// Whether the encoder's own NV12 upload pool and the GPU converter's
+    /// BGRX upload pool have been created (tests): neither is while
+    /// capture writes into dmabuf surfaces.
+    #[doc(hidden)]
+    pub fn upload_pools_created(&self) -> (bool, bool) {
+        self.raw.upload_pools_created()
     }
 
     /// Allocates `count` `width`×`height` BGRX VA surfaces on the encoder's
     /// device, exported as dmabufs the compositor can copy captures into,
-    /// and rebuilds the GPU converter for that source size. Replaces any
-    /// earlier set. Errors unless conversion is on the GPU.
+    /// and builds the GPU converter on their pool, which replaces its
+    /// upload pool. Replaces any earlier set. Errors unless conversion is
+    /// on the GPU.
     pub fn dmabuf_targets(
         &mut self,
         width: u32,
@@ -451,16 +542,14 @@ impl Encoder {
             )));
         }
         self.surfaces = None;
-        if self.raw.converter_source_size() != Some((width, height)) {
-            self.raw.rebuild_converter(width, height)?;
-            self.gpu_proven = false;
-        }
         let device = self
             .raw
             .vaapi()
             .ok_or_else(|| MediaError::Invalid("no VA-API device".into()))?;
         let surfaces = CaptureSurfaces::new(device, width, height, count)?;
         let images = surfaces.images()?;
+        self.raw.bind_converter_to(surfaces.surface(0))?;
+        self.gpu_proven = false;
         self.surfaces = Some(surfaces);
         Ok(images)
     }
@@ -526,26 +615,17 @@ impl Encoder {
         }
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        let size = surfaces.size();
-        if self.raw.converter_source_size() != Some(size) {
-            self.raw.rebuild_converter(size.0, size.1)?;
+        if self.raw.converter_source_size() != Some(surfaces.size()) {
+            self.raw.bind_converter_to(surfaces.surface(index))?;
             self.gpu_proven = false;
         }
         // Nothing reaches the codec on a failure: restore the clock state
         // so the caller's retry through `encode` gets this frame's pts and
         // keyframe.
-        let saved = (
-            self.pts_epoch_ns,
-            self.last_input_pts,
-            self.keyframe_requested,
-        );
+        let clock = self.clock();
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
         if let Err(e) = self.convert_surface_and_send(index, frame_pts, force_key) {
-            (
-                self.pts_epoch_ns,
-                self.last_input_pts,
-                self.keyframe_requested,
-            ) = saved;
+            self.restore_clock(clock);
             tracing::debug!(reason = %e, "encoding from the capture surface failed");
             return Err(e);
         }
@@ -612,27 +692,24 @@ impl Encoder {
         if width == 0 || height == 0 {
             return Err(MediaError::Invalid("frame size must be non-zero".into()));
         }
-        if stride < width as usize * 4 {
-            return Err(MediaError::Invalid(format!(
-                "stride {stride} is smaller than width*4 ({})",
-                width * 4
-            )));
-        }
-        if bgra.len() < stride * (height as usize - 1) + width as usize * 4 {
-            return Err(MediaError::Invalid(
-                "frame buffer is shorter than its declared geometry".into(),
-            ));
-        }
+        check_bgra_geometry(bgra.len(), stride, width, height as usize)?;
         // The new frame replaces the last one: drop the repeat reference so
         // it pins no surface through the rebuild or the next convert.
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        if self.cpu.is_none() && self.raw.converter_source_size() != Some((width, height)) {
-            tracing::info!(
-                width,
-                height,
-                "source size changed; rebuilding the GPU converter"
-            );
+        if self.cpu.is_none()
+            && (self.raw.converter_source_size() != Some((width, height))
+                || !self.raw.converter_takes_uploads())
+        {
+            if self.raw.converter_takes_uploads() {
+                tracing::info!(
+                    width,
+                    height,
+                    "source size changed; rebuilding the GPU converter"
+                );
+            } else {
+                tracing::debug!(width, height, "building the GPU converter for uploads");
+            }
             // Frames from the rebuilt converter come from a new sink frames
             // context on the same VADisplay with the same NV12 format and
             // output size. h264_vaapi only uses avctx->hw_frames_ctx at init
@@ -649,16 +726,16 @@ impl Encoder {
             }
         }
 
+        // A frame that never reaches the codec leaves the clock as it was,
+        // so a pending keyframe request waits for the next frame that does.
+        let clock = self.clock();
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
-
-        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
-        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
-        if first_gpu && let Err(e) = &sent {
-            log_gpu_fallback(e);
-            self.switch_to_cpu(width, height)?;
-            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        if let Err(e) =
+            self.convert_with_fallback(bgra, stride, width, height, frame_pts, force_key)
+        {
+            self.restore_clock(clock);
+            return Err(e);
         }
-        sent?;
         if self.cpu.is_none() {
             self.gpu_proven = true;
         }
@@ -671,6 +748,44 @@ impl Encoder {
             self.last_forced_keyframe_pts = frame_pts;
         }
         self.drain(wall_time_ns, out)
+    }
+
+    /// [`Encoder::convert_and_send`], retried on the CPU when the first GPU
+    /// frame fails.
+    fn convert_with_fallback(
+        &mut self,
+        bgra: &[u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        pts: i64,
+        force_key: bool,
+    ) -> Result<()> {
+        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
+        match self.convert_and_send(bgra, stride, width, height, pts, force_key) {
+            Err(e) if first_gpu => {
+                log_gpu_fallback(&e);
+                self.switch_to_cpu(width, height)?;
+                self.convert_and_send(bgra, stride, width, height, pts, force_key)
+            }
+            sent => sent,
+        }
+    }
+
+    /// The clock state [`Encoder::next_pts_and_key`] advances.
+    fn clock(&self) -> Clock {
+        Clock {
+            epoch_ns: self.pts_epoch_ns,
+            last_input_pts: self.last_input_pts,
+            keyframe_requested: self.keyframe_requested,
+        }
+    }
+
+    /// Undoes [`Encoder::next_pts_and_key`] for a frame the codec never got.
+    fn restore_clock(&mut self, clock: Clock) {
+        self.pts_epoch_ns = clock.epoch_ns;
+        self.last_input_pts = clock.last_input_pts;
+        self.keyframe_requested = clock.keyframe_requested;
     }
 
     /// The pts for a frame captured at `wall_time_ns` and whether it is a
@@ -718,10 +833,17 @@ impl Encoder {
             (None, None) => return Ok(false),
         };
         self.repeat_frame.reference(last)?;
+        let clock = self.clock();
         let (pts, force_key) = self.next_pts_and_key(wall_time_ns);
         self.repeat_frame.set_pts(pts);
         self.repeat_frame.set_forced_keyframe(force_key);
-        self.raw.send_frame(Some(&self.repeat_frame))?;
+        let sent = self
+            .injected_send_failure()
+            .and_then(|()| self.raw.send_frame(Some(&self.repeat_frame)));
+        if let Err(e) = sent {
+            self.restore_clock(clock);
+            return Err(e);
+        }
         self.pending.push_back(FrameTiming { pts, wall_time_ns });
         if force_key {
             self.last_forced_keyframe_pts = pts;
@@ -758,6 +880,7 @@ impl Encoder {
         pts: i64,
         force_key: bool,
     ) -> Result<()> {
+        self.injected_send_failure()?;
         if let Some(cpu) = &mut self.cpu {
             if cpu.scaler.source_size() != (width, height) {
                 tracing::info!(

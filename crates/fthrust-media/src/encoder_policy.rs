@@ -86,20 +86,64 @@ pub fn encoder_candidates(codec: Codec, encoder: EncoderPref) -> Vec<&'static st
     out
 }
 
+/// The preset value the settings start at (P4, Balanced).
+pub const DEFAULT_PRESET: u8 = 4;
+
+/// The preset capture uses with `backend` chosen: the stored `preset`
+/// where the settings show the preset picker (only for NVENC chosen
+/// explicitly), else [`DEFAULT_PRESET`]. A preset picked for NVENC would
+/// otherwise follow the user to a backend that never shows it (P7 then
+/// Software runs Kvazaar or SVT-AV1 at their slowest).
+pub fn capture_preset(backend: EncoderPref, preset: u8) -> u8 {
+    if backend == EncoderPref::Nvenc {
+        preset
+    } else {
+        DEFAULT_PRESET
+    }
+}
+
+/// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).
+pub fn is_hardware(codec_name: &str) -> bool {
+    ["nvenc", "vaapi", "amf", "qsv"]
+        .iter()
+        .any(|h| codec_name.contains(h))
+}
+
+/// The `thread_count` an encoder opens with: `Some(0)`, FFmpeg's automatic
+/// count, for software encoders (most of their wrappers otherwise run the
+/// library on one thread), and `None` to leave hardware encoders as they
+/// are.
+pub fn thread_count(codec_name: &str) -> Option<i32> {
+    (!is_hardware(codec_name)).then_some(0)
+}
+
 /// The `(option, value)` pairs that map preset `1..=7` (clamped) onto an
 /// encoder's private options, or `None` for an encoder the policy does not
 /// know. VA-API deliberately gets no quality option: its meaning differs
 /// between drivers. `libopenh264` additionally needs `max_b_frames = 0`,
 /// which the encoder applies itself.
+///
+/// Every pair is one the encoder accepts (tested against the FFmpeg the
+/// tests run with): QSV's slowest preset is `veryslow`, only `h264_qsv`
+/// has `look_ahead`, NVENC's `cbr` (default off) is gone in FFmpeg 9, and
+/// libkvazaar takes its preset inside `kvazaar-params`.
 pub fn preset_options(codec_name: &str, preset: u8) -> Option<Vec<(&'static str, String)>> {
     let p = preset.clamp(1, 7) as usize;
     let s = |v: &str| v.to_string();
+    const X26X: [&str; 7] = [
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "fast",
+        "medium",
+        "slow",
+        "veryslow",
+    ];
     Some(if codec_name.contains("nvenc") {
         vec![
             ("preset", format!("p{p}")),
             ("tune", s("ll")),
             ("rc", s("vbr")),
-            ("cbr", s("0")),
             ("forced-idr", s("1")),
         ]
     } else if codec_name.contains("amf") {
@@ -111,30 +155,23 @@ pub fn preset_options(codec_name: &str, preset: u8) -> Option<Vec<(&'static str,
         Vec::new()
     } else if codec_name.contains("qsv") {
         const QSV: [&str; 7] = [
-            "veryfast", "fast", "medium", "medium", "slow", "slower", "slowest",
+            "veryfast", "fast", "medium", "medium", "slow", "slower", "veryslow",
         ];
-        vec![("preset", s(QSV[p - 1])), ("look_ahead", s("0"))]
+        let mut v = vec![("preset", s(QSV[p - 1]))];
+        if codec_name.starts_with("h264") {
+            v.push(("look_ahead", s("0")));
+        }
+        v
     } else if codec_name.contains("openh264") {
         vec![
             ("rc_mode", s("bitrate")),
             ("allow_skip_frames", s("0")),
             ("profile", s("high")),
         ]
-    } else if codec_name.contains("kvazaar") || codec_name.contains("libx26") {
-        const NAMES: [&str; 7] = [
-            "ultrafast",
-            "superfast",
-            "veryfast",
-            "fast",
-            "medium",
-            "slow",
-            "veryslow",
-        ];
-        let mut v = vec![("preset", s(NAMES[p - 1]))];
-        if codec_name.contains("libx26") {
-            v.push(("tune", s("zerolatency")));
-        }
-        v
+    } else if codec_name.contains("kvazaar") {
+        vec![("kvazaar-params", format!("preset={}", X26X[p - 1]))]
+    } else if codec_name.contains("libx26") {
+        vec![("preset", s(X26X[p - 1])), ("tune", s("zerolatency"))]
     } else if codec_name.contains("svtav1") {
         const SVT: [u8; 7] = [12, 9, 7, 6, 4, 1, 0];
         vec![("preset", SVT[p - 1].to_string())]

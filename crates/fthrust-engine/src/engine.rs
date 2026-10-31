@@ -822,7 +822,8 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 bitrate_kbps: cfg.bitrate_kbps,
                 codec: cfg.codec,
                 encoder: cfg.encoder,
-                preset: cfg.preset,
+                // Only where the settings show the preset.
+                preset: fthrust_media::encoder_policy::capture_preset(cfg.encoder, cfg.preset),
             };
             match Encoder::open(&enc_cfg) {
                 Ok(mut enc) => {

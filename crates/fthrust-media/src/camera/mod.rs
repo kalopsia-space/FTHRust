@@ -1,6 +1,7 @@
 //! The webcam recorder (`core/camera_recorder.py`): a capture thread keeps
-//! the last 90 s of the camera as MJPEG packets stamped with their capture
-//! instant, and writes a window of them as an MJPEG Matroska file whose
+//! the last 90 s of the camera (at most 256 MB of it) as MJPEG packets
+//! stamped with their capture instant, and writes a window of them as an
+//! MJPEG Matroska file whose
 //! timestamps place each frame on the saved clip's timeline (the
 //! reference wrote every frame at a fixed 30 fps).
 //!
@@ -22,6 +23,12 @@ pub use devices::{Device, devices_from, list_devices};
 
 /// `KEEP_SECONDS`.
 pub const KEEP: Duration = Duration::from_secs(90);
+
+/// Most JPEG bytes the ring keeps. At 1080p30 a webcam's MJPEG runs at
+/// about 4 to 9 MB/s, which over [`KEEP`] is 400 to 800 MB in the UI
+/// process; with this cap such a camera keeps the last 30 to 60 s, and
+/// 720p cameras still keep all 90 s.
+pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 
 /// How long [`CameraRecorder::stop`] waits for the capture thread.
 const STOP_WAIT: Duration = Duration::from_secs(2);
@@ -69,11 +76,37 @@ struct Entry {
 struct Ring {
     entries: VecDeque<Entry>,
     size: Option<(u32, u32)>,
+    /// JPEG bytes in `entries`.
+    bytes: usize,
+}
+
+impl Ring {
+    /// Adds a frame, then drops the oldest ones more than `keep` older
+    /// than it, and beyond `max_bytes` in all (the newest always stays).
+    fn push(&mut self, entry: Entry, keep: Duration, max_bytes: usize) {
+        let at = entry.at;
+        self.bytes += entry.jpeg.len();
+        self.entries.push_back(entry);
+        while let Some(front) = self.entries.front() {
+            let too_old = at.duration_since(front.at) > keep;
+            if !(too_old || self.bytes > max_bytes) || self.entries.len() == 1 {
+                break;
+            }
+            self.bytes -= front.jpeg.len();
+            self.entries.pop_front();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
 }
 
 struct Shared {
     ring: Mutex<Ring>,
     keep: Duration,
+    max_bytes: usize,
     stop: AtomicBool,
     running: AtomicBool,
     frames: AtomicU64,
@@ -239,8 +272,10 @@ impl CameraRecorder {
             ring: Mutex::new(Ring {
                 entries: VecDeque::new(),
                 size,
+                bytes: 0,
             }),
             keep,
+            max_bytes: MAX_BYTES,
             stop: AtomicBool::new(false),
             running: AtomicBool::new(true),
             frames: AtomicU64::new(0),
@@ -313,7 +348,7 @@ impl CameraRecorder {
             }
         }
         self.shared.running.store(false, Ordering::Relaxed);
-        self.shared.ring().entries.clear();
+        self.shared.ring().clear();
         *self.shared.latest.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -412,15 +447,9 @@ fn capture(mut ictx: ff::format::context::Input, index: usize, mut jpeg: Jpeg, s
             let data = Arc::new(data);
             let seq = shared.frames.fetch_add(1, Ordering::Relaxed) + 1;
             *shared.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some((seq, data.clone()));
-            let mut ring = shared.ring();
-            ring.entries.push_back(Entry { at, jpeg: data });
-            while ring
-                .entries
-                .front()
-                .is_some_and(|e| at.duration_since(e.at) > shared.keep)
-            {
-                ring.entries.pop_front();
-            }
+            shared
+                .ring()
+                .push(Entry { at, jpeg: data }, shared.keep, shared.max_bytes);
         }
     }
     // A read error or end of stream: the camera is gone.
@@ -465,4 +494,53 @@ fn write_mjpeg(
         pkt.write_interleaved(&mut octx)?;
     }
     octx.write_trailer()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(start: Instant, ms: u64, bytes: usize) -> Entry {
+        Entry {
+            at: start + Duration::from_millis(ms),
+            jpeg: Arc::new(vec![0; bytes]),
+        }
+    }
+
+    #[test]
+    fn the_ring_holds_at_most_its_byte_cap_newest_first() {
+        let start = Instant::now();
+        let mut ring = Ring::default();
+        // Thirty frames of 100 kB a second for ten seconds, a 1 MB cap.
+        for i in 0..300 {
+            ring.push(frame(start, i * 33, 100_000), KEEP, 1_000_000);
+            assert!(ring.bytes <= 1_000_000, "{} bytes", ring.bytes);
+        }
+        assert_eq!(ring.entries.len(), 10);
+        assert_eq!(ring.bytes, 1_000_000);
+        assert_eq!(
+            ring.entries.back().unwrap().at,
+            start + Duration::from_millis(299 * 33)
+        );
+    }
+
+    #[test]
+    fn the_ring_still_trims_by_age_and_keeps_an_oversized_newest_frame() {
+        let start = Instant::now();
+        let mut ring = Ring::default();
+        for s in 0..10 {
+            ring.push(
+                frame(start, s * 1000, 10),
+                Duration::from_secs(3),
+                MAX_BYTES,
+            );
+        }
+        assert_eq!(ring.entries.len(), 4, "frames from 6 s to 9 s");
+        assert_eq!(ring.bytes, 40);
+        ring.push(frame(start, 9_500, 5_000), Duration::from_secs(3), 1_000);
+        assert_eq!(ring.entries.len(), 1);
+        assert_eq!(ring.bytes, 5_000);
+        ring.clear();
+        assert_eq!((ring.entries.len(), ring.bytes), (0, 0));
+    }
 }

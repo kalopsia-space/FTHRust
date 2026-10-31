@@ -1,5 +1,7 @@
 use fthrust_core::capture_config::{Codec, EncoderPref};
-use fthrust_media::encoder_policy::{encoder_candidates, preset_options};
+use fthrust_media::encoder_policy::{
+    encoder_candidates, is_hardware, preset_options, thread_count,
+};
 
 fn names(codec: Codec, encoder: EncoderPref) -> Vec<&'static str> {
     encoder_candidates(codec, encoder)
@@ -96,7 +98,6 @@ fn preset_options_match_reference_tables() {
             ("preset", "p3"),
             ("tune", "ll"),
             ("rc", "vbr"),
-            ("cbr", "0"),
             ("forced-idr", "1")
         ]
         .map(|(k, v)| (k, v.to_string()))
@@ -121,7 +122,17 @@ fn preset_options_match_reference_tables() {
             ("look_ahead", "0".to_string())
         ]
     );
-    assert_eq!(opts("h264_qsv", 7)[0], ("preset", "slowest".to_string()));
+    assert_eq!(
+        opts("h264_qsv", 7)[0],
+        ("preset", "veryslow".to_string()),
+        "QSV has no `slowest`"
+    );
+    assert_eq!(
+        opts("hevc_qsv", 1),
+        [("preset", "veryfast".to_string())],
+        "only h264_qsv has look_ahead"
+    );
+    assert_eq!(opts("av1_qsv", 6), [("preset", "slower".to_string())]);
     assert_eq!(
         opts("libopenh264", 4),
         [
@@ -130,7 +141,22 @@ fn preset_options_match_reference_tables() {
             ("profile", "high".to_string())
         ]
     );
-    assert_eq!(opts("libkvazaar", 5), [("preset", "medium".to_string())]);
+    assert_eq!(
+        opts("libkvazaar", 5),
+        [("kvazaar-params", "preset=medium".to_string())],
+        "libkvazaar has no `preset` option of its own"
+    );
+    assert_eq!(
+        opts("libkvazaar", 7),
+        [("kvazaar-params", "preset=veryslow".to_string())]
+    );
+    assert_eq!(
+        opts("libx265", 7),
+        [
+            ("preset", "veryslow".to_string()),
+            ("tune", "zerolatency".to_string())
+        ]
+    );
     assert_eq!(
         opts("libx264", 1),
         [
@@ -151,4 +177,36 @@ fn preset_options_match_reference_tables() {
         "clamped above 7"
     );
     assert!(preset_options("mpeg4", 3).is_none());
+}
+
+#[test]
+fn software_encoders_get_automatic_threads_hardware_keeps_its_default() {
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        for name in names(codec, EncoderPref::Software) {
+            assert!(!is_hardware(name), "{name}");
+            assert_eq!(thread_count(name), Some(0), "{name}");
+        }
+        for name in names(codec, EncoderPref::Auto) {
+            assert!(is_hardware(name), "{name}");
+            assert_eq!(thread_count(name), None, "{name}");
+        }
+    }
+}
+
+#[test]
+fn capture_follows_the_stored_preset_only_with_nvenc_chosen() {
+    use fthrust_media::encoder_policy::{DEFAULT_PRESET, capture_preset};
+    assert_eq!(capture_preset(EncoderPref::Nvenc, 7), 7);
+    assert_eq!(capture_preset(EncoderPref::Nvenc, 1), 1);
+    // No picker for these (Automatic shows none either).
+    for backend in [
+        EncoderPref::Auto,
+        EncoderPref::Vaapi,
+        EncoderPref::Qsv,
+        EncoderPref::Software,
+    ] {
+        assert_eq!(capture_preset(backend, 7), DEFAULT_PRESET, "{backend:?}");
+        assert_eq!(capture_preset(backend, 1), DEFAULT_PRESET, "{backend:?}");
+    }
+    assert_eq!(DEFAULT_PRESET, 4);
 }

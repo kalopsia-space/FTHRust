@@ -1,6 +1,8 @@
 //! Clip filename contract and conservative stale-partial recovery.
 
 use crate::error::Result;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use time::OffsetDateTime;
@@ -168,6 +170,194 @@ pub const RECORDING_PREFIX: &str = "fthr_recording_";
 /// export of this app runs that long without touching its file.
 pub const STALE_PARTIAL_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Renames `from` to `to` without ever replacing `to` (`AlreadyExists` when
+/// it exists): `renameat2(RENAME_NOREPLACE)`; where the filesystem rejects
+/// that flag (NFS, FUSE without rename2), [`publish_without_noreplace`].
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
+    match renameat2(AT_FDCWD, from, AT_FDCWD, to, RenameFlags::RENAME_NOREPLACE) {
+        Ok(()) => Ok(()),
+        Err(nix::errno::Errno::EINVAL | nix::errno::Errno::ENOSYS) => {
+            publish_without_noreplace(from, to, link_then_unlink)
+        }
+        Err(e) => Err(io::Error::from(e)),
+    }
+}
+
+/// No-replace move by hard link plus unlink (`AlreadyExists` when `to`
+/// exists). Once the link exists the file is at `to`, so a failed unlink
+/// only leaves a second name for it (logged).
+pub fn link_then_unlink(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::hard_link(from, to)?;
+    if let Err(e) = std::fs::remove_file(from) {
+        tracing::warn!(
+            "moved {} but could not remove the old name {}: {e}",
+            to.display(),
+            from.display()
+        );
+    }
+    Ok(())
+}
+
+/// The move for filesystems without `RENAME_NOREPLACE`: `link` (a hard link
+/// plus unlink in production), and where the filesystem has no hard links
+/// either (some FUSE mounts, such as gvfs, rclone or exfat-fuse) a plain
+/// rename once `to` is checked to be free. That last step is not atomic
+/// against another writer creating `to` in between, but the names this is
+/// used for are unique, and refusing would leave the file unpublished.
+#[doc(hidden)]
+pub fn publish_without_noreplace(
+    from: &Path,
+    to: &Path,
+    link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    match link(from, to) {
+        Err(e) if links_unsupported(&e) => {
+            match std::fs::symlink_metadata(to) {
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", to.display()),
+                    ));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            std::fs::rename(from, to)
+        }
+        other => other,
+    }
+}
+
+/// Whether a failed `link` means the filesystem has no hard links.
+fn links_unsupported(e: &io::Error) -> bool {
+    use nix::libc::{ENOSYS, EOPNOTSUPP, EPERM};
+    matches!(e.raw_os_error(), Some(EPERM | EOPNOTSUPP | ENOSYS))
+}
+
+/// Whether the MP4 at `path` is a finished file, judged from its top-level
+/// boxes alone. The clip writer's plain MP4 is finished when it has its
+/// `mdat` and `moov` (the index, written last) and its boxes end exactly
+/// where the file does; a crash leaves no `moov`, or a cut one. The
+/// recorder's fragmented MP4 has its `moov` first and plays up to its last
+/// whole fragment, so one with at least one `moof` and its `mdat` counts as
+/// finished even when a crash cut the next fragment short.
+pub fn mp4_is_finished(path: &Path) -> io::Result<bool> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let (mut pos, mut moov, mut mdat, mut fragments) = (0u64, false, false, 0u32);
+    let (mut after_moof, mut cut) = (false, false);
+    while pos < len {
+        let mut head = [0u8; 16];
+        let avail = (len - pos).min(16) as usize;
+        if avail < 8 {
+            cut = true;
+            break;
+        }
+        file.seek(SeekFrom::Start(pos))?;
+        file.read_exact(&mut head[..avail])?;
+        let short = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+        let kind = [head[4], head[5], head[6], head[7]];
+        let (size, header) = match short {
+            // "Runs to the end of the file".
+            0 => (len - pos, 8),
+            1 if avail == 16 => (
+                u64::from_be_bytes([
+                    head[8], head[9], head[10], head[11], head[12], head[13], head[14], head[15],
+                ]),
+                16,
+            ),
+            1 => (0, 16),
+            n => (u64::from(n), 8),
+        };
+        if size < header || size > len - pos {
+            cut = true;
+            break;
+        }
+        match &kind {
+            b"moov" => moov = true,
+            b"mdat" => {
+                mdat = true;
+                if after_moof {
+                    fragments += 1;
+                }
+            }
+            _ => {}
+        }
+        after_moof = &kind == b"moof";
+        pos += size;
+    }
+    Ok(if fragments > 0 {
+        moov
+    } else {
+        moov && mdat && !cut
+    })
+}
+
+/// Where a finished `.partial` went.
+enum Kept {
+    /// It now has this name.
+    Published(PathBuf),
+    /// It was already there: the `.partial` was a second name for the clip
+    /// published under this one (a link whose unlink failed), and is gone.
+    AlreadyPublished(PathBuf),
+}
+
+/// Whether `a` and `b` name one file (device and inode), not following
+/// symlinks: a symlink to the `.partial` is not a copy of the clip.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Gives a finished clip left as `.partial` its own name, or
+/// `<stem> (recovered).<ext>` (then `(recovered 2)` …) when that is taken.
+/// Never replaces a file. When its own name is already the same file, only
+/// the `.partial` name goes.
+fn publish_finished(partial: &Path) -> io::Result<Kept> {
+    let name = partial
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| n.len() > ".partial".len())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a .partial name"))?;
+    // The walk matched the suffix case-insensitively; it is ASCII.
+    let own = partial.with_file_name(&name[..name.len() - ".partial".len()]);
+    if same_file(partial, &own) {
+        std::fs::remove_file(partial)?;
+        return Ok(Kept::AlreadyPublished(own));
+    }
+    let stem = own
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = own
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let recovered = (1..=9).map(|n| {
+        let tag = if n == 1 {
+            " (recovered)".to_owned()
+        } else {
+            format!(" (recovered {n})")
+        };
+        partial.with_file_name(format!("{stem}{tag}{ext}"))
+    });
+    for candidate in std::iter::once(own.clone()).chain(recovered) {
+        match rename_no_replace(partial, &candidate) {
+            Ok(()) => return Ok(Kept::Published(candidate)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("no free name next to {}", own.display()),
+    ))
+}
+
 /// Whether a lower-cased name carries the mark of a clip or recording the
 /// app wrote.
 fn fthr_owned_media_name(name: &str) -> bool {
@@ -280,6 +470,40 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
         if !is_old(&meta, now, max_age) {
             continue;
         }
+        if partial {
+            // A finished clip that never got its name (a failed rename) is
+            // the only copy: publish it, never delete it.
+            match mp4_is_finished(&path) {
+                Ok(false) => {}
+                Ok(true) => {
+                    match publish_finished(&path) {
+                        Ok(Kept::Published(to)) => tracing::info!(
+                            from = %path.display(),
+                            to = %to.display(),
+                            "published a finished clip left as .partial"
+                        ),
+                        Ok(Kept::AlreadyPublished(to)) => {
+                            *removed += 1;
+                            tracing::info!(
+                                from = %path.display(),
+                                to = %to.display(),
+                                "removed a second name of a published clip"
+                            );
+                        }
+                        Err(e) => tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "a finished clip stays as .partial"
+                        ),
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot read a leftover .partial; keeping it");
+                    continue;
+                }
+            }
+        }
         if manifest {
             let fname = entry.file_name().to_string_lossy().into_owned();
             let media = path.with_file_name(&fname[..fname.len() - AUDIO_MANIFEST_SUFFIX.len()]);
@@ -303,8 +527,12 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
 /// `FTHR_recording_*.mp4.partial`, their orphaned audio manifests, the hidden
 /// `.<name>.partial.<32 hex>.<ext>` staging files of exports and overlay
 /// burns, hidden `.png.partial` screenshots and `.fthr-finalize-*`
-/// directories. A finished clip or recording is never touched. Returns the
-/// number removed.
+/// directories. A finished clip or recording is never removed: one left as
+/// `.partial` (its MP4 whole, see [`mp4_is_finished`]) is published under
+/// its own name, or as `<stem> (recovered).mp4` when that is taken, and
+/// stays as it is if renaming fails. A `.partial` that is only a second
+/// name for its published clip (a link whose unlink failed) loses that
+/// name. Returns the number removed, second names included.
 pub fn cleanup_stale_partials(root: &Path, now: SystemTime, max_age: Duration) -> Result<usize> {
     let mut removed = 0;
     if root.is_dir() {
@@ -339,4 +567,173 @@ pub fn spawn_stale_partial_sweep(
             }
             removed
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One MP4 box: size, type, payload.
+    fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// What the clip writer leaves when it finishes: data, then the index.
+    fn finished_clip() -> Vec<u8> {
+        [
+            mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2"),
+            mp4_box(b"free", b""),
+            mp4_box(b"mdat", &[7; 4000]),
+            mp4_box(b"moov", &[1; 300]),
+        ]
+        .concat()
+    }
+
+    /// What a crash during the write leaves: FFmpeg's mdat still has its
+    /// "runs to the end of the file" size, and there is no index.
+    fn crashed_clip() -> Vec<u8> {
+        let mut out = [
+            mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2"),
+            mp4_box(b"wide", b""),
+        ]
+        .concat();
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(b"mdat");
+        out.extend_from_slice(&[7; 4000]);
+        out
+    }
+
+    /// A fragmented recording cut short inside its third fragment.
+    fn cut_recording() -> Vec<u8> {
+        let mut out = [
+            mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2"),
+            mp4_box(b"moov", &[1; 300]),
+            mp4_box(b"moof", &[2; 100]),
+            mp4_box(b"mdat", &[7; 4000]),
+            mp4_box(b"moof", &[2; 100]),
+            mp4_box(b"mdat", &[7; 4000]),
+        ]
+        .concat();
+        let mut torn = mp4_box(b"moof", &[2; 100]);
+        torn.truncate(50);
+        out.extend_from_slice(&torn);
+        out
+    }
+
+    /// Runs the sweep as if every file were two days old.
+    fn sweep(root: &Path) -> usize {
+        let later = SystemTime::now() + 2 * STALE_PARTIAL_MAX_AGE;
+        cleanup_stale_partials(root, later, STALE_PARTIAL_MAX_AGE).unwrap()
+    }
+
+    #[test]
+    fn a_finished_clip_left_as_partial_is_published_not_removed() {
+        let d = tempfile::tempdir().unwrap();
+        let partial = d
+            .path()
+            .join("Neon Drift_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::write(&partial, finished_clip()).unwrap();
+        assert_eq!(sweep(d.path()), 0);
+        let published = d.path().join("Neon Drift_clip_from_31Oct2026_20-00-00.mp4");
+        assert!(!partial.exists());
+        assert_eq!(std::fs::read(&published).unwrap(), finished_clip());
+    }
+
+    #[test]
+    fn a_taken_name_gets_a_recovered_name_and_nothing_is_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let taken = d.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+        std::fs::write(&taken, b"another clip").unwrap();
+        let partial = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::write(&partial, finished_clip()).unwrap();
+        assert_eq!(sweep(d.path()), 0);
+        assert_eq!(std::fs::read(&taken).unwrap(), b"another clip");
+        let recovered = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00 (recovered).mp4");
+        assert_eq!(std::fs::read(&recovered).unwrap(), finished_clip());
+        assert!(!partial.exists());
+    }
+
+    #[test]
+    fn a_second_name_for_a_published_clip_is_removed_not_recovered() {
+        // A link that published the clip, then an unlink that failed.
+        let d = tempfile::tempdir().unwrap();
+        let published = d.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+        std::fs::write(&published, finished_clip()).unwrap();
+        let partial = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::hard_link(&published, &partial).unwrap();
+        assert_eq!(sweep(d.path()), 1);
+        assert!(!partial.exists());
+        assert_eq!(std::fs::read(&published).unwrap(), finished_clip());
+        let names: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [published.file_name().unwrap()]);
+    }
+
+    #[test]
+    fn a_link_to_the_partial_is_not_the_same_file() {
+        // The clip's own name only points at the .partial: removing the
+        // .partial would lose the clip.
+        let d = tempfile::tempdir().unwrap();
+        let partial = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::write(&partial, finished_clip()).unwrap();
+        let own = d.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+        std::os::unix::fs::symlink(&partial, &own).unwrap();
+        assert_eq!(sweep(d.path()), 0);
+        let recovered = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00 (recovered).mp4");
+        assert_eq!(std::fs::read(&recovered).unwrap(), finished_clip());
+    }
+
+    #[test]
+    fn an_unfinished_partial_is_still_removed() {
+        let d = tempfile::tempdir().unwrap();
+        let crashed = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::write(&crashed, crashed_clip()).unwrap();
+        let mut torn_index = finished_clip();
+        torn_index.truncate(torn_index.len() - 10);
+        let torn = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-01.mp4.partial");
+        std::fs::write(&torn, torn_index).unwrap();
+        assert_eq!(sweep(d.path()), 2);
+        assert!(!crashed.exists() && !torn.exists());
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_recording_with_whole_fragments_is_published() {
+        let d = tempfile::tempdir().unwrap();
+        let partial = d
+            .path()
+            .join("FTHR_recording_2026-10-31_20-00-00.mp4.partial");
+        std::fs::write(&partial, cut_recording()).unwrap();
+        let header_only = d
+            .path()
+            .join("FTHR_recording_2026-10-31_20-00-01.mp4.partial");
+        std::fs::write(
+            &header_only,
+            [mp4_box(b"ftyp", b"isom"), mp4_box(b"moov", &[1; 300])].concat(),
+        )
+        .unwrap();
+        assert_eq!(sweep(d.path()), 1, "the one without a fragment goes");
+        assert!(!header_only.exists() && !partial.exists());
+        let published = d.path().join("FTHR_recording_2026-10-31_20-00-00.mp4");
+        assert_eq!(std::fs::read(&published).unwrap(), cut_recording());
+    }
 }

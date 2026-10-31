@@ -40,6 +40,78 @@ fn measure(mut enc: Encoder) -> f64 {
     (thread_cpu_ns() - start) as f64 / 1e6 / f64::from(FRAMES)
 }
 
+/// `(VRAM, GTT)` in MiB that this process's DRM clients hold, from the
+/// `drm-total-vram` and `drm-memory-gtt` lines amdgpu writes into
+/// `/proc/self/fdinfo`, each client counted once.
+fn process_gpu_memory_mib() -> Option<(f64, f64)> {
+    let mut clients = std::collections::HashSet::new();
+    let (mut vram, mut gtt, mut found) = (0u64, 0u64, false);
+    for entry in std::fs::read_dir("/proc/self/fdinfo").ok()?.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let field = |key: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(key))
+                .map(|v| v.trim().trim_end_matches(" KiB").trim().to_owned())
+        };
+        let Some(client) = field("drm-client-id:") else {
+            continue;
+        };
+        if !clients.insert(client) {
+            continue;
+        }
+        if let Some(v) = field("drm-total-vram:").and_then(|v| v.parse::<u64>().ok()) {
+            vram += v;
+            found = true;
+        }
+        if let Some(v) = field("drm-memory-gtt:").and_then(|v| v.parse::<u64>().ok()) {
+            gtt += v;
+        }
+    }
+    found.then(|| (vram as f64 / 1024.0, gtt as f64 / 1024.0))
+}
+
+/// The GPU memory a 4K VA-API encoder holds with GPU colour conversion,
+/// right after opening and while capture writes into its dmabuf surfaces.
+#[test]
+#[ignore = "measurement, run by hand (amdgpu)"]
+fn zero_copy_gpu_memory_at_4k() {
+    fthrust_media::init().unwrap();
+    assert!(vaapi_available(), "this measurement needs a VA-API device");
+    let (w, h) = (3840u32, 2160u32);
+    let cfg = EncoderConfig {
+        src_width: w,
+        src_height: h,
+        enc_width: w,
+        enc_height: h,
+        fps: 60,
+        bitrate_kbps: 40_000,
+        codec: Codec::H264,
+        encoder: EncoderPref::Vaapi,
+        preset: 4,
+    };
+    let base = process_gpu_memory_mib().unwrap_or((0.0, 0.0));
+    let mut enc = Encoder::open(&cfg).unwrap();
+    assert_eq!(enc.conversion(), Conversion::Gpu);
+    let opened = process_gpu_memory_mib().expect("amdgpu fdinfo");
+    enc.dmabuf_targets(w, h, 4).unwrap();
+    let targets = process_gpu_memory_mib().unwrap();
+    let mut out = Vec::new();
+    for i in 0..60u32 {
+        enc.encode_surface(i as usize % 4, i64::from(i) * 1_000_000_000 / 60, &mut out)
+            .unwrap();
+    }
+    let capturing = process_gpu_memory_mib().unwrap();
+    let mib = |m: (f64, f64)| format!("{:.0} MiB VRAM + {:.0} MiB GTT", m.0 - base.0, m.1 - base.1);
+    println!(
+        "4K VA-API encoder: opened {}; dmabuf targets {}; zero-copy capturing {}",
+        mib(opened),
+        mib(targets),
+        mib(capturing)
+    );
+}
+
 #[test]
 #[ignore = "measurement, run by hand"]
 fn gpu_conversion_uses_less_cpu_than_cpu_conversion() {

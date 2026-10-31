@@ -113,6 +113,31 @@ fn wait_notice(
 }
 
 #[test]
+fn a_preset_the_settings_do_not_show_is_not_applied() {
+    fthrust_media::init().unwrap();
+    let has = |n: &str| ffmpeg_next::encoder::find_by_name(n).is_some();
+    // x264 writes its settings into its first packet; OpenH264 is picked
+    // first where it exists.
+    if has("libopenh264") || !has("libx264") {
+        return eprintln!("skipping: the software H.264 encoder is not x264");
+    }
+    // P7 picked while NVENC was chosen, then Software, whose settings show
+    // no preset: x264 runs the default P4 (fast, subme=6), not P7
+    // (veryslow, subme=10).
+    let mut h = harness(config(|c| c.preset = 7), wlr_ok(320, 180));
+    h.engine.start().unwrap();
+    let ring = h.engine.ring();
+    wait_for(&h.engine, Duration::from_secs(5), |_| {
+        ring.stats().packets > 0
+    });
+    let snapshot = ring.snapshot(10_000, 0, 0).unwrap();
+    let first = snapshot.packets[0].data.bytes().unwrap();
+    let settings = String::from_utf8_lossy(&first).into_owned();
+    h.engine.shutdown();
+    assert!(settings.contains(" subme=6 "), "{settings}");
+}
+
+#[test]
 fn healthy_generation_publishes_frames_and_flags() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");

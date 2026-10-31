@@ -11,11 +11,12 @@ pub mod validate;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use fthrust_core::export::graph::GraphPlan;
+use fthrust_core::export::graph::{GraphPlan, MapRef};
 
 pub use encode::status_for_encoder;
 
-/// Inactivity bound: no output for this long times the job out.
+/// Inactivity bound: no progress for this long (nothing written, decoded
+/// or read past) times the job out.
 pub const INACTIVITY_S: f64 = 120.0;
 
 /// The `export_quality` setting.
@@ -236,6 +237,9 @@ fn finish(job: &Job, staged: &Path, cancel: &AtomicBool) -> ExportResult {
         }
         return ExportResult::new(ExportState::Failed, e);
     }
+    if let Err(e) = check_duration(job, staged) {
+        return ExportResult::new(ExportState::Failed, e);
+    }
     if let Some(target) = job.target_size_mb
         && size as f64 > target * 1_048_576.0
     {
@@ -261,6 +265,147 @@ fn finish(job: &Job, staged: &Path, cancel: &AtomicBool) -> ExportResult {
         );
     }
     ExportResult::new(ExportState::Completed, "")
+}
+
+/// Stream lengths of a media file, in seconds.
+struct Lengths {
+    /// The video stream's, else the container's.
+    video: Option<f64>,
+    /// Each audio stream's, in `0:a:N` order (the container's where a
+    /// stream has none).
+    audio: Vec<Option<f64>>,
+    /// The container's.
+    container: Option<f64>,
+    /// One video frame.
+    frame: f64,
+}
+
+impl Lengths {
+    /// The longest of the audio streams `which` lists (`None`: all of
+    /// them); `None` when that is none.
+    fn longest_audio(&self, which: Option<&[usize]>) -> Option<f64> {
+        let mut picked: Vec<Option<f64>> = match which {
+            None => self.audio.clone(),
+            Some(ix) => ix
+                .iter()
+                .filter_map(|&i| self.audio.get(i).copied())
+                .collect(),
+        };
+        if picked.is_empty() {
+            return None;
+        }
+        for len in &mut picked {
+            *len = len.or(self.container);
+        }
+        picked.into_iter().flatten().reduce(f64::max)
+    }
+}
+
+/// The source's audio streams (`0:a:N`) an export carries: those its
+/// graph reads when its audio comes from the graph (several ranges take
+/// only the first track without a manifest, and a mix leaves out the
+/// tracks that don't decode), else all of them (`None`).
+fn carried_audio(plan: &GraphPlan) -> Option<Vec<usize>> {
+    let (Some(MapRef::Label(_)), Some(graph)) = (&plan.audio_map, &plan.filter_graph) else {
+        return None;
+    };
+    Some(
+        run::input_uses(graph)
+            .keys()
+            .filter_map(|label| label.strip_prefix("0:a:")?.parse().ok())
+            .collect(),
+    )
+}
+
+fn lengths(path: &Path) -> Option<Lengths> {
+    use ffmpeg_next as ff;
+    let ictx = ff::format::input(&path).ok()?;
+    let secs = |s: &ff::format::stream::Stream<'_>| {
+        let tb = s.time_base();
+        (s.duration() > 0 && tb.denominator() > 0)
+            .then(|| s.duration() as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))
+    };
+    let container =
+        (ictx.duration() > 0).then(|| ictx.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE));
+    let best = ictx.streams().best(ff::media::Type::Video);
+    let frame = best
+        .as_ref()
+        .map(|s| s.avg_frame_rate())
+        .filter(|r| r.numerator() > 0 && r.denominator() > 0)
+        .map_or(1.0 / 30.0, |r| {
+            f64::from(r.denominator()) / f64::from(r.numerator())
+        });
+    let audio = ictx
+        .streams()
+        .filter(|s| s.parameters().medium() == ff::media::Type::Audio)
+        .map(|s| secs(&s))
+        .collect();
+    Some(Lengths {
+        video: best.as_ref().and_then(secs).or(container),
+        audio,
+        container,
+        frame,
+    })
+}
+
+/// Fails an output that ends early, so a truncated export never replaces
+/// anything.
+///
+/// Its video must last the job's length less half a second and a frame
+/// (rounding), capped at what the source's video holds after the seek: a
+/// replay buffer holding less than a save asked for makes a shorter clip,
+/// whose rewrite is still whole.
+///
+/// Its audio, when it has any, must last as long, less the time the
+/// tracks it carries stop short of the end of the source. That gap counts
+/// at the slowest speed an export can have, since the job says neither
+/// where its ranges fall nor how fast they play: the source's audio may
+/// end inside the last range, and a sped-up range plays what is left of
+/// it faster. Where the carried audio runs to the end of the source, the
+/// audio must be as long as the video.
+fn check_duration(job: &Job, staged: &Path) -> Result<(), String> {
+    let expected = job.expected_duration_s;
+    if expected <= 0.0 {
+        return Ok(());
+    }
+    let Some(out) = lengths(staged) else {
+        return Ok(());
+    };
+    let source = lengths(&job.source);
+    let seek = job.plan.seek_s.unwrap_or(0.0);
+    let slack = 0.5 + out.frame;
+    let need = source
+        .as_ref()
+        .and_then(|s| s.video)
+        .map_or(expected, |v| expected.min(v - seek));
+    if let Some(got) = out.video
+        && need > 0.0
+        && got + slack < need
+    {
+        return Err(format!(
+            "Export is {got:.1} s long but should be {need:.1} s"
+        ));
+    }
+    let Some(got) = out.longest_audio(None) else {
+        return Ok(());
+    };
+    let shortfall = match &source {
+        Some(s) => {
+            let Some(audio_end) = s.longest_audio(carried_audio(&job.plan).as_deref()) else {
+                return Ok(());
+            };
+            (s.container.or(s.video).unwrap_or(audio_end) - audio_end).max(0.0)
+        }
+        None => 0.0,
+    };
+    let slowest = fthrust_core::export::filters::normalise_speed(f64::MIN_POSITIVE);
+    let need = need - shortfall / slowest;
+    if need > 0.0 && got + slack < need {
+        return Err(format!(
+            "Export's audio is {got:.1} s long but should be {need:.1} s"
+        ));
+    }
+    Ok(())
 }
 
 /// Python's `{:g}` for the size target.

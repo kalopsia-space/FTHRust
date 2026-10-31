@@ -19,7 +19,7 @@ use fthrust_core::export::graph::{AudioOut, MapRef, VideoOut};
 
 use super::encode::{h264_config, is_hardware, status_for_encoder};
 use super::{INACTIVITY_S, Job, Quality, Stop};
-use crate::encoder::Encoder;
+use crate::encoder::{Encoder, RateCap};
 use crate::ring::EncodedPacket;
 
 /// One output stream.
@@ -79,7 +79,7 @@ fn inputs(ictx: &ff::format::context::Input) -> Inputs {
 }
 
 /// Labels like `0:v` and `0:a:1` the graph reads, with their use counts.
-fn input_uses(graph: &str) -> BTreeMap<String, usize> {
+pub(super) fn input_uses(graph: &str) -> BTreeMap<String, usize> {
     let mut uses = BTreeMap::new();
     let mut rest = graph;
     while let Some(start) = rest.find('[') {
@@ -140,6 +140,27 @@ fn feed(r: Result<(), ff::Error>) -> Result<(), Stop> {
     match r {
         Err(ff::Error::Eof) => Ok(()),
         other => Ok(other?),
+    }
+}
+
+/// What one read from a graph sink gave.
+#[derive(Debug, PartialEq, Eq)]
+enum Pulled {
+    Frame,
+    /// Nothing until more input arrives.
+    Empty,
+    End,
+}
+
+/// Classifies a sink read. Any error but "nothing yet" and the end is the
+/// graph failing, and ends the export: reading on would write a clip
+/// missing everything from that point.
+fn pulled(r: Result<(), ff::Error>) -> Result<Pulled, Stop> {
+    match r {
+        Ok(()) => Ok(Pulled::Frame),
+        Err(ff::Error::Eof) => Ok(Pulled::End),
+        Err(ff::Error::Other { errno }) if errno == ff::util::error::EAGAIN => Ok(Pulled::Empty),
+        Err(e) => Err(Stop::Failed(format!("The filter graph failed: {e}"))),
     }
 }
 
@@ -496,7 +517,19 @@ pub(super) fn attempt(
             VideoEnc::Ffv1(ctx.open_as_with(codec, opts)?)
         } else {
             let cfg = h264_config(w, h, inp.fps, job.quality, job.video_bitrate_kbps, software);
-            let enc = Encoder::open_with_gop(&cfg, 30).map_err(|e| Stop::Encoder {
+            // A size preset's peak rate, over a buffer of two seconds at
+            // the target rate (the reference's `-maxrate` and `-bufsize`).
+            let opened = match job.max_rate_kbps {
+                Some(max_kbps) => {
+                    let cap = RateCap {
+                        max_kbps,
+                        buffer_kbits: cfg.bitrate_kbps.saturating_mul(2),
+                    };
+                    Encoder::open_with_gop_and_cap(&cfg, 30, cap)
+                }
+                None => Encoder::open_with_gop(&cfg, 30),
+            };
+            let enc = opened.map_err(|e| Stop::Encoder {
                 hardware: !software,
                 message: e.to_string(),
             })?;
@@ -661,8 +694,8 @@ pub(super) fn attempt(
                     let (_, _, tb) = sink_props(g, sink);
                     let mut ctx = g.get(sink).expect("sink");
                     let mut frame = ff::frame::Video::empty();
-                    match ctx.sink().frame(&mut frame) {
-                        Ok(()) => {
+                    match pulled(ctx.sink().frame(&mut frame))? {
+                        Pulled::Frame => {
                             *last_output = Instant::now();
                             let t = secs(frame.pts().unwrap_or(0), tb);
                             on_progress((t / expected * 100.0).clamp(0.0, 99.0));
@@ -696,11 +729,11 @@ pub(super) fn attempt(
                                 }
                             }
                         }
-                        Err(ff::Error::Eof) => {
+                        Pulled::End => {
                             *video_eof = true;
                             break;
                         }
-                        Err(_) => break,
+                        Pulled::Empty => break,
                     }
                 },
                 Out::Audio {
@@ -712,8 +745,8 @@ pub(super) fn attempt(
                     let (_, _, sink_tb) = sink_props(g, sink);
                     let mut ctx = g.get(sink).expect("sink");
                     let mut frame = ff::frame::Audio::empty();
-                    match ctx.sink().frame(&mut frame) {
-                        Ok(()) => {
+                    match pulled(ctx.sink().frame(&mut frame))? {
+                        Pulled::Frame => {
                             *last_output = Instant::now();
                             let etb = enc.time_base();
                             // The sink keeps the input's time base unless a
@@ -723,11 +756,11 @@ pub(super) fn attempt(
                             enc.send_frame(&frame)?;
                             drain_packets(|p| enc.receive_packet(p).is_ok(), octx, *ost, etb)?;
                         }
-                        Err(ff::Error::Eof) => {
+                        Pulled::End => {
                             *eof = true;
                             break;
                         }
-                        Err(_) => break,
+                        Pulled::Empty => break,
                     }
                 },
                 Out::Copy { .. } => {}
@@ -736,7 +769,25 @@ pub(super) fn attempt(
         Ok(())
     };
 
-    let mut reached_end = false;
+    // Inputs copied packet by packet, and those past the end of the trim:
+    // once a packet's decode time is past it, so is every later packet of
+    // that stream.
+    let copied: Vec<usize> = outs
+        .iter()
+        .filter_map(|o| match o {
+            Out::Copy { input, .. } => Some(*input),
+            _ => None,
+        })
+        .collect();
+    let mut copies_done: Vec<usize> = Vec::new();
+    // Every output has all it gets: reading on would only drop packets.
+    let finished = |copies_done: &[usize], video_eof: bool, outs: &[Out]| {
+        video_eof
+            && outs
+                .iter()
+                .all(|o| !matches!(o, Out::Audio { eof: false, .. }))
+            && copied.iter().all(|i| copies_done.contains(i))
+    };
     for (stream, mut packet) in ictx.packets() {
         if cancel.load(Ordering::Relaxed) {
             return Err(Stop::Cancelled);
@@ -757,9 +808,17 @@ pub(super) fn attempt(
             let ost = *ost;
             let pts = packet.pts().or(packet.dts()).unwrap_or(0);
             let t = secs(pts - start, tb) - seek;
-            if limit.is_some_and(|d| t >= d) {
-                if Some(index) == inp.video {
-                    reached_end = true;
+            if let Some(end) = limit
+                && t >= end
+            {
+                // Dropped, but reading past it is progress.
+                last_output = Instant::now();
+                let decode_t = packet.dts().map_or(t, |d| secs(d - start, tb) - seek);
+                if decode_t >= end && !copies_done.contains(&index) {
+                    copies_done.push(index);
+                }
+                if finished(&copies_done, video_eof, &outs) {
+                    break;
                 }
                 continue;
             }
@@ -781,12 +840,11 @@ pub(super) fn attempt(
             if Some(index) == inp.video {
                 on_progress((t / expected * 100.0).clamp(0.0, 99.0));
             }
-            if reached_end && asm.copy_audio.is_empty() {
-                break;
-            }
             continue;
         }
         let Some(g) = graph.as_mut() else {
+            // A stream the export does not use: reading past it is progress.
+            last_output = Instant::now();
             continue;
         };
         if Some(index) == inp.video
@@ -823,6 +881,7 @@ pub(super) fn attempt(
                 feed(g.get(label).expect("source").source().add(&aframe))?;
             }
         } else {
+            last_output = Instant::now();
             continue;
         }
         pump(
@@ -834,10 +893,7 @@ pub(super) fn attempt(
             &mut last_output,
             on_progress,
         )?;
-        let audio_done = outs
-            .iter()
-            .all(|o| !matches!(o, Out::Audio { eof: false, .. }));
-        if video_eof && audio_done {
+        if finished(&copies_done, video_eof, &outs) {
             break;
         }
     }
@@ -908,4 +964,32 @@ pub(super) fn attempt(
     }
     octx.write_trailer()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_waiting_and_the_end_are_not_sink_errors() {
+        assert_eq!(pulled(Ok(())).unwrap(), Pulled::Frame);
+        assert_eq!(pulled(Err(ff::Error::Eof)).unwrap(), Pulled::End);
+        let again = ff::Error::Other {
+            errno: ff::util::error::EAGAIN,
+        };
+        assert_eq!(pulled(Err(again)).unwrap(), Pulled::Empty);
+        for e in [
+            ff::Error::Other {
+                errno: ff::util::error::EINVAL,
+            },
+            ff::Error::Other {
+                errno: ff::util::error::ENOMEM,
+            },
+            ff::Error::InvalidData,
+        ] {
+            assert!(
+                matches!(pulled(Err(e)), Err(Stop::Failed(m)) if m.starts_with("The filter graph failed: "))
+            );
+        }
+    }
 }

@@ -6,6 +6,44 @@ use ffmpeg_next::ffi;
 
 use crate::{MediaError, Result};
 
+/// Bytes `rows` rows take when they start `stride` bytes apart and the
+/// last holds only `row_bytes` (it need not be padded), or `None` when there
+/// are no rows or the size does not fit a `usize`.
+pub(crate) fn packed_len(stride: usize, row_bytes: usize, rows: usize) -> Option<usize> {
+    stride
+        .checked_mul(rows.checked_sub(1)?)?
+        .checked_add(row_bytes)
+}
+
+/// Checks that `len` bytes hold `rows` BGRA rows of `width` pixels that
+/// start `stride` bytes apart; returns the row length in bytes.
+pub(crate) fn check_bgra_geometry(
+    len: usize,
+    stride: usize,
+    width: u32,
+    rows: usize,
+) -> Result<usize> {
+    let row = (width as usize)
+        .checked_mul(4)
+        .ok_or_else(|| MediaError::Invalid(format!("frame width {width} is too large")))?;
+    if stride < row {
+        return Err(MediaError::Invalid(format!(
+            "stride {stride} is smaller than width*4 ({row})"
+        )));
+    }
+    let needed = packed_len(stride, row, rows).ok_or_else(|| {
+        MediaError::Invalid(format!(
+            "{rows} rows {stride} bytes apart do not fit in memory"
+        ))
+    })?;
+    if len < needed {
+        return Err(MediaError::Invalid(format!(
+            "frame buffer holds {len} bytes but its geometry needs {needed}"
+        )));
+    }
+    Ok(row)
+}
+
 /// An owned `AVFrame`.
 #[derive(Debug)]
 pub struct OwnedFrame(*mut ffi::AVFrame);
@@ -107,5 +145,28 @@ impl Drop for OwnedFrame {
         // SAFETY: the pointer came from av_frame_alloc and is dropped once.
         unsafe { ffi::av_frame_free(&mut self.0) }
         self.0 = ptr::null_mut();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_len_leaves_the_last_row_unpadded_and_never_overflows() {
+        assert_eq!(packed_len(512, 256, 64), Some(512 * 63 + 256));
+        assert_eq!(packed_len(512, 256, 1), Some(256));
+        assert_eq!(packed_len(512, 256, 0), None);
+        assert_eq!(packed_len(usize::MAX, 1, 2), None);
+        assert_eq!(packed_len(usize::MAX / 2, 4, 3), None);
+    }
+
+    #[test]
+    fn bgra_geometry_errors_instead_of_overflowing() {
+        assert_eq!(check_bgra_geometry(64 * 4 * 8, 64 * 4, 64, 8).unwrap(), 256);
+        assert!(check_bgra_geometry(64 * 4 * 8 - 1, 64 * 4, 64, 8).is_err());
+        assert!(check_bgra_geometry(1 << 20, 64 * 4 - 1, 64, 8).is_err());
+        assert!(check_bgra_geometry(1 << 20, usize::MAX, 64, 2).is_err());
+        assert!(check_bgra_geometry(1 << 20, 0, u32::MAX, 1).is_err());
     }
 }

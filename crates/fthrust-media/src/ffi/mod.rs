@@ -11,6 +11,7 @@ pub mod device;
 pub mod export;
 pub mod frame;
 pub mod hw;
+pub mod log;
 pub mod mux;
 pub mod probe;
 pub mod scaler;

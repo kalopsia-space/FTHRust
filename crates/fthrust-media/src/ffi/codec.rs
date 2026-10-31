@@ -21,6 +21,9 @@ pub struct OpenParams {
     pub fps: u32,
     /// Target bitrate in bits per second.
     pub bitrate_bps: i64,
+    /// Peak bitrate and rate-control buffer, both in bits (`-maxrate`,
+    /// `-bufsize`); `None` leaves the encoder's own.
+    pub rate_cap: Option<(i64, i64)>,
     /// Private options applied before `avcodec_open2`.
     pub options: Vec<(&'static str, String)>,
     /// Keyframe interval in frames (`None` = two seconds).
@@ -100,6 +103,42 @@ impl RawEncoder {
         unsafe { !ffi::avcodec_find_encoder_by_name(cname.as_ptr()).is_null() }
     }
 
+    /// The `key=value` pairs among `options` that `name`'s private options
+    /// refuse, or `None` when this FFmpeg build has no such encoder. The
+    /// context is only allocated, so no device is needed.
+    #[cfg(test)]
+    pub(crate) fn rejected_options(
+        name: &str,
+        options: &[(&'static str, String)],
+    ) -> Option<Vec<String>> {
+        let cname = CString::new(name).ok()?;
+        // SAFETY: the context is allocated, configured and freed here; the
+        // option strings are valid C strings for each call.
+        unsafe {
+            let codec = ffi::avcodec_find_encoder_by_name(cname.as_ptr());
+            if codec.is_null() {
+                return None;
+            }
+            let mut ctx = ffi::avcodec_alloc_context3(codec);
+            if ctx.is_null() {
+                return None;
+            }
+            let rejected = options
+                .iter()
+                .filter(|(key, value)| {
+                    let (Ok(k), Ok(v)) = (CString::new(*key), CString::new(value.as_str())) else {
+                        return true;
+                    };
+                    (*ctx).priv_data.is_null()
+                        || ffi::av_opt_set((*ctx).priv_data, k.as_ptr(), v.as_ptr(), 0) < 0
+                })
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect();
+            ffi::avcodec_free_context(&mut ctx);
+            Some(rejected)
+        }
+    }
+
     /// Opens `name` with `params`; a VA-API encoder gets `hw` as its device
     /// and frame pool (or the converter's output pool). Colour is BT.709 studio range, GOP is `2*fps` with no
     /// B-frames, and a global header is requested.
@@ -139,6 +178,13 @@ impl RawEncoder {
                 den: 1,
             };
             (*ctx).bit_rate = params.bitrate_bps;
+            if let Some((max_rate, buffer)) = params.rate_cap {
+                (*ctx).rc_max_rate = max_rate;
+                (*ctx).rc_buffer_size = i32::try_from(buffer).unwrap_or(i32::MAX);
+            }
+            if let Some(threads) = crate::encoder_policy::thread_count(name) {
+                (*ctx).thread_count = threads;
+            }
             (*ctx).gop_size = params.gop_frames.unwrap_or(params.fps * 2) as i32;
             (*ctx).max_b_frames = 0;
             (*ctx).color_range = ffi::AVColorRange::AVCOL_RANGE_MPEG;
@@ -147,11 +193,21 @@ impl RawEncoder {
             (*ctx).colorspace = ffi::AVColorSpace::AVCOL_SPC_BT709;
             (*ctx).chroma_sample_location = ffi::AVChromaLocation::AVCHROMA_LOC_LEFT;
             if let Some(hw) = &hw {
-                let (device, mut frames) = hw.new_refs();
-                if let Some(converter) = &converter {
-                    ffi::av_buffer_unref(&mut frames);
-                    frames = converter.output_frames_ref();
-                }
+                // Fed by the converter, the encoder takes its output pool and
+                // leaves the upload pool uncreated until a CPU fallback.
+                let refs = match &converter {
+                    Some(converter) => hw
+                        .device_ref()
+                        .map(|device| (device, converter.output_frames_ref())),
+                    None => hw.new_refs(),
+                };
+                let (device, frames) = match refs {
+                    Ok(refs) => refs,
+                    Err(e) => {
+                        free(ctx);
+                        return Err(e);
+                    }
+                };
                 if device.is_null() || frames.is_null() {
                     let (mut device, mut frames) = (device, frames);
                     ffi::av_buffer_unref(&mut device);
@@ -174,7 +230,7 @@ impl RawEncoder {
                 }
                 let ret = ffi::av_opt_set((*ctx).priv_data, k.as_ptr(), v.as_ptr(), 0);
                 if ret < 0 {
-                    tracing::debug!(encoder = name, option = key, "option not accepted");
+                    tracing::warn!(encoder = name, option = key, value = %value, "encoder option not accepted");
                 }
             }
             (*ctx).flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
@@ -233,6 +289,32 @@ impl RawEncoder {
         let (w, h) = self.size();
         self.converter = Some(VaapiConverter::new(hw, src_w, src_h, w, h)?);
         Ok(())
+    }
+
+    /// Replaces the converter with one for capture surfaces like `surface`,
+    /// built on their pool rather than an upload pool of its own.
+    pub(crate) fn bind_converter_to(&mut self, surface: &OwnedFrame) -> Result<()> {
+        let (w, h) = self.size();
+        self.converter = Some(VaapiConverter::for_surfaces(surface, w, h)?);
+        Ok(())
+    }
+
+    /// Whether the GPU converter takes uploaded frames (false for one bound
+    /// to capture surfaces, or none).
+    pub(crate) fn converter_takes_uploads(&self) -> bool {
+        self.converter
+            .as_ref()
+            .is_some_and(VaapiConverter::takes_uploads)
+    }
+
+    /// `(encoder upload pool, converter upload pool)` created yet (tests).
+    pub(crate) fn upload_pools_created(&self) -> (bool, bool) {
+        (
+            self.hw.as_ref().is_some_and(VaapiFrames::pool_created),
+            self.converter
+                .as_ref()
+                .is_some_and(VaapiConverter::upload_pool_created),
+        )
     }
 
     /// Drops the GPU converter; frames must be uploaded from then on.
@@ -343,6 +425,132 @@ impl Drop for RawEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn params() -> OpenParams {
+        OpenParams {
+            width: 64,
+            height: 64,
+            fps: 30,
+            bitrate_bps: 300_000,
+            rate_cap: None,
+            options: Vec::new(),
+            gop_frames: None,
+            pix_fmt: ffi::AVPixelFormat::AV_PIX_FMT_YUV420P,
+        }
+    }
+
+    #[test]
+    fn software_encoders_open_with_automatic_threads() {
+        crate::init().unwrap();
+        let mut opened = 0;
+        // The wrappers that pass `thread_count` on to the library. libx264
+        // defaults to automatic threads on its own; the others run on one
+        // thread unless told otherwise.
+        for name in [
+            "libopenh264",
+            "libx264",
+            "libx265",
+            "libaom-av1",
+            "librav1e",
+        ] {
+            if !RawEncoder::exists(name) {
+                continue;
+            }
+            let raw = RawEncoder::open(name, &params(), None).unwrap();
+            // SAFETY: the context is open and owned by `raw`.
+            let threads = unsafe { (*raw.ctx).thread_count };
+            assert_eq!(threads, 0, "{name} runs on {threads} thread(s)");
+            opened += 1;
+        }
+        if opened == 0 {
+            eprintln!("skipping: no software H.264 encoder in this FFmpeg build");
+        }
+    }
+
+    #[test]
+    fn every_preset_option_is_one_the_encoder_has() {
+        use crate::encoder_policy::{encoder_candidates, preset_options};
+        use fthrust_core::capture_config::{Codec, EncoderPref};
+        crate::init().unwrap();
+        let mut names = encoder_candidates(Codec::Auto, EncoderPref::Auto);
+        names.extend(encoder_candidates(Codec::Auto, EncoderPref::Software));
+        let mut checked = Vec::new();
+        let mut refused = Vec::new();
+        for name in names {
+            for preset in 1..=7 {
+                let options = preset_options(name, preset).unwrap_or_default();
+                match RawEncoder::rejected_options(name, &options) {
+                    None => break,
+                    Some(r) if r.is_empty() => {}
+                    Some(r) => refused.push(format!("{name} preset {preset}: {}", r.join(", "))),
+                }
+                if preset == 7 {
+                    checked.push(name);
+                }
+            }
+        }
+        assert!(refused.is_empty(), "refused: {refused:#?}");
+        eprintln!("checked against this FFmpeg: {checked:?}");
+    }
+
+    #[test]
+    fn string_presets_open() {
+        // x264 and x265 take their preset as a string that only opening
+        // the encoder checks.
+        use crate::encoder_policy::preset_options;
+        crate::init().unwrap();
+        for name in ["libx264", "libx265"] {
+            if !RawEncoder::exists(name) {
+                continue;
+            }
+            for preset in 1..=7 {
+                let params = OpenParams {
+                    options: preset_options(name, preset).unwrap(),
+                    ..params()
+                };
+                if let Err(e) = RawEncoder::open(name, &params, None) {
+                    panic!("{name} preset {preset}: {e}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_options_reports_unknown_names_and_values() {
+        crate::init().unwrap();
+        let options = [
+            ("huffman", "optimal".to_string()),
+            ("huffman", "slowest".to_string()),
+            ("no_such_option", "1".to_string()),
+        ];
+        assert_eq!(
+            RawEncoder::rejected_options("mjpeg", &options).unwrap(),
+            ["huffman=slowest", "no_such_option=1"]
+        );
+        assert!(RawEncoder::rejected_options("no_such_encoder", &options).is_none());
+    }
+
+    #[test]
+    fn a_rate_cap_reaches_the_codec_context() {
+        crate::init().unwrap();
+        let Some(name) = ["libopenh264", "libx264"]
+            .into_iter()
+            .find(|n| RawEncoder::exists(n))
+        else {
+            return;
+        };
+        let capped = OpenParams {
+            rate_cap: Some((1_150_000, 2_000_000)),
+            ..params()
+        };
+        let raw = RawEncoder::open(name, &capped, None).unwrap();
+        // SAFETY: the context is open and owned by `raw`.
+        let (max, buffer) = unsafe { ((*raw.ctx).rc_max_rate, (*raw.ctx).rc_buffer_size) };
+        assert_eq!((max, buffer), (1_150_000, 2_000_000));
+        let raw = RawEncoder::open(name, &params(), None).unwrap();
+        // SAFETY: as above.
+        assert_eq!(unsafe { (*raw.ctx).rc_max_rate }, 0, "no cap unless asked");
+    }
 
     #[test]
     fn empty_packet_copies_to_empty_vec() {

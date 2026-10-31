@@ -82,6 +82,28 @@ fn rejects_short_stride() {
 }
 
 #[test]
+fn rejects_geometry_whose_size_overflows() {
+    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
+        return;
+    }
+    let mut encoder = Encoder::open(&software_config(64, 8, 30)).unwrap();
+    let mut out = Vec::new();
+    let tiny = vec![0u8; 64 * 4 * 8];
+    for (stride, width, height) in [
+        (usize::MAX / 2, 64, 3),
+        (usize::MAX, 64, 2),
+        (0, 1 << 30, 1),
+        (usize::MAX, u32::MAX, u32::MAX),
+    ] {
+        let err = encoder
+            .encode(&tiny, stride, width, height, SECOND, &mut out)
+            .unwrap_err();
+        assert!(matches!(err, MediaError::Invalid(_)), "{err}");
+    }
+    assert!(out.is_empty());
+}
+
+#[test]
 fn first_pts_zero_strictly_increasing_keyframe_every_gop() {
     if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
         return;
@@ -468,4 +490,62 @@ fn repeats_release_old_surfaces_on_gpu_and_cpu_paths() {
         enc.flush(&mut out).unwrap();
         assert!(out.windows(2).all(|w| w[0].pts < w[1].pts));
     }
+}
+
+/// Encodes frame `i` of a 160×90, 30 fps synthetic stream.
+fn encode_frame(
+    enc: &mut Encoder,
+    i: u32,
+    out: &mut Vec<EncodedPacket>,
+) -> fthrust_media::Result<()> {
+    let bgra = support::synthetic_bgra(160, 90, i);
+    enc.encode(&bgra, 160 * 4, 160, 90, i64::from(i) * SECOND / 30, out)
+}
+
+#[test]
+fn a_failed_encode_keeps_the_keyframe_request() {
+    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
+        return;
+    }
+    let mut enc = Encoder::open(&software_config(160, 90, 30)).unwrap();
+    let mut out = Vec::new();
+    for i in 0..10 {
+        encode_frame(&mut enc, i, &mut out).unwrap();
+    }
+    enc.request_keyframe();
+    enc.inject_send_failure();
+    assert!(encode_frame(&mut enc, 10, &mut out).is_err());
+    encode_frame(&mut enc, 11, &mut out).unwrap();
+    enc.flush(&mut out).unwrap();
+    assert!(
+        out.iter().all(|p| p.pts != 10),
+        "the failed frame never reached the codec"
+    );
+    let next = out.iter().find(|p| p.pts == 11).expect("frame 11 encoded");
+    assert!(
+        next.keyframe,
+        "the keyframe request outlives the frame that failed"
+    );
+}
+
+#[test]
+fn a_failed_repeat_keeps_the_keyframe_request() {
+    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
+        return;
+    }
+    let mut enc = Encoder::open(&software_config(160, 90, 30)).unwrap();
+    let mut out = Vec::new();
+    for i in 0..10 {
+        encode_frame(&mut enc, i, &mut out).unwrap();
+    }
+    enc.request_keyframe();
+    enc.inject_send_failure();
+    assert!(enc.encode_repeat(10 * SECOND / 30, &mut out).is_err());
+    assert!(enc.encode_repeat(11 * SECOND / 30, &mut out).unwrap());
+    enc.flush(&mut out).unwrap();
+    let next = out.iter().find(|p| p.pts == 11).expect("repeat 11 encoded");
+    assert!(
+        next.keyframe,
+        "the keyframe request outlives the repeat that failed"
+    );
 }

@@ -92,7 +92,7 @@ If you've set up [uploading](uploads.md) to Catbox, clips over Catbox's 200 MB l
 
 <img src="images/export-jobs.png" alt="The Exports window with a completed export" width="860">
 
-Exports and shares run in the background, so you can keep browsing, editing or playing. **Export jobs** in the editor sidebar opens the queue: progress for each job, **Cancel selected**, and **Open output folder**. Closing the window doesn't stop anything.
+Exports and shares run in the background, so you can keep browsing, editing or playing. **Export jobs** in the editor sidebar opens the queue: progress for each job, **Cancel selected**, and **Open output folder**. Closing the window doesn't stop anything. A job whose video comes out shorter than the edit, or whose audio stops short of the clip's own, fails instead of leaving a cut-off file behind.
 
 By default one job runs at a time. **Settings → Performance → Allow simultaneous exports** allows two to four, at the cost of more CPU, GPU and disk load while you're gaming.
 
