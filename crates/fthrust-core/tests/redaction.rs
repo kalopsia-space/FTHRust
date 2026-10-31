@@ -33,6 +33,14 @@ fn secrets_with_a_prefix_are_redacted() {
         ("oauth=xyz", "oauth=<redacted>"),
         ("catbox_userhash=0123456789", "catbox_userhash=<redacted>"),
         ("userhash: abcdef0123", "userhash: <redacted>"),
+        // Spelled with an underscore or camel case.
+        ("user_hash=0123456789", "user_hash=<redacted>"),
+        ("catbox_user_hash: abc", "catbox_user_hash: <redacted>"),
+        ("userHash=0123456789", "userHash=<redacted>"),
+        (
+            "sent user_hash 0123456789abcdef to catbox",
+            "sent user_hash <redacted> to catbox",
+        ),
     ]);
 }
 
@@ -105,6 +113,9 @@ fn json_keys_that_end_in_a_secret_word_lose_their_value() {
         "X-Api-Key": "k",
         "Set-Cookie": "a=1; b=2",
         "catbox_userhash": "0123456789",
+        "userHash": "camel",
+        "user_hash": "snake",
+        "catboxUserHash": "both",
         "upload_auth_header": "Bearer z",
         "oauth": "o",
         "keep": "visible",
@@ -122,6 +133,9 @@ fn json_keys_that_end_in_a_secret_word_lose_their_value() {
         "X-Api-Key",
         "Set-Cookie",
         "catbox_userhash",
+        "userHash",
+        "user_hash",
+        "catboxUserHash",
         "upload_auth_header",
         "oauth",
     ] {

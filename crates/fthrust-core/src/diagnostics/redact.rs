@@ -32,14 +32,14 @@ static RE_COOKIE: LazyLock<Regex> = LazyLock::new(|| {
 /// `catbox_userhash`, `clientSecret`): anything that ends in a secret word.
 static RE_KV: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)\b([a-z0-9_.-]*(?:token|api_?key|password|passwd|secret|auth|userhash|passphrase)|upload_auth_header)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;&\s}\]]+)"#,
+        r#"(?i)\b([a-z0-9_.-]*(?:token|api_?key|password|passwd|secret|auth|user_?hash|passphrase)|upload_auth_header)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;&\s}\]]+)"#,
     )
     .expect("valid regex")
 });
 /// A userhash named in running text, without a `=` or `:` (`using userhash
 /// 0123456789abcdef`): the hex that follows it.
 static RE_USERHASH_TEXT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(\buserhash\b[^\n]{0,40}?\b)[0-9a-f]{8,}\b").expect("valid regex")
+    Regex::new(r"(?i)(\buser_?hash\b[^\n]{0,40}?\b)[0-9a-f]{8,}\b").expect("valid regex")
 });
 
 /// Strips anything credential-shaped out of `text`: URL user-info, bearer
@@ -122,6 +122,7 @@ const SECRET_WORDS: &[&str] = &[
     "passphrase",
     "secret",
     "userhash",
+    "user_hash",
     "authorization",
     "auth_header",
     "cookie",
