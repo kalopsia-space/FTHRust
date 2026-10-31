@@ -69,8 +69,11 @@ prepare_bench_dir() {
       /*) ;;
       *) die "BENCH_DIR must be an absolute path: $BENCH_DIR" ;;
     esac
-    BENCH=${BENCH%/}
+    while [ "${BENCH%/}" != "$BENCH" ]; do BENCH=${BENCH%/}; done
     [ -n "$BENCH" ] || die "BENCH_DIR must not be /"
+    case "$BENCH/" in
+      */../*) die "BENCH_DIR must not contain ..: $BENCH_DIR" ;;
+    esac
     [ ! -L "$BENCH" ] || die "BENCH_DIR must not be a symlink: $BENCH"
     if [ -e "$BENCH" ]; then
       [ -d "$BENCH" ] || die "BENCH_DIR exists and is not a directory: $BENCH"

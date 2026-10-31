@@ -7,7 +7,7 @@ fail() { echo "FAIL $1"; exit 1; }
 leftovers() { # processes carrying this bench's bus address (only our own are readable)
   local d=$1 p; for p in /proc/[0-9]*; do
     { tr '\0' '\n' < "$p/environ" | grep -q "DBUS_SESSION_BUS_ADDRESS=unix:path=$d/rt/bus"; } 2>/dev/null && echo "${p#/proc/}"; done; return 0; }
-D=/tmp/uidrive-selfcheck
+D=$(mktemp -d /tmp/uidrive-selfcheck.XXXXXX) # a fresh, empty directory: bench.sh only reuses ones it made
 echo "--- failed start leaves nothing"
 BENCH_DIR=$D "$HERE/bench.sh" up --cage /bin/false >/dev/null 2>&1 && fail "up succeeded with a broken cage"
 [ -z "$(leftovers $D)" ] || fail "processes left after a failed start: $(leftovers $D)"
@@ -27,4 +27,5 @@ sleep 1
 [ -z "$(leftovers $D)" ] || fail "processes left after down: $(leftovers $D)"
 pgrep -f "dbus-daemon.*$D/" >/dev/null && fail "dbus-daemon left after down"
 pgrep -f "$D/" >/dev/null && fail "processes still reference $D: $(pgrep -af "$D/" | head -3)"
+rm -rf "$D"
 echo PASS

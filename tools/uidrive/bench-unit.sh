@@ -98,6 +98,35 @@ bench_dir_accepts_an_empty_directory() {
   need "the marker" test -f "$BENCH/$MARKER"
 }
 
+bench_dir_strips_every_trailing_slash() {
+  mkdir "$WORK/slashes"
+  export BENCH_DIR="$WORK/slashes///"
+  prepare_bench_dir
+  need "BENCH without trailing slashes" test "$BENCH" = "$WORK/slashes"
+  # "//" used to lose one slash and come out as "/"
+  BENCH_DIR=// refuses prepare_bench_dir
+  BENCH_DIR=/// refuses prepare_bench_dir
+}
+
+bench_dir_refuses_dot_dot() {
+  mkdir -p "$WORK/dotdot/inner"
+  touch "$WORK/dotdot/inner/$MARKER"
+  BENCH_DIR="$WORK/dotdot/inner/.." refuses prepare_bench_dir
+  BENCH_DIR="$WORK/dotdot/../dotdot/inner" refuses prepare_bench_dir
+  need "the directory to be untouched" test -f "$WORK/dotdot/inner/$MARKER"
+}
+
+# docs-shots.sh used to remove ${DOCS_SHOTS_DIR:-/tmp/fthrust-docs} unasked; it now applies bench.sh's rules to
+# that directory before it does anything else.
+docs_shots_refuses_a_directory_it_did_not_make() {
+  mkdir -p "$WORK/docs-precious"
+  echo keep > "$WORK/docs-precious/file"
+  local out
+  if out=$(DOCS_SHOTS_DIR="$WORK/docs-precious" "$HERE/docs-shots.sh" 2>&1); then echo "docs-shots.sh succeeded: $out"; exit 1; fi
+  need "a refusal in the output (got: $out)" grep -q "refusing to reuse" <<<"$out"
+  need "the directory's content to survive" test "$(cat "$WORK/docs-precious/file")" = keep
+}
+
 bench_dir_creates_a_missing_directory() {
   export BENCH_DIR=$WORK/new/deeper
   prepare_bench_dir
@@ -160,6 +189,9 @@ for t in \
   bench_dir_reuses_and_empties_its_own_directory \
   bench_dir_accepts_an_empty_directory \
   bench_dir_creates_a_missing_directory \
+  docs_shots_refuses_a_directory_it_did_not_make \
+  bench_dir_strips_every_trailing_slash \
+  bench_dir_refuses_dot_dot \
   bench_dir_refuses_root_relative_and_symlinks \
   bench_down_survives_dead_processes \
   bench_down_stops_the_compositor_and_its_children \

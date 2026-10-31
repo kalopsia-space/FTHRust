@@ -8,11 +8,17 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT="$ROOT/docs/images"
-WORK=${DOCS_SHOTS_DIR:-/tmp/fthrust-docs}
 SEED=""
 [ "${1:-}" = "--seed" ] && SEED=$2
 
-rm -rf "$WORK"; mkdir -p "$WORK/app"
+# DOCS_SHOTS_DIR (default: a fresh /tmp/uidrive-XXXXXX) is emptied before use, so it gets bench.sh's rules: a
+# directory this script or the bench made earlier (it holds the .uidrive-bench marker) or an empty one; anything
+# else is refused untouched.
+# shellcheck source=bench.sh
+source "$HERE/bench.sh"
+BENCH_DIR=${DOCS_SHOTS_DIR:-} prepare_bench_dir
+WORK=$BENCH
+mkdir -p "$WORK/app"
 if [ -z "$SEED" ]; then
   SEED="$WORK/seed"
   mkdir -p "$SEED/Desktop" "$SEED/Neon Drift" "$SEED/Screenshots"
@@ -38,12 +44,16 @@ fi
 cargo build -q -p fthrust-ui -p fthrust-engine --manifest-path "$ROOT/Cargo.toml"
 cp "$ROOT/target/debug/fthrust" "$ROOT/target/debug/fthrust-engine" "$WORK/app/"
 
-BENCH_DIR=/tmp/fthrust-docs-bench "$HERE/bench.sh" run "$HERE/scenarios/docs_shots.sh" \
+# A fresh, empty bench directory (short: the Wayland socket path must fit in 108 bytes).
+DOCS_BENCH=$(mktemp -d /tmp/fthrust-docs-bench.XXXXXX)
+BENCH_DIR=$DOCS_BENCH "$HERE/bench.sh" run "$HERE/scenarios/docs_shots.sh" \
   --engine real --pipewire --app "$WORK/app/fthrust" --seed "$SEED"
 
 mkdir -p "$OUT"
-for f in /tmp/fthrust-docs-bench/shots/*.png; do
+for f in "$DOCS_BENCH"/shots/*.png; do
   name=$(basename "$f"); name=${name#[0-9][0-9][0-9]-}
   cp "$f" "$OUT/$name"
 done
+rm -rf "$DOCS_BENCH"
+[ -n "${DOCS_SHOTS_DIR:-}" ] || rm -rf "$WORK"
 echo "screenshots in $OUT"
