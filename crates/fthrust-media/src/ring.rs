@@ -339,34 +339,53 @@ impl EncodedRing {
         generation: u64,
     ) -> Option<Snapshot> {
         let inner = self.lock();
-        if inner.packets.is_empty() || duration_ms == 0 || self.fps == 0 {
+        let (front, back) = (inner.packets.front()?, inner.packets.back()?);
+        if duration_ms == 0 || self.fps == 0 {
             return None;
         }
-        let eligible: Vec<&EncodedPacket> = inner
-            .packets
-            .iter()
-            .filter(|p| generation == 0 || p.generation == generation)
+        // Generations only grow, and the engine clears the ring when it
+        // reopens the encoder, so a ring of one generation (the usual case)
+        // needs no filtered copy of its packets.
+        let picked: Option<Vec<usize>> = if generation == 0
+            || (front.generation == generation && back.generation == generation)
+        {
+            None
+        } else {
+            Some(
+                inner
+                    .packets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.generation == generation)
+                    .map(|(i, _)| i)
+                    .collect(),
+            )
+        };
+        let at = |i: usize| match &picked {
+            None => &inner.packets[i],
+            Some(indexes) => &inner.packets[indexes[i]],
+        };
+        let count = picked.as_ref().map_or(inner.packets.len(), Vec::len);
+        let samples: Vec<Sample> = (0..count)
+            .map(|i| {
+                let p = at(i);
+                Sample {
+                    timestamp: p.wall_time_ns,
+                    keyframe: p.keyframe,
+                }
+            })
             .collect();
-        let last = eligible.last()?;
         let target_end_ns = if target_end_ns <= 0 {
-            last.wall_time_ns
+            samples.last()?.timestamp
         } else {
             target_end_ns
         };
-        let samples: Vec<Sample> = eligible
-            .iter()
-            .map(|p| Sample {
-                timestamp: p.wall_time_ns,
-                keyframe: p.keyframe,
-            })
+        let duration_ns = i64::from(duration_ms) * 1_000_000;
+        let selection = replay_interval::select(&samples, target_end_ns, duration_ns).ok()?;
+        let packets: Vec<EncodedPacket> = (selection.decode_start..=selection.end)
+            .map(|i| at(i).clone())
             .collect();
-        let selection =
-            replay_interval::select(&samples, target_end_ns, i64::from(duration_ms) * 1_000_000)
-                .ok()?;
-        let packets: Vec<EncodedPacket> = eligible[selection.decode_start..=selection.end]
-            .iter()
-            .map(|p| (*p).clone())
-            .collect();
+        drop(inner);
         let newest_pts = packets.last().map_or(0, |p| p.pts);
         let first_pts = packets.first().map_or(0, |p| p.pts);
         let presentation_start_pts = replay_interval::presentation_start_pts(
@@ -376,7 +395,7 @@ impl EncodedRing {
             first_pts,
         );
         let presentation_start_ns = if selection.full_history {
-            target_end_ns - i64::from(duration_ms) * 1_000_000
+            target_end_ns - duration_ns
         } else {
             packets.first().map_or(0, |p| p.wall_time_ns)
         };
