@@ -4,8 +4,8 @@ use std::path::Path;
 
 use fthrust_core::hotkeys::HotkeyBindings;
 use fthrust_core::hotkeys::hyprland::{
-    apply, bind_actions, bind_line, ensure_source_line, setup_instructions, socket_command,
-    to_hyprland_bind, write_lua_block, write_managed_conf,
+    apply, bind_actions, bind_line, ensure_source_line, lua_backup_path, setup_instructions,
+    socket_command, to_hyprland_bind, write_lua_block, write_managed_conf,
 };
 
 const SOCK: &str = "/run/user/1000/fthrust/hotkey.sock";
@@ -317,7 +317,7 @@ fn lua_rewrite_goes_through_a_temp_file_and_keeps_a_backup() {
     let first = std::fs::read_to_string(&path).unwrap();
     assert!(first.starts_with(user.trim_end()) && first.contains("hotkeys begin (managed)"));
     // The backup holds what the file said before this write.
-    let bak = path.with_file_name("keybinds.lua.bak");
+    let bak = path.with_file_name("keybinds.lua.fthr-bak");
     assert_eq!(std::fs::read_to_string(&bak).unwrap(), user);
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -332,7 +332,7 @@ fn lua_rewrite_goes_through_a_temp_file_and_keeps_a_backup() {
     assert_eq!(std::fs::read_to_string(&bak).unwrap(), first);
     assert_eq!(
         lua_leftovers(&path),
-        ["keybinds.lua", "keybinds.lua.bak"],
+        ["keybinds.lua", "keybinds.lua.fthr-bak"],
         "no temporary file is left behind"
     );
 }
@@ -359,9 +359,106 @@ fn lua_rewrite_follows_a_symlink_instead_of_replacing_it() {
     let text = std::fs::read_to_string(&real).unwrap();
     assert!(text.starts_with("-- mine") && text.contains("hotkeys begin (managed)"));
     assert_eq!(
-        std::fs::read_to_string(path.with_file_name("keybinds.lua.bak")).unwrap(),
+        std::fs::read_to_string(path.with_file_name("keybinds.lua.fthr-bak")).unwrap(),
         "-- mine\n"
     );
+}
+
+#[test]
+fn a_users_own_bak_file_is_never_overwritten() {
+    let d = tempfile::tempdir().unwrap();
+    let path = lua_path(d.path());
+    write_lua(&path, b"-- current\n");
+    let theirs = path.with_file_name("keybinds.lua.bak");
+    std::fs::write(&theirs, "-- my own copy from last year\n").unwrap();
+    let b = bindings(&[]);
+    assert!(write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK)).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(&theirs).unwrap(),
+        "-- my own copy from last year\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(lua_backup_path(&path)).unwrap(),
+        "-- current\n"
+    );
+    assert_eq!(
+        lua_backup_path(&path).file_name().unwrap(),
+        "keybinds.lua.fthr-bak"
+    );
+}
+
+/// A symlink in a writable directory to a file in one that is not: the
+/// backup beside the link can be written, the temporary file beside the
+/// target cannot, so the rename is refused with EACCES.
+fn linked_into_a_read_only_directory(
+    file_mode: u32,
+) -> Option<(tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)> {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    let real = store.join("keybinds.lua");
+    std::fs::write(&real, "-- mine\n").unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(file_mode)).unwrap();
+    let link = lua_path(&d.path().join("hypr"));
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(store.join("probe"), "").is_ok() {
+        // Running as root: the mode does not bind us.
+        std::fs::remove_file(store.join("probe")).unwrap();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return None;
+    }
+    Some((d, link, real))
+}
+
+fn open_up(d: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(d.join("store"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_refused_rename_falls_back_to_writing_the_file_in_place() {
+    use std::os::unix::fs::MetadataExt;
+    let Some((d, link, real)) = linked_into_a_read_only_directory(0o644) else {
+        return;
+    };
+    let inode = std::fs::metadata(&real).unwrap().ino();
+    let b = bindings(&[]);
+    let r = write_lua_block(&link, &b, Path::new(EXE), Path::new(SOCK));
+    open_up(d.path());
+    assert!(r.unwrap(), "the file was changed");
+    let text = std::fs::read_to_string(&real).unwrap();
+    assert!(text.starts_with("-- mine") && text.contains("hotkeys begin (managed)"));
+    assert_eq!(
+        std::fs::metadata(&real).unwrap().ino(),
+        inode,
+        "rewritten in place"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(lua_backup_path(&link)).unwrap(),
+        "-- mine\n",
+        "the backup was written before the rewrite"
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_written_at_all_is_left_as_it_was() {
+    let Some((d, link, real)) = linked_into_a_read_only_directory(0o444) else {
+        return;
+    };
+    let b = bindings(&[]);
+    let r = write_lua_block(&link, &b, Path::new(EXE), Path::new(SOCK));
+    open_up(d.path());
+    assert!(r.is_err(), "neither a rename nor an in-place write works");
+    assert_eq!(std::fs::read_to_string(&real).unwrap(), "-- mine\n");
 }
 
 #[test]

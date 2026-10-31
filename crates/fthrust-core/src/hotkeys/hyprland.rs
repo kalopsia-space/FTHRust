@@ -175,10 +175,37 @@ fn read_lua_config(path: &Path) -> std::io::Result<Option<String>> {
     }
 }
 
+/// Suffix of the copy kept of the Lua keybind file before a change. It is not
+/// `.bak`: `keybinds.lua.bak` is the name a user (or their editor) gives a
+/// copy of their own, and it must not be overwritten.
+pub const LUA_BACKUP_SUFFIX: &str = ".fthr-bak";
+
+/// Where the previous contents of the Lua keybind file at `path` are kept:
+/// `<name>.fthr-bak` beside it.
+pub fn lua_backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(LUA_BACKUP_SUFFIX);
+    path.with_file_name(name)
+}
+
+/// Errors that say a file cannot be replaced by a rename although it can
+/// still be written: a mount point (a bind-mounted file), a directory that is
+/// not ours around a file that is, a read-only directory over a writable file.
+fn rename_refused(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{PermissionDenied, ReadOnlyFilesystem, ResourceBusy};
+    matches!(
+        e.kind(),
+        PermissionDenied | ReadOnlyFilesystem | ResourceBusy
+    )
+}
+
 /// Replaces the Lua keybind file with `text` through a temporary file and a
-/// rename, after saving `previous` as `<name>.bak` next to it. A symlink
+/// rename, after saving `previous` beside it ([`lua_backup_path`]). A symlink
 /// (dotfile managers) is written through, not replaced, and the file keeps
-/// its mode. Nothing is replaced unless the backup was written.
+/// its mode. Nothing is replaced unless the backup was written. When the
+/// rename is refused (see [`rename_refused`]) the file is rewritten in place
+/// instead: the backup is already safe, and if the rewrite itself fails
+/// half-way the previous contents are put back.
 fn replace_lua_config(path: &Path, previous: Option<&str>, text: &str) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -186,18 +213,26 @@ fn replace_lua_config(path: &Path, previous: Option<&str>, text: &str) -> std::i
         .map(|m| m.permissions().mode() & 0o777)
         .unwrap_or(0o644);
     if let Some(previous) = previous.filter(|p| !p.is_empty()) {
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(".bak");
-        fsutil::write_atomic(&path.with_file_name(name), previous.as_bytes(), mode)?;
+        fsutil::write_atomic(&lua_backup_path(path), previous.as_bytes(), mode)?;
     }
-    fsutil::write_atomic(&target, text.as_bytes(), mode)
+    match fsutil::write_atomic(&target, text.as_bytes(), mode) {
+        Err(e) if rename_refused(&e) && target.is_file() => {
+            tracing::info!(path = %target.display(), error = %e, "writing the keybind file in place");
+            std::fs::write(&target, text.as_bytes()).inspect_err(|_| {
+                if let Some(previous) = previous {
+                    let _ = std::fs::write(&target, previous.as_bytes());
+                }
+            })
+        }
+        other => other,
+    }
 }
 
 /// Writes the managed block into a Lua keybind file; `Ok(true)` when the
 /// file changed. An incomplete block (begin without end) is refused, and so
 /// is a file that cannot be read or is not UTF-8 (only a missing one is
-/// created). The file is replaced atomically and its previous contents stay
-/// in `<name>.bak`.
+/// created). The file is replaced atomically (in place where a rename is
+/// refused) and its previous contents stay in `<name>.fthr-bak`.
 pub fn write_lua_block(
     path: &Path,
     bindings: &HotkeyBindings,
