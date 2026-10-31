@@ -1,12 +1,14 @@
 //! The library model (`ClipGrid` state): records from the scan, the
 //! filter and sort, day sections, the heading and the empty state.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fthrust_core::clip_readiness::ClipReadinessRegistry;
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort, apply};
 use time::macros::format_description;
-use time::{OffsetDateTime, UtcOffset};
+use time::{Date, OffsetDateTime, UtcOffset};
 
 /// `_filter_heading`.
 pub fn heading(filter: Filter) -> &'static str {
@@ -23,15 +25,29 @@ fn local_offset() -> UtcOffset {
     *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
 }
 
-/// `_section_label_for`: `%a, %b %d` in local time.
-pub fn section_label(mtime_ns: i128) -> String {
-    let when = OffsetDateTime::from_unix_timestamp_nanos(mtime_ns)
+fn local_time(mtime_ns: i128) -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp_nanos(mtime_ns)
         .unwrap_or(OffsetDateTime::UNIX_EPOCH)
-        .to_offset(local_offset());
+        .to_offset(local_offset())
+}
+
+fn label_of(when: OffsetDateTime) -> String {
     when.format(format_description!(
         "[weekday repr:short], [month repr:short] [day]"
     ))
     .unwrap_or_default()
+}
+
+/// `_section_label_for`: `%a, %b %d` in local time.
+pub fn section_label(mtime_ns: i128) -> String {
+    label_of(local_time(mtime_ns))
+}
+
+/// The local calendar day a file belongs to. Sections group by this, not by
+/// the label: the label has no year, so `Fri, Jan 15` of two years would
+/// otherwise be one section.
+pub fn section_date(mtime_ns: i128) -> Date {
+    local_time(mtime_ns).date()
 }
 
 /// `_game_name_from_path`: the parent folder, `Desktop` at the root.
@@ -59,11 +75,24 @@ pub fn title_from_path(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// A count the library can be asked for (diagnostics and tests); cloning
+/// copies the value.
+#[derive(Debug, Default)]
+struct Tally(AtomicU64);
+
+impl Clone for Tally {
+    fn clone(&self) -> Tally {
+        Tally(AtomicU64::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
 /// One day section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
     /// `Fri, Jan 15`.
     pub label: String,
+    /// The local day (the label without its year ambiguity).
+    pub date: Date,
     /// The newest file's folder name.
     pub game: Option<String>,
     /// Paths in display order.
@@ -86,6 +115,10 @@ pub struct Library {
     pub clips_root: PathBuf,
     /// Every known record (unfiltered).
     pub records: Vec<LibraryRecord>,
+    /// Position of each record by path, rebuilt with the sections.
+    index: HashMap<PathBuf, usize>,
+    /// Lookups the index could not answer (see [`Library::record`]).
+    slow_lookups: Tally,
     /// Current filter.
     pub filter: Filter,
     /// Current sort.
@@ -115,6 +148,8 @@ impl Library {
         Library {
             clips_root,
             records: Vec::new(),
+            index: HashMap::new(),
+            slow_lookups: Tally::default(),
             filter: Filter::All,
             sort: Sort::Newest,
             sections: Vec::new(),
@@ -124,8 +159,36 @@ impl Library {
         }
     }
 
+    /// The record of `path`, found without a scan of the library (the
+    /// page asks once per card and frame).
+    pub fn record(&self, path: &Path) -> Option<&LibraryRecord> {
+        self.index
+            .get(path)
+            .and_then(|&i| self.records.get(i))
+            .filter(|r| r.path == path)
+            // The index is as old as the last rebuild: after an upsert or a
+            // removal the lookup falls back to the slow, always right way.
+            .or_else(|| {
+                self.slow_lookups.0.fetch_add(1, Ordering::Relaxed);
+                self.records.iter().find(|r| r.path == path)
+            })
+    }
+
+    /// How many [`Library::record`] lookups missed the index and scanned the
+    /// records (a page that does this per card and frame scales with the
+    /// library).
+    pub fn slow_lookups(&self) -> u64 {
+        self.slow_lookups.0.load(Ordering::Relaxed)
+    }
+
     /// Rebuilds the sections for the current filter and sort.
     pub fn rebuild(&mut self, screenshot_key: &str) {
+        self.index = self
+            .records
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.path.clone(), i))
+            .collect();
         let visible = apply(&self.records, self.filter, self.sort);
         self.count = visible.len();
         self.sections.clear();
@@ -145,15 +208,20 @@ impl Library {
             return;
         }
         self.empty = None;
+        let mut by_date: HashMap<Date, usize> = HashMap::new();
         for r in visible {
-            let label = section_label(r.mtime_ns);
-            match self.sections.iter_mut().find(|s| s.label == label) {
-                Some(s) => s.paths.push(r.path.clone()),
-                None => self.sections.push(Section {
-                    label,
-                    game: Some(game_name(&r.path, &self.clips_root)),
-                    paths: vec![r.path.clone()],
-                }),
+            let when = local_time(r.mtime_ns);
+            match by_date.get(&when.date()) {
+                Some(&i) => self.sections[i].paths.push(r.path.clone()),
+                None => {
+                    by_date.insert(when.date(), self.sections.len());
+                    self.sections.push(Section {
+                        label: label_of(when),
+                        date: when.date(),
+                        game: Some(game_name(&r.path, &self.clips_root)),
+                        paths: vec![r.path.clone()],
+                    });
+                }
             }
         }
     }

@@ -125,9 +125,81 @@ fn video_texture_uploads_and_resizes() {
     assert_ne!(tex.id(), Some(first));
     assert_eq!(first_pixel(&rs, tex.texture().unwrap()), [0, 0, 255, 255]);
 
-    tex.clear(&rs);
+    tex.clear();
     assert_eq!(tex.id(), None);
     assert_eq!(tex.size(), None);
+}
+
+#[test]
+fn dropping_the_video_texture_frees_its_registration() {
+    let Some(rs) = headless() else {
+        return;
+    };
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(320, 180, [255, 0, 0, 255]));
+    let id = tex.id().expect("registered");
+    assert!(rs.renderer.read().texture(&id).is_some());
+    // What closing the editor does: the texture is dropped, not cleared.
+    drop(tex);
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the renderer still holds the dropped texture: a closed editor leaks its video frame"
+    );
+}
+
+#[test]
+fn dropping_an_unused_or_cleared_video_texture_is_harmless() {
+    let Some(rs) = headless() else {
+        return;
+    };
+    drop(VideoTexture::new());
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(64, 64, [0, 255, 0, 255]));
+    tex.clear();
+    drop(tex);
+    // A resize frees the old registration once and the drop the new one.
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(64, 64, [0, 0, 255, 255]));
+    let first = tex.id().unwrap();
+    tex.update(&rs, &solid(128, 72, [0, 0, 255, 255]));
+    let second = tex.id().unwrap();
+    assert!(rs.renderer.read().texture(&first).is_none());
+    assert!(rs.renderer.read().texture(&second).is_some());
+    drop(tex);
+    assert!(rs.renderer.read().texture(&second).is_none());
+}
+
+#[test]
+fn a_texture_is_always_freed_from_the_renderer_it_was_registered_with() {
+    let (Some(first), Some(second)) = (headless(), headless()) else {
+        return;
+    };
+    // The same surface, shown through another render state (another device).
+    // Whether the frame has the same size or not, the texture starts over
+    // there and the first renderer lets go of it.
+    for (width, height) in [(64, 64), (128, 72)] {
+        let mut tex = VideoTexture::new();
+        tex.update(&first, &solid(64, 64, [0, 0, 255, 255]));
+        let on_first = tex.id().unwrap();
+        tex.update(&second, &solid(width, height, [0, 255, 0, 255]));
+        let on_second = tex.id().unwrap();
+        assert!(
+            first.renderer.read().texture(&on_first).is_none(),
+            "{width}x{height}: the first renderer still holds the texture"
+        );
+        assert!(second.renderer.read().texture(&on_second).is_some());
+        assert_eq!(tex.size(), Some((width, height)));
+        assert_eq!(
+            first_pixel(&second, tex.texture().unwrap()),
+            [0, 255, 0, 255],
+            "{width}x{height}: the frame is on the second device"
+        );
+        drop(tex);
+        assert!(
+            second.renderer.read().texture(&on_second).is_none(),
+            "{width}x{height}: dropped from the renderer it is registered with"
+        );
+    }
 }
 
 /// Draws `tex` full-frame through egui into an `Rgba8Unorm` target (as the

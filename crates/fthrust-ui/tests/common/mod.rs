@@ -141,6 +141,41 @@ pub fn compare(rendered: &Rendered, screen: &str, tokens: &Tokens, ctx: &egui::C
     report
 }
 
+/// A render state on whatever adapter the machine has (a headless one, no
+/// window): what the app's runner hands the editor to upload video frames.
+/// `None` without an adapter.
+pub fn headless_render_state() -> Option<egui_wgpu::RenderState> {
+    use egui_wgpu::wgpu;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("test-render-state"),
+        ..Default::default()
+    }))
+    .ok()?;
+    let target_format = wgpu::TextureFormat::Rgba8Unorm;
+    let renderer = egui_wgpu::Renderer::new(
+        &device,
+        target_format,
+        egui_wgpu::RendererOptions::default(),
+    );
+    Some(egui_wgpu::RenderState {
+        available_adapters: vec![],
+        adapter,
+        instance,
+        device,
+        queue,
+        target_format,
+        renderer: std::sync::Arc::new(egui::mutex::RwLock::new(renderer)),
+    })
+}
+
 #[macro_export]
 macro_rules! assert_fidelity {
     ($rendered:expr, $screen:expr, $tokens:expr, $ctx:expr) => {{

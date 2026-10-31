@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Where a clip is on its way to being usable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,9 +29,21 @@ struct Handle {
 
 /// Tracks readiness per path. Untracked paths are `Ready` when the file
 /// exists and `FinalizationFailed` otherwise.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct ClipReadinessRegistry {
     handles: HashMap<PathBuf, Handle>,
+    /// How many times [`Self::state`] was asked (each one canonicalises and
+    /// may stat): diagnostics and tests.
+    state_lookups: AtomicU64,
+}
+
+impl Clone for ClipReadinessRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            handles: self.handles.clone(),
+            state_lookups: AtomicU64::new(self.state_lookups()),
+        }
+    }
 }
 
 fn key(path: &Path) -> PathBuf {
@@ -120,8 +133,15 @@ impl ClipReadinessRegistry {
         self.handles.contains_key(&key(path))
     }
 
+    /// How many times [`Self::state`] (and so [`Self::can_access`]) was asked.
+    /// A page that asks per card and frame shows here.
+    pub fn state_lookups(&self) -> u64 {
+        self.state_lookups.load(Ordering::Relaxed)
+    }
+
     /// The state of `path`.
     pub fn state(&self, path: &Path) -> ReadinessState {
+        self.state_lookups.fetch_add(1, Ordering::Relaxed);
         match self.handles.get(&key(path)) {
             Some(h) => h.state,
             None if path.is_file() => ReadinessState::Ready,
@@ -135,6 +155,19 @@ impl ClipReadinessRegistry {
             self.state(path),
             ReadinessState::Ready | ReadinessState::ReadyWithWarning
         )
+    }
+
+    /// Whether any tracked clip is not usable yet (committed, finalising or
+    /// failed). While none is, a listed clip is accessible without asking
+    /// the file system about it: [`Self::can_access`] canonicalises and
+    /// stats, which a page of cards cannot afford every frame.
+    pub fn has_blocked(&self) -> bool {
+        self.handles.values().any(|h| {
+            !matches!(
+                h.state,
+                ReadinessState::Ready | ReadinessState::ReadyWithWarning
+            )
+        })
     }
 
     /// Warnings recorded for `path`.

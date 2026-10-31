@@ -1,12 +1,15 @@
 //! Plan 5 Task 7: the Clips page (`ClipGrid`).
 
 mod common;
+#[path = "../../fthrust-media/tests/support/mod.rs"]
+mod support;
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use egui::{Pos2, Rect, Vec2};
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort};
+use fthrust_ui::fidelity::Marker;
 use fthrust_ui::shell;
 use fthrust_ui::state::{AppState, DialogKind, DialogResult, Page, StatusStyle, StatusText};
 use fthrust_ui::tokens::Color;
@@ -150,6 +153,95 @@ fn only_visible_rows_request_thumbnails() {
         s.thumb_requests_total <= 3 * 5,
         "thumbnails are requested only for visible cards: {}",
         s.thumb_requests_total
+    );
+}
+
+/// What a Clips page over `n` records did in `FRAMES` settled frames.
+struct Settled {
+    /// Texts egui had laid out after the last frame (it keeps only what that
+    /// frame used).
+    galleys: usize,
+    /// Cards built in the last frame.
+    built: usize,
+    /// Questions the readiness registry was asked (each canonicalises and
+    /// stats a file).
+    state_lookups: u64,
+    /// Record lookups that fell back to scanning the library.
+    slow_lookups: u64,
+}
+
+const FRAMES: usize = 10;
+
+fn settled_page(n: usize, finalizing_clip: bool) -> Settled {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), n);
+    s.library_dirty = true;
+    if finalizing_clip {
+        // A clip the engine has just saved and is still finalizing.
+        let newest = s.library.records[0].path.clone();
+        s.readiness.engine_committed(&newest, true);
+    }
+    let tokens = s.tokens.clone();
+    let counts = std::rc::Rc::new(std::cell::Cell::new((0u64, 0u64, 0usize)));
+    let probe = counts.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        probe.set((
+            s.readiness.state_lookups(),
+            s.library.slow_lookups(),
+            s.visible_cards.len(),
+        ));
+    });
+    h.run_steps(4);
+    let (lookups_before, slow_before, _) = counts.get();
+    h.run_steps(FRAMES);
+    let (lookups_after, slow_after, built) = counts.get();
+    Settled {
+        galleys: h.ctx.fonts(|f| f.num_galleys_in_cache()),
+        built,
+        state_lookups: lookups_after - lookups_before,
+        slow_lookups: slow_after - slow_before,
+    }
+}
+
+#[test]
+fn a_frame_does_no_work_that_grows_with_the_library() {
+    let small = settled_page(300, false);
+    let large = settled_page(12_000, false);
+    // The same cards are built either way.
+    assert!(small.built > 0 && large.built > 0);
+    // Nothing is finalizing, so no card asks the file system about its clip.
+    assert_eq!(small.state_lookups, 0);
+    assert_eq!(
+        large.state_lookups, 0,
+        "a readiness check per card and frame"
+    );
+    // Every card's record comes from the path index.
+    assert_eq!(small.slow_lookups, 0);
+    assert_eq!(
+        large.slow_lookups, 0,
+        "a scan of the records per card and frame"
+    );
+    // Text is laid out for the headers and cards that are built, not for the
+    // 500 days of the large library (each day's label is a text of its own).
+    assert!(
+        large.galleys <= small.galleys + 20,
+        "{} texts laid out with 12000 records, {} with 300",
+        large.galleys,
+        small.galleys
+    );
+}
+
+#[test]
+fn while_a_clip_is_finalizing_the_cards_ask_for_their_readiness() {
+    // The shortcut above must not hide a clip that is not ready.
+    let page = settled_page(12_000, true);
+    assert!(page.state_lookups > 0, "nothing asked about the clip");
+    assert!(
+        page.state_lookups <= (page.built * FRAMES) as u64,
+        "{} questions for {} cards over {FRAMES} frames: more than one per card and frame",
+        page.state_lookups,
+        page.built
     );
 }
 
@@ -382,4 +474,408 @@ fn renaming_a_linked_import_asks_first() {
         import_dir.join("moved.mp4").exists() && !clip.exists(),
         "renamed after yes"
     );
+}
+
+/// Answers the rename question of `path` with `stem`, as the dialog does.
+fn rename_through_the_dialog(s: &mut AppState, path: &std::path::Path, stem: &str) {
+    s.dialogs.results.push(DialogResult::Answer {
+        tag: format!("rename-clip:{}\u{1f}{stem}", path.display()),
+        yes: true,
+    });
+    fthrust_ui::library::page::consume_results(s);
+}
+
+#[test]
+fn renaming_a_clip_keeps_its_tag_description_and_editor_draft() {
+    use fthrust_core::clip_metadata::{ClipMetadataStore, DraftFile, EditorDraft};
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    let clip = root.join("Desktop/old_name.mp4");
+    std::fs::write(&clip, b"video").unwrap();
+    s.library.upsert(&clip, false);
+    // What the editor saved for the clip.
+    let identity = fthrust_core::media_identity::file_identity(&clip).unwrap();
+    {
+        let mut store = ClipMetadataStore::open(&s.paths).unwrap();
+        store
+            .update(&clip, Some("clutch"), Some("1v4 on B site"))
+            .unwrap();
+        let draft = EditorDraft {
+            version: 1,
+            file: DraftFile {
+                mtime_ns: identity.mtime_ns,
+                size: identity.size,
+            },
+            updated_at: 1.0,
+            state: serde_json::json!({"trim_start": 0.25}),
+        };
+        store.set_editor_draft(&clip, draft).unwrap();
+    }
+    rename_through_the_dialog(&mut s, &clip, "renamed");
+    let renamed = root.join("Desktop/renamed.mp4");
+    assert!(renamed.exists() && !clip.exists(), "renamed on disk");
+    let store = ClipMetadataStore::open(&s.paths).unwrap();
+    let entry = store.get(&renamed).unwrap();
+    assert_eq!(entry.tag, "clutch");
+    assert_eq!(entry.description, "1v4 on B site");
+    let renamed_identity = fthrust_core::media_identity::file_identity(&renamed).unwrap();
+    assert!(
+        store
+            .editor_draft_if_current(&renamed, &renamed_identity)
+            .unwrap()
+            .is_some(),
+        "the draft followed the file"
+    );
+    let old = store.get(&clip).unwrap();
+    assert!(
+        old.tag.is_empty() && old.description.is_empty() && old.editor_draft.is_none(),
+        "nothing is left under the old name: {old:?}"
+    );
+}
+
+/// `n_new` clips on one day and `n_old` on the day before, all within an hour
+/// of noon UTC so that any local offset keeps the two days apart.
+fn two_day_records(root: &std::path::Path, n_new: usize, n_old: usize) -> Vec<LibraryRecord> {
+    const MINUTE: i128 = 60 * 1_000_000_000;
+    const DAY: i128 = 24 * 60 * MINUTE;
+    let noon: i128 = 1_800_014_400 * 1_000_000_000; // 2027-01-15 12:00 UTC
+    let make = |i: usize, at: i128, tag: &str| {
+        let path = root.join(format!("Desktop/{tag}_clip_{i:03}.mp4"));
+        LibraryRecord {
+            path: path.clone(),
+            identity: path,
+            root_ids: vec![0],
+            imported: false,
+            kind: MediaKind::Video,
+            size: 1,
+            mtime_ns: at - i as i128 * MINUTE,
+        }
+    };
+    (0..n_new)
+        .map(|i| make(i, noon, "new"))
+        .chain((0..n_old).map(|i| make(i, noon - DAY, "old")))
+        .collect()
+}
+
+/// The cards and day headers drawn this frame (screen rects).
+fn drawn(markers: &[Marker]) -> Vec<(String, Rect)> {
+    markers
+        .iter()
+        .filter(|m| m.name.starts_with("clipCard[") || m.name.starts_with("sectionHeader["))
+        .map(|m| (m.name.clone(), m.rect))
+        .collect()
+}
+
+/// The stretches of `top..bottom` that nothing in `rects` covers and that are
+/// taller than the page's own spacing (20 px between sections).
+fn blank_bands(rects: &[(String, Rect)], top: f32, bottom: f32) -> Vec<(f32, f32)> {
+    const SPACING: f32 = 24.0;
+    let mut spans: Vec<(f32, f32)> = rects
+        .iter()
+        .map(|(_, r)| (r.min.y.max(top), r.max.y.min(bottom)))
+        .filter(|(a, b)| a < b)
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bands = Vec::new();
+    let mut reached = top;
+    for (a, b) in spans {
+        if a - reached > SPACING {
+            bands.push((reached, a));
+        }
+        reached = reached.max(b);
+    }
+    if bottom - reached > SPACING {
+        bands.push((reached, bottom));
+    }
+    bands
+}
+
+fn wheel_down(h: &mut egui_kittest::Harness<'_>, dy: f32) {
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -dy),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+}
+
+#[test]
+fn scrolling_away_drops_the_queued_thumbnail_jobs_of_the_old_rows() {
+    use fthrust_ui::library::thumbs::ThumbPool;
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = two_day_records(&tmp.path().join("clips"), 40, 20);
+    s.library_dirty = true;
+    // A pool without workers: whatever the page asks for stays queued.
+    s.thumb_pool = Some(ThumbPool::start_with(tmp.path().join("cache"), 0));
+    let tokens = s.tokens.clone();
+    let queued = std::rc::Rc::new(std::cell::Cell::new((0usize, 0usize)));
+    let probe = queued.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        let jobs = s.thumb_pool.as_ref().map_or(0, |p| p.inflight());
+        probe.set((jobs, s.visible_cards.len()));
+    });
+    h.run_steps(4);
+    let (first, built) = queued.get();
+    assert!(first > 0, "the first screen asked for thumbnails");
+    assert!(first <= built, "{first} jobs for {built} built cards");
+    h.hover_at(Pos2::new(700.0, 500.0));
+    // Down the page, pausing after each step long enough for the page to ask
+    // for what it then shows.
+    for _ in 0..8 {
+        wheel_down(&mut h, 400.0);
+        h.run_steps(40);
+    }
+    let (jobs, built) = queued.get();
+    assert!(
+        jobs <= built,
+        "{jobs} jobs queued for {built} built cards: the old rows' jobs stayed"
+    );
+}
+
+#[test]
+fn thumbnails_that_finish_while_another_page_shows_are_taken_at_once() {
+    use fthrust_ui::library::thumbs::ThumbPool;
+    let (tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    let clip = root.join("Desktop/clip.mp4");
+    if support::write_test_clip(&clip, 1, false).is_none() {
+        return;
+    }
+    s.library.upsert(&clip, false);
+    s.library_dirty = true;
+    s.thumb_pool = Some(ThumbPool::start(tmp.path().join("cache")));
+    let tokens = s.tokens.clone();
+    let textured = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = textured.clone();
+    let mut left = false;
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        // The page that asked for the thumbnail is left in the frame that asked.
+        if !left && s.thumb_requested.contains(&clip) {
+            s.page = Page::Settings;
+            left = true;
+        }
+        seen.set(s.thumb_textures.contains(&clip));
+    });
+    h.run_steps(3);
+    // The worker finishes a few tens of milliseconds later, on the Settings page.
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while !textured.get() && Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(h);
+    assert!(
+        textured.get(),
+        "the finished thumbnail (and its 0.9 MB of pixels) waited for the Clips page"
+    );
+    assert_eq!(s.page, Page::Settings);
+}
+
+#[test]
+fn a_poster_that_could_not_be_decoded_keeps_the_clips_details() {
+    use fthrust_core::thumbnails::MetaV3;
+    use fthrust_media::thumbnail::library::CachedThumbnail;
+    use fthrust_ui::library::page::apply_thumbnail;
+    use fthrust_ui::library::thumbs::{ThumbImage, ThumbPool, ThumbResult};
+    let (tmp, mut s) = state(serde_json::json!({}));
+    // A pool without workers only gives the generation results must carry.
+    let pool = ThumbPool::start_with(tmp.path().join("cache"), 0);
+    let generation = pool.generation();
+    s.thumb_pool = Some(pool);
+    let clip = tmp.path().join("clip.mp4");
+    let meta = MetaV3 {
+        duration: 12.5,
+        width: 1920,
+        height: 1080,
+        fps: 60.0,
+        video_bitrate: 25_000_000,
+        total_bitrate: 25_200_000,
+    };
+    let cached = CachedThumbnail {
+        jpg: tmp.path().join("poster.jpg"),
+        duration_s: meta.duration,
+        meta,
+    };
+    let ctx = egui::Context::default();
+    // The workers found the details but no poster that decodes.
+    apply_thumbnail(
+        &ctx,
+        &mut s,
+        ThumbResult {
+            path: clip.clone(),
+            generation,
+            fingerprint: "10|20".into(),
+            image: Some(ThumbImage::Video(cached, None)),
+            elapsed_ms: 1,
+        },
+        5.0,
+    );
+    assert_eq!(
+        s.thumb_meta.get(&clip),
+        Some(&("1080p · 60 FPS · 25 Mbps".to_owned(), Some(12.5))),
+        "the card keeps its resolution, frame rate, bitrate and length"
+    );
+    assert!(!s.thumb_textures.contains(&clip), "there is no picture");
+    assert!(
+        s.thumb_failed.contains(&clip),
+        "the poster is tried again later, not on every frame"
+    );
+    assert!(!s.thumb_requested.contains(&clip));
+}
+
+#[test]
+fn a_failed_thumbnail_is_asked_for_again_when_the_clip_changes() {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), 1);
+    s.library_dirty = true;
+    let clip = s.library.records[0].path.clone();
+    let fp = {
+        let r = &s.library.records[0];
+        format!("{}|{}", r.size, r.mtime_ns)
+    };
+    s.thumb_failed.insert(clip.clone(), fp, 0.0);
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(5);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 0, "a fresh failure is left alone");
+    // The clip was rewritten.
+    s.library.records[0].size += 1;
+    s.library_dirty = true;
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(5);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 1, "a changed clip is tried again");
+    assert!(!s.thumb_failed.contains(&clip));
+}
+
+#[test]
+fn a_failed_thumbnail_is_asked_for_again_after_a_while() {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), 1);
+    s.library_dirty = true;
+    let fp = {
+        let r = &s.library.records[0];
+        format!("{}|{}", r.size, r.mtime_ns)
+    };
+    s.thumb_failed
+        .insert(s.library.records[0].path.clone(), fp, 0.0);
+    let tokens = s.tokens.clone();
+    // Each step is four seconds on egui's clock; a harness starts with a few.
+    let h = common::harness_with_dt(Vec2::new(1440.0, 900.0), 1.0, &tokens, 4.0, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 0, "held for the first seconds");
+    let mut h = common::harness_with_dt(Vec2::new(1440.0, 900.0), 1.0, &tokens, 4.0, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(10);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 1, "tried again once it is due");
+}
+
+/// Scrolls a 60-clip, two-day Clips page from the top to its end and checks
+/// at every step that the cards and day headers cover the visible area.
+/// `margin` is a content margin on the scroll area's style: the page lays
+/// its rows out below it and must draw the same. With `fine`, once the second
+/// day's header has shown up the steps shrink to 16 px, so that the header
+/// crosses the top edge of the area in several of them.
+fn scroll_the_grid_to_the_end(size: Vec2, ppp: f32, margin: egui::Margin, fine: bool) {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    // 60 clips over two days: 40 on the newer one.
+    s.library.records = two_day_records(&tmp.path().join("clips"), 40, 20);
+    s.library_dirty = true;
+    let tokens = s.tokens.clone();
+    let offset = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
+    let seen = offset.clone();
+    let mut h = common::harness(size, ppp, &tokens, |ui| {
+        ui.style_mut().spacing.scroll.content_margin = margin;
+        shell::frame(ui, &mut s);
+        seen.set(s.library_scroll);
+    });
+    h.run_steps(3);
+    let area_top = {
+        let m = markers_after(&mut h);
+        m.iter().find(|m| m.name == "filterBar").unwrap().rect.max.y + 8.0
+    };
+    let area_bottom = size.y;
+    h.hover_at(Pos2::new(size.x / 2.0, (area_top + area_bottom) / 2.0));
+    let mut headers_seen = std::collections::BTreeSet::new();
+    let mut step_px = 400.0;
+    let mut last = -1.0f32;
+    let mut reached_end = false;
+    for step in 0..600 {
+        let m = markers_after(&mut h);
+        for m in m.iter().filter(|m| m.name.starts_with("sectionHeader[")) {
+            headers_seen.insert(m.name.clone());
+        }
+        if fine && headers_seen.len() == 2 {
+            step_px = 16.0;
+        }
+        // The margin above the first row is empty by design.
+        let content_top = area_top + (f32::from(margin.top) - offset.get()).max(0.0);
+        let on_screen = drawn(&m);
+        let blank = blank_bands(&on_screen, content_top, area_bottom);
+        assert!(
+            blank.is_empty(),
+            "{size:?} at {ppp}, step {step}, scrolled {:.0} px: nothing is drawn at {blank:?} (drawn: {:?})",
+            offset.get(),
+            on_screen
+                .iter()
+                .map(|(n, r)| (n.clone(), r.min.y as i32))
+                .collect::<Vec<_>>()
+        );
+        if step > 0 && (offset.get() - last).abs() < 0.5 {
+            reached_end = true;
+            break;
+        }
+        last = offset.get();
+        wheel_down(&mut h, step_px);
+        h.run_steps(if step_px < 100.0 { 6 } else { 10 });
+    }
+    assert!(
+        reached_end && offset.get() > 4000.0,
+        "scrolled to the end of the content: {}",
+        offset.get()
+    );
+    assert_eq!(
+        headers_seen.len(),
+        2,
+        "both day headers were drawn: {headers_seen:?}"
+    );
+}
+
+#[test]
+fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
+    scroll_the_grid_to_the_end(Vec2::new(1440.0, 900.0), 1.0, egui::Margin::ZERO, false);
+}
+
+#[test]
+fn the_grid_draws_at_a_small_window_and_a_scaled_screen_too() {
+    // Two columns, a 300 px band under the filter bar, 1.5 pixels per point.
+    scroll_the_grid_to_the_end(Vec2::new(800.0, 500.0), 1.5, egui::Margin::ZERO, false);
+}
+
+#[test]
+fn the_grid_does_not_depend_on_the_scroll_areas_content_margin() {
+    // egui hands over the visible part relative to the content before its
+    // margin, while the rows are laid out inside it: with a margin the page
+    // used to cull headers that were still in view at the top edge.
+    let margin = egui::Margin {
+        left: 0,
+        right: 0,
+        top: 120,
+        bottom: 0,
+    };
+    scroll_the_grid_to_the_end(Vec2::new(1440.0, 900.0), 1.0, margin, true);
 }

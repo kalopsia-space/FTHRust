@@ -28,6 +28,46 @@ fn readiness_untracked_existing_is_ready() {
 }
 
 #[test]
+fn readiness_knows_whether_any_clip_is_blocked() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("clip.mp4");
+    std::fs::write(&clip, b"base").unwrap();
+    let mut r = ClipReadinessRegistry::new();
+    assert!(!r.has_blocked(), "nothing is tracked");
+    r.engine_committed(&clip, false);
+    assert!(!r.has_blocked(), "a ready clip does not block");
+    r.engine_committed(&clip, true);
+    assert!(r.has_blocked(), "a finalizing clip does");
+    r.record_warning(&clip, "watermark failed");
+    r.complete(&clip);
+    assert!(!r.has_blocked(), "ready with a warning is usable");
+    r.finalization_failed(&clip, "file missing", false);
+    assert!(r.has_blocked(), "a failed clip is not usable");
+    r.forget(&clip);
+    assert!(!r.has_blocked());
+}
+
+#[test]
+fn readiness_counts_the_questions_that_touch_the_file_system() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("clip.mp4");
+    std::fs::write(&clip, b"base").unwrap();
+    let mut r = ClipReadinessRegistry::new();
+    assert_eq!(r.state_lookups(), 0);
+    assert!(!r.has_blocked());
+    r.engine_committed(&clip, false);
+    assert_eq!(r.state_lookups(), 0, "neither of those asks");
+    assert!(r.can_access(&clip));
+    assert_eq!(r.state(&clip), ReadinessState::Ready);
+    assert_eq!(r.state_lookups(), 2);
+    assert_eq!(
+        r.clone().state_lookups(),
+        2,
+        "a clone starts from the count"
+    );
+}
+
+#[test]
 fn readiness_finalizing_then_warning_is_ready_with_warning() {
     let d = tempfile::tempdir().unwrap();
     let clip = d.path().join("clip.mp4");

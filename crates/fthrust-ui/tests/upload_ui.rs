@@ -75,6 +75,38 @@ fn card_states() {
 }
 
 #[test]
+fn an_uploaded_clip_without_a_link_keeps_its_upload_button_and_says_what_a_press_does() {
+    let mut d = data();
+    d.uploaded = true;
+    let a = share_action(&d).unwrap();
+    assert!(
+        a.enabled,
+        "the press has to reach the 'already uploaded' notice"
+    );
+    assert!(!a.link);
+    assert_eq!(
+        a.tooltip,
+        "Uploaded, but no link came back. Press to upload again."
+    );
+    assert!(
+        menu_items(&d).contains(&MenuItem::Upload),
+        "the menu keeps its Upload entry"
+    );
+    // The other states of the button are unchanged.
+    d.uploading = true;
+    assert!(!share_action(&d).unwrap().enabled, "busy uploading");
+    d.uploading = false;
+    d.upload_enabled = false;
+    assert_eq!(
+        share_action(&d).unwrap().tooltip,
+        "Enable the uploader in Settings to upload this clip"
+    );
+    d.upload_link = Some("https://files.catbox.moe/x.mp4".into());
+    let a = share_action(&d).unwrap();
+    assert_eq!((a.label, a.enabled, a.link), ("Copy link", true, true));
+}
+
+#[test]
 fn card_context_menu() {
     let labels =
         |d: &CardData| -> Vec<&'static str> { menu_items(d).iter().map(|i| i.label()).collect() };

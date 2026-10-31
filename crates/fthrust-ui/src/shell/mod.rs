@@ -98,6 +98,9 @@ impl Default for FrameResponse {
 /// Lays out the whole window content (no viewport commands): strip,
 /// toolbar, rail + page stack, error bar.
 pub fn frame(ui: &mut Ui, state: &mut AppState) -> FrameResponse {
+    // Finished thumbnails carry their pixels: take them in whatever page or
+    // editor is showing, not only when the Clips page is.
+    crate::library::page::drain_thumbnails(ui.ctx(), state);
     crate::editor::keys::handle(ui.ctx(), state);
     crate::editor::sessions::service(state);
     crate::services::browse::service(state);

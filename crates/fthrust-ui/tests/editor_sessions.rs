@@ -301,6 +301,126 @@ fn delete_owned_clip_confirms_and_clears_draft() {
     assert!(store.get(&a).unwrap().editor_draft.is_none());
 }
 
+/// What the library's rename and delete dialogs answer.
+fn library_answers(r: &mut Rig, tag: String) {
+    r.s.dialogs
+        .results
+        .push(DialogResult::Answer { tag, yes: true });
+    fthrust_ui::library::page::consume_results(&mut r.s);
+}
+
+fn rename_tag(path: &Path, stem: &str) -> String {
+    format!("rename-clip:{}\u{1f}{stem}", path.display())
+}
+
+fn delete_tag(path: &Path) -> String {
+    format!("delete-clip:{}", path.display())
+}
+
+#[test]
+fn renaming_a_clip_in_the_library_moves_its_parked_session_with_it() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    r.park();
+    assert_eq!(r.s.editor_slots.len(), 1);
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    let renamed = a.with_file_name("renamed.mp4");
+    assert!(renamed.exists() && !a.exists());
+    assert_eq!(r.s.editor_slots[0].path, renamed, "the session follows");
+    assert_eq!(
+        r.s.editor_sessions[0].stem, "renamed",
+        "and so does its rail button"
+    );
+    assert!(sessions::restore(&mut r.s, 1), "{:?}", r.messages());
+    r.settle();
+    assert_eq!(r.s.editor.as_ref().unwrap().path, renamed);
+    assert!(r.messages().is_empty(), "{:?}", r.messages());
+}
+
+#[test]
+fn deleting_a_clip_in_the_library_closes_its_parked_session() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    r.park();
+    assert_eq!(r.s.editor_sessions.len(), 1);
+    library_answers(&mut r, delete_tag(&a));
+    assert!(!a.exists());
+    assert!(r.s.editor_slots.is_empty(), "no session for a deleted clip");
+    assert!(r.s.editor_sessions.is_empty(), "no rail button either");
+    let store = fthrust_core::clip_metadata::ClipMetadataStore::open(&r.s.paths).unwrap();
+    assert!(store.get(&a).unwrap().editor_draft.is_none());
+}
+
+/// A queue whose exports run until they are cancelled.
+fn endless_queue() -> fthrust_ui::services::export::ExportQueue {
+    use fthrust_media::export::{ExportResult, ExportState};
+    fthrust_ui::services::export::ExportQueue::with_runner(Arc::new(move |_job, cancel, _, _| {
+        while !cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        ExportResult {
+            state: ExportState::Completed,
+            detail: String::new(),
+        }
+    }))
+}
+
+#[test]
+fn a_clip_under_export_is_neither_renamed_nor_deleted_from_the_library() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    r.s.export_queue = endless_queue();
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    fthrust_ui::editor::export_ui::export_now(&mut r.s);
+    assert!(r.s.export_queue.active_for(&a), "an export is queued");
+    r.park();
+    // Rename.
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    assert!(a.exists(), "the source stays where the export reads it");
+    assert!(!a.with_file_name("renamed.mp4").exists());
+    assert_eq!(
+        r.messages(),
+        vec![(
+            "Export in progress".to_owned(),
+            "Finish or cancel this clip\u{2019}s exports before renaming it.".to_owned()
+        )]
+    );
+    r.s.dialogs.messages.clear();
+    // Delete.
+    library_answers(&mut r, delete_tag(&a));
+    assert!(a.exists(), "the source is kept");
+    assert_eq!(r.s.editor_slots.len(), 1, "the session stays");
+    assert_eq!(
+        r.messages(),
+        vec![(
+            "Export in progress".to_owned(),
+            "Finish or cancel this clip\u{2019}s exports before deleting the source.".to_owned()
+        )]
+    );
+    // A share in progress counts the same.
+    r.s.dialogs.messages.clear();
+    r.s.export_queue.shutdown(Duration::from_secs(5));
+    assert!(!r.s.export_queue.active_for(&a), "the export was cancelled");
+    r.s.active_shares.push(a.clone());
+    library_answers(&mut r, delete_tag(&a));
+    assert!(a.exists(), "a running share keeps the source too");
+    r.s.active_shares.clear();
+    // Once nothing runs the rename goes through.
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    assert!(a.with_file_name("renamed.mp4").exists());
+}
+
 #[test]
 fn delete_of_linked_import_is_refused() {
     let mut r = rig();
@@ -443,6 +563,229 @@ fn default_bindings_drive_the_editor() {
     drop(h);
     assert!(r.s.editor.is_none(), "Escape closes");
     assert!(r.s.editor_sessions.is_empty());
+}
+
+/// Runs `f` and returns what it logged at WARN or above, one string per event.
+fn logged_warnings(f: impl FnOnce()) -> Vec<String> {
+    use std::sync::Mutex;
+    use tracing_subscriber::fmt::MakeWriter;
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Sink {
+        type Writer = Sink;
+        fn make_writer(&'a self) -> Sink {
+            self.clone()
+        }
+    }
+    let sink = Sink::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(sink.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    text.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn an_unavailable_clip_metadata_database_is_retried_on_a_timer_and_logged_once() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("clip.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    // A directory where the database file belongs: it cannot be opened.
+    let db = s.paths.clip_metadata_db();
+    std::fs::create_dir_all(&db).unwrap();
+    let warnings = logged_warnings(|| {
+        for _ in 0..120 {
+            s.tick_editor(None);
+        }
+    });
+    assert!(s.clip_metadata.is_none());
+    assert_eq!(
+        warnings.len(),
+        1,
+        "two seconds of frames, one log line (first: {:?})",
+        warnings.first()
+    );
+    // The cause goes away. The next frame does not look again...
+    std::fs::remove_dir(&db).unwrap();
+    s.tick_editor(None);
+    assert!(s.clip_metadata.is_none(), "not retried every frame");
+    // ...the retry does, a few seconds later.
+    s.editor_clock = std::time::Instant::now() - Duration::from_secs(30);
+    s.tick_editor(None);
+    assert!(s.clip_metadata.is_some(), "retried after the interval");
+}
+
+#[test]
+fn the_same_metadata_failure_is_not_logged_again_by_user_actions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    std::fs::create_dir_all(s.paths.clip_metadata_db()).unwrap();
+    let warnings = logged_warnings(|| {
+        for _ in 0..20 {
+            assert!(sessions::store(&mut s).is_none());
+        }
+    });
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one log line for 20 attempts (first: {:?})",
+        warnings.first()
+    );
+}
+
+#[test]
+fn opening_a_clip_says_so_when_the_clip_details_cannot_be_opened() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    // A directory where the details database belongs: it cannot be opened.
+    let db = r.s.paths.clip_metadata_db();
+    std::fs::create_dir_all(&db).unwrap();
+    assert!(!sessions::open(&mut r.s, &a));
+    let messages = r.messages();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].0, "Could not open clip");
+    assert!(
+        messages[0].1.contains("cannot start") && messages[0].1.contains("unable to open"),
+        "the message says what and why: {}",
+        messages[0].1
+    );
+    assert!(r.s.editor.is_none() && r.s.editor_slots.is_empty());
+    // Once the database can be opened, the same click works.
+    std::fs::remove_dir(&db).unwrap();
+    assert!(sessions::open(&mut r.s, &a), "{:?}", r.messages());
+}
+
+#[test]
+fn the_details_panel_does_not_open_the_database_every_frame() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.tokens.reduce_motion = true;
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("clip.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    // CLIP DETAILS open, and a directory where the database belongs.
+    s.editor_panels[4] = true;
+    std::fs::create_dir_all(s.paths.clip_metadata_db()).unwrap();
+    let tokens = s.tokens.clone();
+    let warnings = logged_warnings(|| {
+        let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+            fthrust_ui::shell::frame(ui, &mut s);
+        });
+        h.run_steps(60);
+    });
+    assert!(s.clip_metadata.is_none());
+    // One look, one log line; it used to look on every one of the frames
+    // (and say nothing).
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one log line for 60 frames (first: {:?})",
+        warnings.first()
+    );
+}
+
+/// Ticks the editor with `rs` until its first video frame is a texture.
+fn first_video_texture(r: &mut Rig, rs: &egui_wgpu::RenderState) -> Option<egui::TextureId> {
+    for _ in 0..500 {
+        r.s.tick_editor(Some(rs));
+        sessions::service(&mut r.s);
+        if let Some(id) = r.s.editor_video.as_ref().and_then(|v| v.id()) {
+            return Some(id);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn closing_or_parking_an_editor_frees_its_video_texture() {
+    let Some(rs) = common::headless_render_state() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    let id = first_video_texture(&mut r, &rs).expect("a video frame reached the texture");
+    assert!(rs.renderer.read().texture(&id).is_some());
+    // Parking releases the player and the texture.
+    sessions::park(&mut r.s);
+    assert!(r.s.editor_video.is_none());
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the parked editor's texture is still registered"
+    );
+    // Restoring builds a new one; closing frees that.
+    assert!(sessions::restore(&mut r.s, 1));
+    let id = first_video_texture(&mut r, &rs).expect("a video frame after restoring");
+    sessions::close(&mut r.s, 1);
+    assert!(r.s.editor_video.is_none());
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the closed editor's texture is still registered"
+    );
+}
+
+#[test]
+fn escape_in_the_share_picker_closes_the_picker_not_the_editor() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    fthrust_ui::editor::share::open_picker(&mut r.s);
+    assert!(r.s.share_picker.is_some());
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.share_picker.is_none(), "Escape closes the picker");
+    assert!(r.s.editor.is_some(), "and leaves the editor open");
+    // With the picker gone Escape is the editor's again.
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.editor.is_none(), "the next Escape closes the editor");
+}
+
+#[test]
+fn editor_shortcuts_wait_while_the_share_picker_is_open() {
+    use fthrust_ui::editor::Lifecycle;
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    fthrust_ui::editor::share::open_picker(&mut r.s);
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    drop(h);
+    assert_ne!(
+        r.s.editor.as_ref().unwrap().lifecycle,
+        Lifecycle::Playing,
+        "Space does not play behind the picker"
+    );
 }
 
 #[test]

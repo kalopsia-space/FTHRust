@@ -1,5 +1,6 @@
 use fthrust_core::library_index::{
-    Filter, LibraryRecord, MediaKind, ScanRoots, Sort, apply, scan, watched_dirs,
+    Filter, LibraryRecord, MediaKind, ScanRoots, Sort, apply, is_media_name, scan, scan_with_dirs,
+    watched_dirs,
 };
 use std::fs;
 use std::path::Path;
@@ -184,6 +185,84 @@ fn sorts_and_filters() {
     );
     assert_eq!(apply(&recs, Filter::Clips, Sort::Newest).len(), 3);
     assert!(apply(&recs, Filter::Imported, Sort::Newest).is_empty());
+}
+
+#[test]
+fn a_records_identity_is_its_canonical_path_even_below_a_symlinked_root() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().join("real");
+    touch(&real.join("Game/a.mp4"), 1);
+    touch(&real.join("b.png"), 1);
+    let link = d.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    // The same library reached through the link and, as an import, directly.
+    let r = ScanRoots {
+        owned: link.clone(),
+        imported: vec![real.join("Game")],
+    };
+    let recs = run(&r);
+    assert_eq!(recs.len(), 2, "overlapping roots still dedupe: {recs:?}");
+    for rec in &recs {
+        assert_eq!(
+            rec.identity,
+            fs::canonicalize(&rec.path).unwrap(),
+            "identity of {}",
+            rec.path.display()
+        );
+        assert!(rec.path.starts_with(&link), "paths stay as found");
+    }
+    let a = recs.iter().find(|x| x.path.ends_with("a.mp4")).unwrap();
+    assert_eq!(a.root_ids, vec![0, 1]);
+    assert!(a.imported);
+}
+
+#[test]
+fn one_walk_gives_the_records_and_the_watched_dirs() {
+    let d = tempfile::tempdir().unwrap();
+    touch(&d.path().join("a.mp4"), 1);
+    touch(&d.path().join("Game/b.mp4"), 1);
+    touch(&d.path().join("Game/deep/c.png"), 1);
+    touch(&d.path().join("Exported/e.mp4"), 1);
+    fs::create_dir_all(d.path().join("Empty")).unwrap();
+    let r = ScanRoots {
+        owned: d.path().to_path_buf(),
+        imported: vec![d.path().join("Game")],
+    };
+    let (records, dirs) = scan_with_dirs(&r, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(dirs, watched_dirs(&r));
+    assert_eq!(records, run(&r));
+    assert!(dirs.contains(&d.path().join("Empty")));
+    assert!(!dirs.contains(&d.path().join("Exported")));
+}
+
+#[test]
+fn the_dirs_of_one_walk_are_capped_like_watched_dirs() {
+    let d = tempfile::tempdir().unwrap();
+    for i in 0..300 {
+        touch(&d.path().join(format!("d{i:03}/c.mp4")), 1);
+    }
+    let r = roots(d.path());
+    let (records, dirs) = scan_with_dirs(&r, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(records.len(), 300, "every file is still listed");
+    assert_eq!(dirs.len(), 256);
+    assert_eq!(dirs, watched_dirs(&r));
+}
+
+#[test]
+fn media_names_exclude_partials_and_other_files() {
+    for name in ["a.mp4", "A.MKV", "s.png", "s.JPEG", "x.avi"] {
+        assert!(is_media_name(name), "{name}");
+    }
+    for name in [
+        "a.mp4.partial",
+        "a.partial.mp4",
+        "notes.txt",
+        "a.fthr-audio.json",
+        "Game",
+        "a.mp4~",
+    ] {
+        assert!(!is_media_name(name), "{name}");
+    }
 }
 
 #[test]

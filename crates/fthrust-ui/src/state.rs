@@ -484,7 +484,7 @@ pub struct AppState {
     /// Metadata text and duration per clip once probed.
     pub thumb_meta: std::collections::HashMap<std::path::PathBuf, (String, Option<f64>)>,
     /// Clips whose thumbnail could not be made.
-    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
+    pub thumb_failed: crate::library::thumbs::ThumbFailures,
     /// Clips whose thumbnail was requested this generation.
     pub thumb_requested: std::collections::HashSet<std::path::PathBuf>,
     /// Transient card feedback: text and the time it expires.
@@ -514,6 +514,9 @@ pub struct AppState {
     pub editor_filmstrip: Vec<egui::TextureHandle>,
     /// Clip tags, descriptions and editor drafts (opened on first use).
     pub clip_metadata: Option<fthrust_core::clip_metadata::ClipMetadataStore>,
+    /// Why the store could not be opened and when (editor clock) it last
+    /// tried: the editor's per-frame tick waits before trying again.
+    pub clip_metadata_failure: Option<(String, f64)>,
     /// Origin of the editor's clock (`editor_now`).
     pub editor_clock: std::time::Instant,
     /// Open a screenshot (plan 6 consumes).
@@ -791,7 +794,7 @@ impl AppState {
             thumb_pool: None,
             thumb_textures: crate::library::thumbs::ThumbTextures::default(),
             thumb_meta: std::collections::HashMap::new(),
-            thumb_failed: std::collections::HashSet::new(),
+            thumb_failed: crate::library::thumbs::ThumbFailures::default(),
             thumb_requested: std::collections::HashSet::new(),
             card_feedback: std::collections::HashMap::new(),
             open_clip_requested: None,
@@ -806,6 +809,7 @@ impl AppState {
             editor_sidebar_scroll: 0.0,
             editor_filmstrip: Vec::new(),
             clip_metadata: None,
+            clip_metadata_failure: None,
             editor_clock: std::time::Instant::now(),
             open_screenshot_requested: None,
             upload_requested: None,
@@ -932,14 +936,8 @@ impl AppState {
         if self.editor.is_none() {
             return;
         }
-        if self.clip_metadata.is_none() {
-            match fthrust_core::clip_metadata::ClipMetadataStore::open(&self.paths) {
-                Ok(store) => self.clip_metadata = Some(store),
-                Err(e) => {
-                    tracing::warn!(error = %e, "clip metadata store unavailable");
-                    return;
-                }
-            }
+        if crate::editor::sessions::store_retrying(self).is_none() {
+            return;
         }
         let now = self.editor_now();
         let (Some(editor), Some(store)) = (self.editor.as_mut(), self.clip_metadata.as_mut())

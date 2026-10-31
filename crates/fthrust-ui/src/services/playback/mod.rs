@@ -4,12 +4,14 @@
 
 pub mod audio_out;
 pub mod sync;
+#[cfg(test)]
+mod worker_tests;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fthrust_core::audio_manifest::{AudioManifest, read_verified};
@@ -265,15 +267,48 @@ enum VideoCmd {
     Pause,
     Seek(u64),
     Reopen(PathBuf, u64),
+    /// The service took a frame: there may be room to read ahead.
+    Wake,
     Stop,
 }
 
 const VIDEO_AHEAD: usize = 4;
 
+/// Where the video worker gets its frames: the decoder (tests substitute
+/// their own, to hold the worker inside a seek or to count its wake-ups).
+trait FrameSource: Send {
+    /// Positions the source so the next frame is the first at or after `ms`.
+    fn seek(&mut self, ms: u64);
+    /// The next frame; `None` at the end.
+    fn next_frame(&mut self) -> Result<Option<Frame>, String>;
+    /// The same clip from `path` (a seek proxy), positioned at `ms`.
+    fn reopen(&self, path: &Path, ms: u64) -> Option<Box<dyn FrameSource>>;
+}
+
+impl FrameSource for VideoDecoder {
+    fn seek(&mut self, ms: u64) {
+        let _ = VideoDecoder::seek(self, ms);
+    }
+
+    fn next_frame(&mut self) -> Result<Option<Frame>, String> {
+        VideoDecoder::next_frame(self).map_err(|e| e.to_string())
+    }
+
+    fn reopen(&self, path: &Path, ms: u64) -> Option<Box<dyn FrameSource>> {
+        let mut d = VideoDecoder::open(path).ok()?;
+        d.seek(ms).ok()?;
+        Some(Box::new(d))
+    }
+}
+
 struct VideoShared {
     frames: Mutex<VecDeque<Frame>>,
-    space: Condvar,
     eof: AtomicBool,
+    /// Passes of the worker's loop (a command, a decoded frame, a wake-up):
+    /// an idle worker adds none.
+    passes: AtomicU64,
+    /// Seeks the worker has done.
+    seeks: AtomicU64,
 }
 
 struct VideoWorker {
@@ -283,18 +318,19 @@ struct VideoWorker {
 }
 
 impl VideoWorker {
-    fn start(decoder: VideoDecoder) -> VideoWorker {
+    fn start(source: Box<dyn FrameSource>) -> VideoWorker {
         let (tx, rx) = channel();
         let shared = Arc::new(VideoShared {
             frames: Mutex::new(VecDeque::new()),
-            space: Condvar::new(),
             eof: AtomicBool::new(false),
+            passes: AtomicU64::new(0),
+            seeks: AtomicU64::new(0),
         });
         let thread = {
             let shared = shared.clone();
             std::thread::Builder::new()
                 .name("fthrust-playback-video".into())
-                .spawn(move || video_loop(decoder, rx, shared))
+                .spawn(move || video_loop(source, rx, shared))
                 .ok()
         };
         VideoWorker { tx, shared, thread }
@@ -302,22 +338,22 @@ impl VideoWorker {
 
     fn send(&self, cmd: VideoCmd) {
         let _ = self.tx.send(cmd);
-        self.shared.space.notify_all();
     }
 }
 
 impl Drop for VideoWorker {
+    /// Closing or parking the editor must not wait for the worker: it may be
+    /// inside a seek that decodes a whole GOP (0.4 to 0.8 s on a long one).
+    /// It is told to stop and its thread, which ends with its next look at
+    /// the channel, is left to finish on its own.
     fn drop(&mut self) {
         let _ = self.tx.send(VideoCmd::Stop);
-        self.shared.space.notify_all();
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        drop(self.thread.take());
     }
 }
 
 struct VideoState {
-    decoder: VideoDecoder,
+    decoder: Box<dyn FrameSource>,
     playing: bool,
     /// After a seek while paused, exactly one frame (the target) is decoded.
     want_one: bool,
@@ -338,14 +374,14 @@ impl VideoState {
             VideoCmd::Stop => return false,
             VideoCmd::Play => self.playing = true,
             VideoCmd::Pause => self.playing = false,
+            VideoCmd::Wake => {}
             VideoCmd::Seek(ms) => {
-                let _ = self.decoder.seek(ms);
+                self.decoder.seek(ms);
+                shared.seeks.fetch_add(1, Ordering::Relaxed);
                 self.reset(shared);
             }
             VideoCmd::Reopen(path, ms) => {
-                if let Ok(mut d) = VideoDecoder::open(&path)
-                    && d.seek(ms).is_ok()
-                {
+                if let Some(d) = self.decoder.reopen(&path, ms) {
                     self.decoder = d;
                     self.reset(shared);
                 }
@@ -355,13 +391,14 @@ impl VideoState {
     }
 }
 
-fn video_loop(decoder: VideoDecoder, rx: Receiver<VideoCmd>, shared: Arc<VideoShared>) {
+fn video_loop(decoder: Box<dyn FrameSource>, rx: Receiver<VideoCmd>, shared: Arc<VideoShared>) {
     let mut st = VideoState {
         decoder,
         playing: false,
         want_one: true,
     };
     loop {
+        shared.passes.fetch_add(1, Ordering::Relaxed);
         match rx.try_recv() {
             Ok(cmd) => {
                 if !st.apply(cmd, &shared) {
@@ -375,13 +412,14 @@ fn video_loop(decoder: VideoDecoder, rx: Receiver<VideoCmd>, shared: Arc<VideoSh
         let queued = shared.frames.lock().map(|f| f.len()).unwrap_or(0);
         let need = (st.playing && queued < VIDEO_AHEAD) || (st.want_one && queued == 0);
         if !need || shared.eof.load(Ordering::Relaxed) {
-            match rx.recv_timeout(Duration::from_millis(4)) {
+            // Nothing to decode until a command arrives (play, seek, ...) or
+            // the service takes a frame and wakes the worker: sleep, do not poll.
+            match rx.recv() {
                 Ok(cmd) => {
                     if !st.apply(cmd, &shared) {
                         return;
                     }
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => return,
             }
             continue;
@@ -432,9 +470,15 @@ pub struct PlaybackService {
     preserve_pitch: bool,
     master_percent: u8,
     sources: Vec<(String, SourceState)>,
+    /// `(source id, display name)` from the clip's verified manifest.
+    source_labels: Vec<(String, String)>,
     /// Each source's `0:a:N` index (`None`: not an audio stream).
     audio_indexes: Vec<Option<u32>>,
     last_frame_pts: Option<u64>,
+    /// Paused with the frames the worker had read ahead still queued: they
+    /// follow the picture on screen and are what playing continues with, so
+    /// they are not shown while paused.
+    read_ahead_kept: bool,
     eof_reported: bool,
     /// The audio ran out before the video: the wall clock carries the rest.
     audio_ended: bool,
@@ -466,8 +510,19 @@ impl PlaybackService {
         let duration_ms = info.duration_ms;
         let (events_tx, events_rx) = channel();
         let queue = Arc::new(PcmQueue::new());
-        // Tracks: the manifest's sources, else the best audio stream.
+        // Tracks: the manifest's sources, else the best audio stream. The
+        // manifest check hashes the whole clip: it happens here, once, and the
+        // editor takes the track names from this read.
         let manifest: Option<AudioManifest> = read_verified(path).ok().flatten();
+        let source_labels: Vec<(String, String)> = manifest
+            .as_ref()
+            .map(|m| {
+                m.sources
+                    .iter()
+                    .map(|s| (s.source_uuid.clone(), s.display_name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let specs: Vec<SourceSpec> = match &manifest {
             Some(m) => m
                 .sources
@@ -522,7 +577,7 @@ impl PlaybackService {
                 Err(e) => events.push(PlaybackEvent::AudioFailed(e.to_string())),
             }
         }
-        let video = VideoWorker::start(decoder);
+        let video = VideoWorker::start(Box::new(decoder));
         // The proxy, if the clip needs one, replaces the video source later.
         let cancel = Arc::new(AtomicBool::new(false));
         let (ptx, prx) = channel();
@@ -559,8 +614,10 @@ impl PlaybackService {
             preserve_pitch: true,
             master_percent: 100,
             sources,
+            source_labels,
             audio_indexes,
             last_frame_pts: None,
+            read_ahead_kept: false,
             eof_reported: false,
             audio_ended: false,
             proxy: Some((prx, cancel)),
@@ -634,6 +691,7 @@ impl PlaybackService {
         }
         self.playing = true;
         self.eof_reported = false;
+        self.read_ahead_kept = false;
         let pos = self.position_ms();
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Play);
@@ -644,15 +702,32 @@ impl PlaybackService {
         self.arm_guard();
     }
 
+    /// One frame's length, for judging how stale a picture is.
+    fn frame_interval_ms(&self) -> u64 {
+        if self.info.fps > 0.0 {
+            (1000.0 / self.info.fps).ceil() as u64
+        } else {
+            40
+        }
+    }
+
     /// Pauses at the current position.
     pub fn pause(&mut self) {
         if !self.playing {
             return;
         }
         let pos = self.position_ms();
+        // The picture on screen is current when it is the frame at the paused
+        // position, give or take the UI's frame pacing. Then the frames the
+        // worker has decoded ahead are exactly what playing continues with,
+        // and a seek here would decode a whole GOP to land on the picture
+        // that is already shown.
+        let slack = 2 * self.frame_interval_ms() + 16;
+        let current = self
+            .last_frame_pts
+            .is_some_and(|p| p <= pos + 16 && pos <= p + slack);
         self.playing = false;
-        // Stop exactly here: no queued audio tail, and the frame on screen is
-        // the one at the paused position (the worker may have decoded ahead).
+        // Stop exactly here: no queued audio tail.
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Pause);
             a.send(AudioCmd::Seek(pos));
@@ -661,7 +736,12 @@ impl PlaybackService {
         self.clock_base_ms = pos;
         self.clock_started_ms = None;
         self.video.send(VideoCmd::Pause);
-        self.video.send(VideoCmd::Seek(pos));
+        self.read_ahead_kept = current;
+        if !current {
+            // Land on the frame at the paused position (the worker may be
+            // behind, or have decoded past it).
+            self.video.send(VideoCmd::Seek(pos));
+        }
         self.last_frame_pts = None;
         if self.holding {
             self.output.resume();
@@ -680,6 +760,7 @@ impl PlaybackService {
         self.queue.clear();
         self.clock_base_ms = ms;
         self.clock_started_ms = self.playing.then(|| self.now_ms());
+        self.read_ahead_kept = false;
         self.video.send(VideoCmd::Seek(ms));
         self.last_frame_pts = None;
         if self.holding {
@@ -735,6 +816,12 @@ impl PlaybackService {
         &self.sources
     }
 
+    /// `(source id, display name)` of the manifest's tracks, as the manifest
+    /// read for this player named them (empty without a verified manifest).
+    pub fn source_labels(&self) -> &[(String, String)] {
+        &self.source_labels
+    }
+
     /// Each track's `0:a:N` index for export, parallel to
     /// [`PlaybackService::sources`].
     pub fn audio_indexes(&self) -> &[Option<u32>] {
@@ -766,13 +853,16 @@ impl PlaybackService {
         let position = self.position_ms();
         let mut frames = self.video.shared.frames.lock().ok()?;
         let mut chosen: Option<Frame> = None;
-        if !self.playing {
+        if !self.playing && !self.read_ahead_kept {
             // Paused: the seek target (or whatever is queued) shows at once.
             if let Some(f) = frames.pop_front() {
                 frames.clear();
                 chosen = Some(f);
             }
         } else {
+            // Playing, or paused on a picture that is current with the frames
+            // read ahead still queued behind it: only a frame whose time has
+            // come is shown.
             while let Some(f) = frames.front() {
                 if f.pts_ms <= position + 16 {
                     chosen = frames.pop_front();
@@ -782,11 +872,19 @@ impl PlaybackService {
             }
         }
         drop(frames);
-        self.video.shared.space.notify_all();
         if let Some(f) = &chosen {
             self.last_frame_pts = Some(f.pts_ms);
+            if self.playing {
+                // The worker reads ahead again once there is room.
+                self.video.send(VideoCmd::Wake);
+            }
         }
         chosen
+    }
+
+    /// How many seeks the video worker has done (diagnostics and tests).
+    pub fn video_seeks(&self) -> u64 {
+        self.video.shared.seeks.load(Ordering::Relaxed)
     }
 
     /// Runs the sync rule, collects worker events, reports EOF.
@@ -822,6 +920,7 @@ impl PlaybackService {
         {
             if p != self.source_path {
                 let pos = self.position_ms();
+                self.read_ahead_kept = false;
                 self.video.send(VideoCmd::Reopen(p, pos));
                 self.events.push(PlaybackEvent::ProxyReady);
             }

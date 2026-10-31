@@ -13,10 +13,10 @@ Your clips, how to cut them down, and how to get them out of the app in a shape 
 
 <img src="images/library.png" alt="The library: clips grouped by day with thumbnails, filter and sort" width="860">
 
-The **Clips** page shows everything in your clips folder, grouped by day, newest first. Each card shows a thumbnail with the clip's length, its name, and its resolution, frame rate and bitrate (`1080p · 60 FPS · 25 Mbps`).
+The **Clips** page shows everything in your clips folder, grouped by day, newest first. A day's heading is its weekday and date (`Fri, Jan 15`); the same date in two different years is two groups. Each card shows a thumbnail with the clip's length, its name, and its resolution, frame rate and bitrate (`1080p · 60 FPS · 25 Mbps`).
 
 - **Click a clip** to open it in the editor.
-- **Hover a card and press F2** to rename it.
+- **Hover a card and press F2** to rename it. A renamed clip keeps its tag, description and saved editor draft, and a parked editor for it follows the new name. A clip can't be renamed or deleted while one of its exports or shares is queued or running; the app says so and leaves it alone.
 - **Right-click** for *Open in editor*, *Show in file manager*, *Copy path*, *Upload*, *Open uploaded link* and *Delete clip*.
 - The **share button** on a card uploads the clip, or copies its link if it's already uploaded. It needs the [uploader](uploads.md) to be enabled.
 - The **bin button** deletes the clip after asking. Deleting is permanent; there's no trash.
@@ -29,7 +29,7 @@ Badges on a card tell you more: **Uploaded**, **Imported** (from a folder you ad
 
 Got years of clips somewhere else? **Settings → Clip → Import Clips → Add folder** adds a folder to the library without moving or copying anything. **Scan for clips** looks for new files. Imported clips appear under the **Imported clips** filter. MP4, MKV and AVI videos and PNG and JPEG images are picked up. Symlinks aren't followed.
 
-The library has no database of its own: it reads your folders every time, so files you add, rename or delete in a file manager show up straight away. Tags, descriptions and editor drafts are kept in `~/.fthr/clip_metadata.sqlite3`.
+The library has no database of its own: it reads your folders every time, so files you add, rename or delete in a file manager show up straight away. A recording that is still being written isn't listed (and doesn't make the app rescan your folders) until it has its final name. Tags, descriptions and editor drafts are kept in `~/.fthr/clip_metadata.sqlite3`.
 
 ## The editor
 
@@ -46,7 +46,7 @@ The timeline under the player shows a filmstrip of the clip.
 3. Click a segment and press **DELETE SEGMENT** (**Ctrl+D**). Deleted segments show as hatched.
 4. Changed your mind? Select it again and press **RESTORE SEGMENT** (**Ctrl+W**).
 
-Playback skips deleted segments, so what you see is what you'll export. The header tells you how much you're keeping (`0:05 kept · 2 cuts`). **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Y**) cover every edit.
+Playback skips deleted segments, so what you see is what you'll export. **Export** and **Share** wait until the clip has finished loading; pressed earlier they answer *The clip is still loading*. The header tells you how much you're keeping (`0:05 kept · 2 cuts`). **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Y**) cover every edit.
 
 Scroll on the timeline to zoom in around the cursor, and hold **Shift** while scrolling to pan. Right-click for *Split here*, *Delete segment* and *Hide deleted segments*.
 
@@ -63,7 +63,7 @@ Scroll on the timeline to zoom in around the cursor, and hold **Shift** while sc
 
 ### Juggling clips
 
-You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor and **F11** goes fullscreen.
+You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor (while the Share picker is open it closes only the picker) and **F11** goes fullscreen. Closing or parking an editor frees its video frame from the graphics card straight away.
 
 On a slow PC, **Settings → Performance** can turn the full editor off, so clips open in a simple player instead.
 

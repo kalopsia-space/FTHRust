@@ -10,7 +10,7 @@ use fthrust_core::library_ownership::{Ownership, classify_media_path};
 
 use super::card::{CardData, MenuItem, card};
 use super::layout::{GRID_SPACING, H_MARGIN, SECTION_SPACING, card_height, metrics};
-use super::thumbs::ThumbImage;
+use super::thumbs::{ThumbImage, ThumbResult};
 use crate::fidelity;
 use crate::fonts::Weight;
 use crate::state::{AppState, DialogKind, DialogResult};
@@ -49,14 +49,16 @@ fn screenshot_key(state: &AppState) -> String {
 fn fingerprint(state: &AppState, path: &Path) -> String {
     state
         .library
-        .records
-        .iter()
-        .find(|r| r.path == path)
+        .record(path)
         .map(|r| format!("{}|{}", r.size, r.mtime_ns))
         .unwrap_or_default()
 }
 
-fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
+/// Applies every thumbnail the workers have finished (the shell calls this
+/// each frame: a result carries its pixels, and they would pile up unseen
+/// while another page is showing).
+pub fn drain_thumbnails(ctx: &egui::Context, state: &mut AppState) {
+    let now = ctx.input(|i| i.time);
     let mut results = Vec::new();
     if let Some(pool) = &state.thumb_pool {
         while let Ok(r) = pool.results().try_recv() {
@@ -64,62 +66,76 @@ fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
         }
     }
     for r in results {
-        state.thumb_requested.remove(&r.path);
-        if Some(r.generation) != state.thumb_pool.as_ref().map(|p| p.generation()) {
-            continue;
-        }
-        match r.image {
-            Some(ThumbImage::Video(cached)) => {
-                let meta = cached.meta;
-                let mut details = vec![format!("{}p", meta.height)];
-                if meta.fps > 0.0 {
-                    details.push(format!("{} FPS", trim_float(meta.fps)));
-                }
-                if meta.video_bitrate > 0 {
-                    details.push(format!(
-                        "{} Mbps",
-                        trim_float(meta.video_bitrate as f64 / 1_000_000.0)
-                    ));
-                }
-                state
-                    .thumb_meta
-                    .insert(r.path.clone(), (details.join(" · "), Some(meta.duration)));
-                if let Ok(img) = image::open(&cached.jpg) {
-                    let rgba = img.to_rgba8();
-                    let ci = egui::ColorImage::from_rgba_unmultiplied(
-                        [rgba.width() as usize, rgba.height() as usize],
-                        rgba.as_raw(),
-                    );
-                    let tex = ui.ctx().load_texture(
-                        format!("thumb:{}", r.path.display()),
-                        ci,
-                        egui::TextureOptions::LINEAR,
-                    );
+        apply_thumbnail(ctx, state, r, now);
+    }
+}
+
+/// Takes one finished thumbnail into the state: its details, its texture, or
+/// the failure to retry later.
+pub fn apply_thumbnail(ctx: &egui::Context, state: &mut AppState, r: ThumbResult, now: f64) {
+    state.thumb_requested.remove(&r.path);
+    if Some(r.generation) != state.thumb_pool.as_ref().map(|p| p.generation()) {
+        return;
+    }
+    let upload = |rgba: &image::RgbaImage| {
+        let ci = egui::ColorImage::from_rgba_unmultiplied(
+            [rgba.width() as usize, rgba.height() as usize],
+            rgba.as_raw(),
+        );
+        ctx.load_texture(
+            format!("thumb:{}", r.path.display()),
+            ci,
+            egui::TextureOptions::LINEAR,
+        )
+    };
+    match &r.image {
+        Some(ThumbImage::Video(cached, rgba)) => {
+            let meta = cached.meta.clone();
+            let mut details = vec![format!("{}p", meta.height)];
+            if meta.fps > 0.0 {
+                details.push(format!("{} FPS", trim_float(meta.fps)));
+            }
+            if meta.video_bitrate > 0 {
+                details.push(format!(
+                    "{} Mbps",
+                    trim_float(meta.video_bitrate as f64 / 1_000_000.0)
+                ));
+            }
+            state
+                .thumb_meta
+                .insert(r.path.clone(), (details.join(" · "), Some(meta.duration)));
+            match rgba {
+                Some(rgba) => {
+                    state.thumb_failed.remove(&r.path);
+                    let tex = upload(rgba);
                     state.thumb_textures.insert(r.path.clone(), tex, Some(meta));
                 }
+                // The details are known, the poster could not be decoded
+                // (and its cache file was dropped): the card keeps its
+                // details and the poster is tried again in a while.
+                None => {
+                    state
+                        .thumb_failed
+                        .insert(r.path.clone(), r.fingerprint.clone(), now);
+                }
             }
-            Some(ThumbImage::Image(rgba)) => {
-                state
-                    .thumb_meta
-                    .insert(r.path.clone(), ("Screenshot".into(), None));
-                let ci = egui::ColorImage::from_rgba_unmultiplied(
-                    [rgba.width() as usize, rgba.height() as usize],
-                    rgba.as_raw(),
-                );
-                let tex = ui.ctx().load_texture(
-                    format!("thumb:{}", r.path.display()),
-                    ci,
-                    egui::TextureOptions::LINEAR,
-                );
-                state.thumb_textures.insert(r.path.clone(), tex, None);
-            }
-            None => {
-                state.thumb_failed.insert(r.path.clone());
-                state
-                    .thumb_meta
-                    .entry(r.path.clone())
-                    .or_insert_with(|| ("Video clip".into(), None));
-            }
+        }
+        Some(ThumbImage::Image(rgba)) => {
+            state.thumb_failed.remove(&r.path);
+            state
+                .thumb_meta
+                .insert(r.path.clone(), ("Screenshot".into(), None));
+            let tex = upload(rgba);
+            state.thumb_textures.insert(r.path.clone(), tex, None);
+        }
+        None => {
+            state
+                .thumb_failed
+                .insert(r.path.clone(), r.fingerprint.clone(), now);
+            state
+                .thumb_meta
+                .entry(r.path.clone())
+                .or_insert_with(|| ("Video clip".into(), None));
         }
     }
 }
@@ -217,6 +233,13 @@ fn delete_clip(state: &mut AppState, path: &Path) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
         return;
     }
+    if crate::editor::sessions::exporting(state, path) {
+        state.dialogs.push_message(
+            crate::editor::sessions::EXPORT_BUSY,
+            "Finish or cancel this clip\u{2019}s exports before deleting the source.",
+        );
+        return;
+    }
     let imports = imported_roots(state);
     let owned = state.library.clips_root.clone();
     let result = match classify_media_path(path, &owned, &imports) {
@@ -235,8 +258,27 @@ fn delete_clip(state: &mut AppState, path: &Path) {
             state.thumb_meta.remove(path);
             state.readiness.forget(path);
             state.library_dirty = true;
+            crate::editor::sessions::clip_deleted(state, path);
         }
         Err(e) => state.dialogs.push_message("File change failed", e),
+    }
+}
+
+/// Moves the clip's tag, description and editor draft to its new name (the
+/// metadata store keys them by path).
+fn move_metadata(state: &mut AppState, old: &Path, new: &Path) {
+    let moved = match crate::editor::sessions::store(state) {
+        Some(store) => store.rename_path(old, new).map_err(|e| e.to_string()),
+        None => Err("the clip metadata database is unavailable".to_owned()),
+    };
+    if let Err(e) = moved {
+        tracing::warn!(error = %e, "clip metadata not moved to the new name");
+        state.dialogs.push_message(
+            "Clip renamed",
+            format!(
+                "The file was renamed, but its tag, description and editor draft could not be moved: {e}"
+            ),
+        );
     }
 }
 
@@ -245,10 +287,19 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
         return;
     }
+    if crate::editor::sessions::exporting(state, path) {
+        state.dialogs.push_message(
+            crate::editor::sessions::EXPORT_BUSY,
+            "Finish or cancel this clip\u{2019}s exports before renaming it.",
+        );
+        return;
+    }
     let old_key = upload_key(state, path);
     match fthrust_core::audio_manifest::rename_clip(path, stem) {
         Ok(new_path) => {
             if new_path != path {
+                move_metadata(state, path, &new_path);
+                crate::editor::sessions::clip_renamed(state, path, &new_path);
                 // Keep the returned link attached to the renamed clip.
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);
@@ -357,7 +408,6 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, t.color(Color::Bg));
-    drain_thumbnails(ui, state);
     consume_results(state);
     if state.library_dirty {
         let key = screenshot_key(state);
@@ -487,9 +537,21 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     if let Some(step) = kb_step {
         scroll_area = scroll_area.vertical_scroll_offset((state.library_scroll + step).max(0.0));
     }
+    // What every card asks the same way: once per frame, not once per card.
+    let upload_enabled = crate::services::upload::uploader_enabled(state);
+    let any_blocked = state.readiness.has_blocked();
+    // Taken, not cloned: the closure never reads them through the state.
+    let sections = std::mem::take(&mut state.library.sections);
     let output = scroll_area.show_viewport(&mut area, |ui, viewport| {
         ui.set_width(area_rect.width());
         let origin = ui.cursor().min;
+        // egui hands over the visible part in content coordinates (0,0 is the
+        // content's top left, before the area's content margin); the rows below
+        // are laid out from `origin` in screen coordinates, which moves up as
+        // the area scrolls and starts below that margin. What is visible, in
+        // those coordinates, is the area itself: its top left whatever the
+        // offset or the margin, and the size egui reports.
+        let viewport = Rect::from_min_size(area_rect.min, viewport.size());
         let x0 = origin.x;
         let mut y = origin.y;
         if let Some(empty) = state.library.empty.clone() {
@@ -544,22 +606,34 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         let card_h = card_height(widths[0]);
         let row_h = card_h + GRID_SPACING;
         let mut card_index = 0usize;
-        let sections = state.library.sections.clone();
+        // Header row: date (17/600) + "·  game" (15 TEXT_DIM), spacing 10, then 8 px.
+        let hh = crate::fonts::qt_wrapped_line_height(size::BODY_L, Weight::W600);
+        let margin = OVERSCAN_ROWS as f32 * row_h;
         for (si, section) in sections.iter().enumerate() {
             if si > 0 {
                 y += SECTION_SPACING;
             }
-            // Header row: date (17/600) + "·  game" (15 TEXT_DIM), spacing 10, then 8 px.
-            let hh = crate::fonts::qt_wrapped_line_height(size::BODY_L, Weight::W600);
-            let dg = galley(
-                ui,
-                &section.label,
-                size::BODY_L,
-                Weight::W600,
-                t.color(Color::Text),
-            );
-            let drect = Rect::from_min_size(Pos2::new(x0, y), Vec2::new(dg.size().x.ceil(), hh));
-            if drect.intersects(viewport) {
+            let rows = section.paths.len().div_ceil(cols);
+            // A section wholly outside the built range costs nothing: no text
+            // layout and no walk over its rows.
+            let section_h = hh + 8.0 + (rows as f32 * row_h - GRID_SPACING);
+            if y > viewport.max.y + margin || y + section_h < viewport.min.y - margin {
+                card_index += section.paths.len();
+                y += hh + 8.0;
+                y += rows as f32 * row_h - GRID_SPACING;
+                continue;
+            }
+            if Rect::from_min_size(Pos2::new(x0, y), Vec2::new(content_w, hh)).intersects(viewport)
+            {
+                let dg = galley(
+                    ui,
+                    &section.label,
+                    size::BODY_L,
+                    Weight::W600,
+                    t.color(Color::Text),
+                );
+                let drect =
+                    Rect::from_min_size(Pos2::new(x0, y), Vec2::new(dg.size().x.ceil(), hh));
                 paint_text(ui, dg, drect, Align::Min, 0.0, t.color(Color::Text));
                 fidelity::mark(ui, format!("sectionHeader[{}]", section.label), drect)
                     .text(&section.label, size::BODY_L, Weight::W600)
@@ -575,7 +649,6 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                 }
             }
             y += hh + 8.0;
-            let rows = section.paths.len().div_ceil(cols);
             for row in 0..rows {
                 let row_top = y + row as f32 * row_h;
                 let row_rect =
@@ -610,10 +683,15 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                                 Vec2::new(e.texture.size()[0] as f32, e.texture.size()[1] as f32),
                             )
                         });
+                        // A failure holds until the file changes or the retry is due.
+                        let failed = state.thumb_failed.contains(path) && {
+                            let fp = fingerprint(state, path);
+                            state.thumb_failed.blocks(path, &fp, now)
+                        };
                         if thumbnail.is_none()
                             && on_screen
                             && !settling
-                            && !state.thumb_failed.contains(path)
+                            && !failed
                             && !state.thumb_requested.contains(path)
                         {
                             let fp = fingerprint(state, path);
@@ -626,12 +704,9 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                                 state.thumb_requests_total += 1;
                             }
                         }
-                        let imported = state
-                            .library
-                            .records
-                            .iter()
-                            .any(|r| r.path == *path && r.imported);
-                        let ready = state.readiness.can_access(path);
+                        let imported = state.library.record(path).is_some_and(|r| r.imported);
+                        // Listed files exist; only a tracked, unfinished clip is not ready.
+                        let ready = !any_blocked || state.readiness.can_access(path);
                         let key = upload_key(state, path);
                         let link = state.upload_history.link(&key).map(|l| l.url);
                         let uploaded = state.upload_history.is_uploaded(&key);
@@ -649,7 +724,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             imported,
                             uploaded,
                             upload_link: link,
-                            upload_enabled: crate::services::upload::uploader_enabled(state),
+                            upload_enabled,
                             uploading: upload_status.is_some(),
                             ready,
                             feedback: upload_status
@@ -711,12 +786,20 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
             Sense::hover(),
         );
     });
+    state.library.sections = sections;
     state.library_scroll = output.state.clamped_offset().y;
     if (content_h - last_h).abs() > 0.5 {
         ui.ctx().data_mut(|d| d.insert_temp(height_id, content_h));
         ui.ctx().request_repaint();
     }
     state.visible_cards = visible;
+    // Jobs for cards that scrolled out of the built rows would only delay the
+    // thumbnails of the ones in view; they are requested again on the way back.
+    if let Some(pool) = &state.thumb_pool {
+        for path in pool.retain(&state.visible_cards) {
+            state.thumb_requested.remove(&path);
+        }
+    }
     if let Some((path, item, title, link)) = menu_req {
         match item {
             MenuItem::Open => open_req = Some(path),

@@ -148,6 +148,76 @@ fn empty_edit_shows_error() {
     assert_eq!(bar.detail, "The edit has no kept segments.");
 }
 
+/// An editor that has not heard from its player yet: its duration is the
+/// 1 ms placeholder.
+fn editor_before_the_player_loaded(s: &mut AppState, tmp: &tempfile::TempDir) {
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        1,
+        Lifecycle::Preparing,
+    ));
+}
+
+#[test]
+fn export_before_the_player_loaded_is_refused_not_a_one_millisecond_clip() {
+    let (tmp, mut s, _cap) = editor_state();
+    editor_before_the_player_loaded(&mut s, &tmp);
+    // The sidebar button and Ctrl+E both end in this request.
+    s.editor
+        .as_mut()
+        .unwrap()
+        .requests
+        .push(EditorRequest::Export);
+    sessions::service(&mut s);
+    assert!(s.export_queue.tasks().is_empty(), "nothing was queued");
+    let bar = s.error_bar.current().expect("error shown");
+    assert!(bar.title.contains("EXPORT FAILED"), "{}", bar.title);
+    assert!(bar.detail.contains("still loading"), "{}", bar.detail);
+}
+
+#[test]
+fn a_clip_whose_loaded_player_reports_one_millisecond_is_not_still_loading() {
+    // The length is known once the player has loaded, whatever it is: a
+    // real 0 or 1 ms length used to read as the placeholder for good.
+    let (tmp, mut s, _cap) = editor_state();
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        1,
+        Lifecycle::Paused,
+    ));
+    assert!(s.editor.as_ref().unwrap().duration_known());
+    assert!(
+        export_ui::spec_for(&s).is_ok(),
+        "{:?}",
+        export_ui::spec_for(&s).err()
+    );
+    // And one that has not loaded is not known, with the length it has.
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        10_000,
+        Lifecycle::PlayQueued,
+    ));
+    assert!(!s.editor.as_ref().unwrap().duration_known());
+    assert_eq!(
+        export_ui::spec_for(&s).err().as_deref(),
+        Some(export_ui::STILL_LOADING)
+    );
+}
+
+#[test]
+fn a_clip_that_failed_to_load_is_not_exported_either() {
+    let (tmp, mut s, _cap) = editor_state();
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("Overwatch_clip.mp4"),
+        1,
+        Lifecycle::Failed,
+    ));
+    export_ui::export_now(&mut s);
+    assert!(s.export_queue.tasks().is_empty());
+    let bar = s.error_bar.current().expect("error shown");
+    assert!(bar.detail.contains("could not be opened"), "{}", bar.detail);
+}
+
 #[test]
 fn jobs_label_counts() {
     let (_tmp, mut s, cap) = editor_state();
@@ -363,6 +433,26 @@ fn empty_edit_share_shows_error() {
     let bar = s.error_bar.current().expect("error shown");
     assert!(bar.title.contains("SHARE FAILED"), "{}", bar.title);
     assert_eq!(bar.detail, "The edit has no kept segments.");
+}
+
+#[test]
+fn share_before_the_player_loaded_is_refused_not_a_one_millisecond_clip() {
+    let (tmp, mut s, _cap) = editor_state();
+    editor_before_the_player_loaded(&mut s, &tmp);
+    // The picker may open (the player can load while it is up); choosing
+    // is what needs the duration.
+    s.editor
+        .as_mut()
+        .unwrap()
+        .requests
+        .push(EditorRequest::Share);
+    sessions::service(&mut s);
+    assert!(s.share_picker.is_some());
+    share::choose(&mut s, Choice::Plain, "quality");
+    assert!(s.share_windows.is_empty(), "no share was started");
+    let bar = s.error_bar.current().expect("error shown");
+    assert!(bar.title.contains("SHARE FAILED"), "{}", bar.title);
+    assert!(bar.detail.contains("still loading"), "{}", bar.detail);
 }
 
 fn real_share_rig() -> Option<(tempfile::TempDir, AppState, PathBuf)> {

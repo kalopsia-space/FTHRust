@@ -19,7 +19,7 @@ pub const MAX_SESSIONS: usize = 3;
 /// Dialog tag prefix of the delete confirmation.
 const DELETE_TAG: &str = "editor-delete:";
 /// Title of the export guards.
-const EXPORT_BUSY: &str = "Export in progress";
+pub const EXPORT_BUSY: &str = "Export in progress";
 
 /// One editor session.
 #[derive(Clone, Debug, PartialEq)]
@@ -48,17 +48,50 @@ fn factory(state: &mut AppState) -> PlayerFactory {
         .clone()
 }
 
-fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
+/// How long the per-frame tick waits before it tries a store that would not
+/// open again.
+const STORE_RETRY_S: f64 = 5.0;
+
+/// The clip metadata store, opened on first use. Each call looks again when
+/// it is closed (it serves clicks and file operations, not frames); a
+/// failure is logged once, until the reason changes.
+pub fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
     if state.clip_metadata.is_none() {
+        let now = state.editor_now();
         match ClipMetadataStore::open(&state.paths) {
-            Ok(s) => state.clip_metadata = Some(s),
+            Ok(s) => {
+                state.clip_metadata = Some(s);
+                state.clip_metadata_failure = None;
+            }
             Err(e) => {
-                tracing::warn!(error = %e, "clip metadata store unavailable");
+                let reason = e.to_string();
+                let known = state
+                    .clip_metadata_failure
+                    .as_ref()
+                    .is_some_and(|(was, _)| *was == reason);
+                if !known {
+                    tracing::warn!(error = %reason, "clip metadata store unavailable");
+                }
+                state.clip_metadata_failure = Some((reason, now));
                 return None;
             }
         }
     }
     state.clip_metadata.as_mut()
+}
+
+/// [`store`] for the frame loop: after a failure it does not look again for
+/// [`STORE_RETRY_S`] (opening touches the disk).
+pub fn store_retrying(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
+    if state.clip_metadata.is_none()
+        && state
+            .clip_metadata_failure
+            .as_ref()
+            .is_some_and(|(_, at)| state.editor_now() < at + STORE_RETRY_S)
+    {
+        return None;
+    }
+    store(state)
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -92,6 +125,18 @@ fn activate(state: &mut AppState, index: usize, restore: Option<SessionState>) -
     let path = state.editor_slots[index].path.clone();
     let f = factory(state);
     if store(state).is_none() {
+        // The editor reads the clip's tag, description and draft from the
+        // store before it starts; without it the click would do nothing.
+        let reason = state
+            .clip_metadata_failure
+            .as_ref()
+            .map_or_else(String::new, |(why, _)| format!("\n{why}"));
+        state.dialogs.push_message(
+            "Could not open clip",
+            format!(
+                "The clip details (tags, notes and editor drafts) could not be opened, so the editor cannot start.{reason}"
+            ),
+        );
         return false;
     }
     let Some(st) = state.clip_metadata.as_ref() else {
@@ -326,6 +371,55 @@ fn imported_roots(state: &AppState) -> Vec<PathBuf> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// An export is queued or running for `path`, or one of its shares is: the
+/// job reads the clip by this path, so it must keep its name and its file.
+pub fn exporting(state: &AppState, path: &Path) -> bool {
+    state.export_queue.active_for(path) || state.active_shares.iter().any(|p| same_path(p, path))
+}
+
+/// The library renamed `old` to `new`: the editor sessions that hold the
+/// clip follow it (its draft moved with the rest of its metadata), so the
+/// rail still opens the clip.
+pub fn clip_renamed(state: &mut AppState, old: &Path, new: &Path) {
+    let mut moved = false;
+    for slot in state.editor_slots.iter_mut() {
+        if same_path(&slot.path, old) {
+            slot.path = new.to_path_buf();
+            moved = true;
+        }
+    }
+    if let Some(e) = state.editor.as_mut()
+        && same_path(&e.path, old)
+    {
+        e.path = new.to_path_buf();
+    }
+    if moved {
+        sync(state);
+    }
+}
+
+/// The library deleted `path`: the editor sessions that hold it close (no
+/// rail button for a clip that is gone) and its draft goes, as when the
+/// editor deletes its own clip.
+pub fn clip_deleted(state: &mut AppState, path: &Path) {
+    let held: Vec<usize> = state
+        .editor_slots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| same_path(&s.path, path))
+        .map(|(i, _)| i)
+        .collect();
+    // From the back: closing one renumbers those after it.
+    for i in held.into_iter().rev() {
+        close(state, i + 1);
+    }
+    if let Some(st) = store(state)
+        && let Err(e) = st.clear_editor_draft(path)
+    {
+        tracing::warn!(error = %e, "editor draft not cleared");
+    }
 }
 
 /// A share of the open clip is running (its window holds the editor).
