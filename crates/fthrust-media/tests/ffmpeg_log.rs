@@ -139,6 +139,35 @@ fn repeated_lines_are_counted_not_repeated() {
     assert!(text.contains("something else"), "{text}");
 }
 
+#[test]
+fn an_overlong_message_is_cut_but_stays_its_own_line() {
+    fthrust_media::init().unwrap();
+    fthrust_media::init_ffmpeg_logging();
+    let long = std::ffi::CString::new(format!("{}\n", "x".repeat(2000))).unwrap();
+    let text = capture(|| {
+        // SAFETY: av_log calls whose format arguments match.
+        unsafe {
+            ffi::av_log(
+                ptr::null_mut(),
+                ffi::AV_LOG_ERROR,
+                c"%s".as_ptr(),
+                long.as_ptr(),
+            );
+            ffi::av_log(
+                ptr::null_mut(),
+                ffi::AV_LOG_ERROR,
+                c"the next one\n".as_ptr(),
+            );
+        }
+    });
+    assert!(text.lines().any(|l| l.contains("xxxx")), "{text}");
+    let next = text
+        .lines()
+        .find(|l| l.contains("the next one"))
+        .unwrap_or_else(|| panic!("the next message is missing: {text}"));
+    assert!(!next.contains("xxxx"), "merged into the cut line: {next}");
+}
+
 #[path = "support/mod.rs"]
 mod support;
 

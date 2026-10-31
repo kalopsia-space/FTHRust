@@ -107,16 +107,20 @@ unsafe fn handle(avcl: *mut c_void, level: c_int, fmt: *const c_char, vl: VaList
     if written < 0 {
         return;
     }
+    // A message longer than the buffer comes back cut, without its line
+    // end: it still ends the line, or the next message would join it.
+    let cut = written as usize >= buf.len();
     // SAFETY: av_log_format_line2 NUL-terminates what it writes.
     let piece = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
     // SAFETY: `avcl` is av_log's context argument.
     let name = unsafe { component(avcl) };
-    LINES.with(|lines| {
+    // try_with: a thread that is exiting has no buffer left.
+    let _ = LINES.try_with(|lines| {
         let Ok(mut lines) = lines.try_borrow_mut() else {
             return;
         };
         lines.partial.push_str(&piece);
-        if !lines.partial.ends_with('\n') {
+        if !cut && !lines.partial.ends_with('\n') {
             return;
         }
         let text = std::mem::take(&mut lines.partial);
