@@ -736,7 +736,25 @@ pub(super) fn attempt(
         Ok(())
     };
 
-    let mut reached_end = false;
+    // Inputs copied packet by packet, and those past the end of the trim:
+    // once a packet's decode time is past it, so is every later packet of
+    // that stream.
+    let copied: Vec<usize> = outs
+        .iter()
+        .filter_map(|o| match o {
+            Out::Copy { input, .. } => Some(*input),
+            _ => None,
+        })
+        .collect();
+    let mut copies_done: Vec<usize> = Vec::new();
+    // Every output has all it gets: reading on would only drop packets.
+    let finished = |copies_done: &[usize], video_eof: bool, outs: &[Out]| {
+        video_eof
+            && outs
+                .iter()
+                .all(|o| !matches!(o, Out::Audio { eof: false, .. }))
+            && copied.iter().all(|i| copies_done.contains(i))
+    };
     for (stream, mut packet) in ictx.packets() {
         if cancel.load(Ordering::Relaxed) {
             return Err(Stop::Cancelled);
@@ -757,9 +775,17 @@ pub(super) fn attempt(
             let ost = *ost;
             let pts = packet.pts().or(packet.dts()).unwrap_or(0);
             let t = secs(pts - start, tb) - seek;
-            if limit.is_some_and(|d| t >= d) {
-                if Some(index) == inp.video {
-                    reached_end = true;
+            if let Some(end) = limit
+                && t >= end
+            {
+                // Dropped, but reading past it is progress.
+                last_output = Instant::now();
+                let decode_t = packet.dts().map_or(t, |d| secs(d - start, tb) - seek);
+                if decode_t >= end && !copies_done.contains(&index) {
+                    copies_done.push(index);
+                }
+                if finished(&copies_done, video_eof, &outs) {
+                    break;
                 }
                 continue;
             }
@@ -781,12 +807,11 @@ pub(super) fn attempt(
             if Some(index) == inp.video {
                 on_progress((t / expected * 100.0).clamp(0.0, 99.0));
             }
-            if reached_end && asm.copy_audio.is_empty() {
-                break;
-            }
             continue;
         }
         let Some(g) = graph.as_mut() else {
+            // A stream the export does not use: reading past it is progress.
+            last_output = Instant::now();
             continue;
         };
         if Some(index) == inp.video
@@ -823,6 +848,7 @@ pub(super) fn attempt(
                 feed(g.get(label).expect("source").source().add(&aframe))?;
             }
         } else {
+            last_output = Instant::now();
             continue;
         }
         pump(
@@ -834,10 +860,7 @@ pub(super) fn attempt(
             &mut last_output,
             on_progress,
         )?;
-        let audio_done = outs
-            .iter()
-            .all(|o| !matches!(o, Out::Audio { eof: false, .. }));
-        if video_eof && audio_done {
+        if finished(&copies_done, video_eof, &outs) {
             break;
         }
     }

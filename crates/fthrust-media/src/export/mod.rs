@@ -15,7 +15,8 @@ use fthrust_core::export::graph::GraphPlan;
 
 pub use encode::status_for_encoder;
 
-/// Inactivity bound: no output for this long times the job out.
+/// Inactivity bound: no progress for this long (nothing written, decoded
+/// or read past) times the job out.
 pub const INACTIVITY_S: f64 = 120.0;
 
 /// The `export_quality` setting.

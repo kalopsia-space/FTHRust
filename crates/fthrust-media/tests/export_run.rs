@@ -516,6 +516,46 @@ fn late_ranges_of_a_long_clip_do_not_time_out() {
     );
 }
 
+/// Bytes this thread has read so far (`rchar` of `/proc/thread-self/io`).
+fn thread_read_bytes() -> u64 {
+    std::fs::read_to_string("/proc/thread-self/io")
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("rchar:"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn a_stream_copy_trim_stops_reading_at_its_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "long.mp4", 40, 1) else {
+        return;
+    };
+    let size = std::fs::metadata(&src).unwrap().len();
+    let out = tmp.path().join("first-second.mp4");
+    let mut j = job(&src, out.clone(), &spec(&[(0.0, 1.0)]), Quality::Quality);
+    j.inactivity_s = Some(5.0);
+    // The export runs on this thread, so its reads show up here.
+    let before = thread_read_bytes();
+    let (r, statuses, _) = run_job(&j);
+    let read = thread_read_bytes() - before;
+    eprintln!("read {read} bytes of a {size}-byte source");
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    assert!(
+        statuses.contains(&"Exporting · stream copy".to_owned()),
+        "{statuses:?}"
+    );
+    let p = probe(&out);
+    assert_eq!((p.video, p.audio), (1, 1));
+    assert!(
+        read < size / 4,
+        "read {read} bytes of a {size}-byte source for its first second"
+    );
+}
+
 #[test]
 fn a_corrupt_packet_does_not_abort_the_export() {
     let tmp = tempfile::tempdir().unwrap();
