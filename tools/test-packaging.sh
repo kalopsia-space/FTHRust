@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|archive]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -213,6 +213,57 @@ group_install() {
     if [ -z "$out" ]; then pass install_uninstall_removes_files; else fail install_uninstall_removes_files "left: $out"; fi
 }
 
+expect_notes() { # name tag expected-text
+    local name="$1" tag="$2" want="$3" got
+    if ! got="$("$ROOT/packaging/release-notes.sh" "$tag" --changes "$WORK/CHANGES.md" 2>&1)"; then
+        fail "$name" "exit non-zero: $got"; return
+    fi
+    if [ "$got" = "$want" ]; then pass "$name"; else fail "$name" "got: $got"; fi
+}
+
+expect_no_notes() { # name tag message-fragment
+    local name="$1" tag="$2" frag="$3" got
+    if got="$("$ROOT/packaging/release-notes.sh" "$tag" --changes "$WORK/CHANGES.md" 2>&1)"; then
+        fail "$name" "exit 0: $got"; return
+    fi
+    if grep -q -- "$frag" <<<"$got"; then pass "$name"; else fail "$name" "message: $got"; fi
+}
+
+group_notes() {
+    cat > "$WORK/CHANGES.md" <<'EOF'
+# Changes
+
+## 2.0.0-alpha.10 (2026-12-01)
+
+Ten.
+
+## 2.0.0-alpha.1
+
+One.
+
+### Fixed
+
+- a fix
+
+## [2.0.0] - 2027-01-01
+
+Release.
+
+## v2.1.0
+
+## 2.2.0
+
+Last section.
+EOF
+    expect_notes notes_section_without_its_neighbours v2.0.0-alpha.1 $'One.\n\n### Fixed\n\n- a fix'
+    expect_notes notes_accepts_a_tag_ref refs/tags/v2.0.0-alpha.10 'Ten.'
+    expect_notes notes_matches_bracketed_heading 2.0.0 'Release.'
+    expect_notes notes_runs_to_end_of_file v2.2.0 'Last section.'
+    expect_no_notes notes_empty_section_is_an_error v2.1.0 "no non-empty '## 2.1.0' section"
+    expect_no_notes notes_missing_version_is_an_error v9.9.9 "no non-empty '## 9.9.9' section"
+    expect_no_notes notes_prefix_of_a_longer_version_is_missing v2.0.0-alpha "no non-empty"
+}
+
 group_archive() {
     local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m out r ffc bsc
     mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d"
@@ -266,7 +317,7 @@ group_archive() {
 }
 
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install archive)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"
