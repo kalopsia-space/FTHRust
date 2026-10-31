@@ -146,7 +146,7 @@ jobs:
             cat notes/release-notes.md
             printf '\n%s\n\n' '---'
             printf '%s\n\n' '**Verify a download.** `sha256sum -c` with its `.sha256` file checks the bytes; `gh attestation verify FTHRust-<version>-x86_64.AppImage --repo '"$GITHUB_REPOSITORY"'` checks that GitHub Actions built it from this repository (build provenance).'
-            printf '%s\n' '**Source of the bundled FFmpeg.** `FTHRust-ffmpeg-source-*.tar.xz` holds the FFmpeg commit, the build scripts and the source of every library compiled into the FFmpeg libraries in both downloads. `THIRD_PARTY_NOTICES.md` inside them lists every bundled component and its licence.'
+            printf '%s\n' '**Source of the bundled FFmpeg.** `FTHRust-ffmpeg-source-*.tar.xz` holds the FFmpeg commit, the build scripts and the source of every library compiled into the FFmpeg libraries in both downloads, except what those scripts download while building. `THIRD_PARTY_NOTICES.md` inside them lists every bundled component and its licence, and names those exceptions.'
           } > body.md
           gh release create "$GITHUB_REF_NAME" $prerelease --verify-tag \
             --title "FTHRust Clips ${GITHUB_REF_NAME#v}" --notes-file body.md --generate-notes \

@@ -1036,6 +1036,9 @@ group_workflow() {
     else fail workflow_uploads_the_xz_without_compressing_it_again "no compression-level: 0 in the source job"; fi
     if grep -q 'apt-get update && sudo apt-get install -y --no-install-recommends subversion' <<<"$srcjob"; then pass workflow_source_job_updates_apt_before_installing_svn
     else fail workflow_source_job_updates_apt_before_installing_svn "$(grep -n 'apt-get' <<<"$srcjob")"; fi
+    # the release body says what the archive holds, exceptions included (rav1e's crates, shaderc's projects)
+    if grep -q "every library compiled into the FFmpeg libraries in both downloads, except what those scripts download while building" <<<"$publish" && grep -q "names those exceptions" <<<"$publish"; then pass workflow_release_body_names_the_archive_exceptions
+    else fail workflow_release_body_names_the_archive_exceptions "$(grep 'Source of the bundled FFmpeg' <<<"$publish" | cut -c1-300)"; fi
     if grep -qx '    timeout-minutes: 30' <<<"$publish"; then pass workflow_publish_has_half_an_hour
     else fail workflow_publish_has_half_an_hour "$(grep 'timeout' <<<"$publish")"; fi
     # "Keep in step with packaging/Dockerfile": the same packages, subversion included
