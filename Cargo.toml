@@ -17,7 +17,7 @@ sha2 = "0.11"
 idna = "1"
 base64 = "0.22"
 rusqlite = { version = "0.40", features = ["bundled"] }
-zip = "9"
+zip = { version = "9", default-features = false, features = ["deflate", "time"] }
 tempfile = "3"
 ffmpeg-next = "9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "ico"] }
