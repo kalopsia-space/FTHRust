@@ -24,12 +24,8 @@ fn home(settings: Value) -> Home {
     Home { dir, paths }
 }
 
-fn consented(extra: Value) -> Home {
-    let mut s = json!({
-        "upload_enabled": true,
-        "uploader_terms_accepted_version": fthrust_core::upload::TERMS_VERSION,
-        "uploader_privacy_accepted_version": fthrust_core::upload::PRIVACY_VERSION,
-    });
+fn enabled_home(extra: Value) -> Home {
+    let mut s = json!({"upload_enabled": true});
     for (k, v) in extra.as_object().unwrap() {
         s[k] = v.clone();
     }
@@ -44,7 +40,7 @@ async fn ask(h: &Home, req: Value) -> (bool, String) {
 
 #[tokio::test]
 async fn unknown_and_missing_action() {
-    let h = consented(json!({}));
+    let h = enabled_home(json!({}));
     assert_eq!(
         ask(&h, json!({"action": "dance"})).await,
         (false, "Unsupported uploader action: dance".into())
@@ -61,7 +57,7 @@ async fn unknown_and_missing_action() {
 
 #[tokio::test]
 async fn retired_actions_rejected() {
-    let h = consented(json!({"upload_provider": "custom"}));
+    let h = enabled_home(json!({"upload_provider": "custom"}));
     for a in ["register", "login", "account_status", "logout"] {
         let (ok, msg) = ask(&h, json!({"action": a})).await;
         assert!(!ok);
@@ -71,7 +67,7 @@ async fn retired_actions_rejected() {
 
 #[tokio::test]
 async fn disabled_refuses_network_actions() {
-    let h = consented(json!({"upload_enabled": false}));
+    let h = enabled_home(json!({"upload_enabled": false}));
     for a in ["upload", "test_connection"] {
         assert_eq!(
             ask(&h, json!({"action": a})).await,
@@ -94,29 +90,24 @@ async fn disabled_refuses_network_actions() {
     );
 }
 
+/// The uploader's own Terms and Privacy Policy are a link in Settings, not
+/// a gate: versions accepted by an older app (or none) refuse nothing.
 #[tokio::test]
-async fn old_terms_refused() {
-    let h = consented(json!({"uploader_terms_accepted_version": "2026-10-15-v3"}));
-    assert_eq!(
-        ask(&h, json!({"action": "test_connection"})).await,
-        (
-            false,
-            "Uploader Terms of Service must be accepted again.".into()
-        )
-    );
-    let h = consented(json!({"uploader_privacy_accepted_version": "2026-10-15-v3"}));
-    assert_eq!(
-        ask(&h, json!({"action": "sftp_forget", "config": {}})).await,
-        (
-            false,
-            "Uploader Privacy Policy must be accepted again.".into()
-        )
-    );
+async fn terms_versions_refuse_nothing() {
+    for extra in [
+        json!({"uploader_terms_accepted_version": "2026-08-24-v1",
+               "uploader_privacy_accepted_version": "2026-08-24-v1"}),
+        json!({}),
+    ] {
+        let h = enabled_home(extra);
+        let (_, msg) = ask(&h, json!({"action": "sftp_forget", "config": {}})).await;
+        assert!(!msg.contains("accepted again"), "{msg}");
+    }
 }
 
 #[tokio::test]
 async fn catbox_needs_consent() {
-    let h = consented(json!({"upload_provider": "catbox"}));
+    let h = enabled_home(json!({"upload_provider": "catbox"}));
     assert_eq!(
         ask(&h, json!({"action": "test_connection"})).await,
         (
@@ -125,7 +116,7 @@ async fn catbox_needs_consent() {
         )
     );
     // The request config can select Catbox too.
-    let h = consented(json!({"upload_provider": "sftp"}));
+    let h = enabled_home(json!({"upload_provider": "sftp"}));
     let (_, msg) = ask(
         &h,
         json!({"action": "test_connection", "config": {"upload_provider": "CATBOX"}}),
@@ -136,7 +127,7 @@ async fn catbox_needs_consent() {
 
 #[tokio::test]
 async fn custom_and_sftp_need_no_provider_consent() {
-    let h = consented(json!({"upload_provider": "your_server", "upload_server_url": ""}));
+    let h = enabled_home(json!({"upload_provider": "your_server", "upload_server_url": ""}));
     assert_eq!(
         ask(&h, json!({"action": "test_connection"})).await,
         (
@@ -144,7 +135,7 @@ async fn custom_and_sftp_need_no_provider_consent() {
             "Set a server URL before connecting to your server.".into()
         )
     );
-    let h = consented(json!({"upload_provider": "sftp", "sftp_host": "bad host"}));
+    let h = enabled_home(json!({"upload_provider": "sftp", "sftp_host": "bad host"}));
     let (_, msg) = ask(&h, json!({"action": "test_connection"})).await;
     assert_eq!(
         msg,
@@ -154,7 +145,7 @@ async fn custom_and_sftp_need_no_provider_consent() {
 
 #[tokio::test]
 async fn retired_provider_unsupported() {
-    let h = consented(json!({"upload_provider": "custom"}));
+    let h = enabled_home(json!({"upload_provider": "custom"}));
     assert_eq!(
         ask(
             &h,
@@ -167,8 +158,9 @@ async fn retired_provider_unsupported() {
 
 #[tokio::test]
 async fn upload_outside_roots_refused() {
-    let h =
-        consented(json!({"upload_provider": "custom", "upload_server_url": "http://127.0.0.1:9/"}));
+    let h = enabled_home(
+        json!({"upload_provider": "custom", "upload_server_url": "http://127.0.0.1:9/"}),
+    );
     let clips = h.dir.path().join("clips");
     let other = h.dir.path().join("other");
     std::fs::create_dir_all(&clips).unwrap();
@@ -191,8 +183,9 @@ async fn upload_outside_roots_refused() {
 
 #[tokio::test]
 async fn missing_clip() {
-    let h =
-        consented(json!({"upload_provider": "custom", "upload_server_url": "http://127.0.0.1:9/"}));
+    let h = enabled_home(
+        json!({"upload_provider": "custom", "upload_server_url": "http://127.0.0.1:9/"}),
+    );
     let gone = h.dir.path().join("gone.mp4");
     let r = json!({"action": "upload", "path": gone, "allowed_roots": [h.dir.path()]});
     assert_eq!(
@@ -226,7 +219,7 @@ fn run_binary(h: &Home, stdin: &str) -> (Option<i32>, String) {
 
 #[test]
 fn binary_round_trip() {
-    let h = consented(json!({"upload_enabled": false}));
+    let h = enabled_home(json!({"upload_enabled": false}));
     let (code, out) = run_binary(&h, r#"{"action":"upload"}"#);
     assert_eq!(code, Some(1));
     assert!(out.ends_with('\n'));
@@ -250,7 +243,7 @@ fn binary_round_trip() {
 /// zbus's tokio feature unified in, a blocking call there used to panic.
 #[test]
 fn keyring_failure_is_a_message_not_a_panic() {
-    let h = consented(json!({}));
+    let h = enabled_home(json!({}));
     let req = r#"{"action":"sftp_forget","config":{"sftp_host":"h.example","sftp_username":"u"}}"#;
     let mut child = Command::new(env!("CARGO_BIN_EXE_fthrust-uploader"))
         .env("HOME", h.dir.path())

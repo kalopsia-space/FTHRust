@@ -6,13 +6,9 @@ pub mod history;
 pub mod settings;
 pub mod validate;
 
-/// Version of the uploader Terms of Service shown in the consent dialog.
-pub const TERMS_VERSION: &str = "2026-10-23-v4";
-/// Version of the uploader Privacy Policy shown in the consent dialog.
-pub const PRIVACY_VERSION: &str = "2026-10-23-v4";
 /// Version of Catbox's legal policies the user accepts before Catbox uploads.
 pub const CATBOX_LEGAL_VERSION: &str = "catbox-legal-2021-03-06";
-/// Uploader Terms of Service text.
+/// Uploader Terms of Service text (shown from the Upload settings link).
 pub const TERMS_TEXT: &str = include_str!("legal/TERMS_OF_SERVICE.txt");
 /// Uploader Privacy Policy text.
 pub const PRIVACY_TEXT: &str = include_str!("legal/PRIVACY_POLICY.txt");

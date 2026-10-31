@@ -104,6 +104,14 @@ pub fn checkbox_with(
     resp
 }
 
+/// Width of a checkbox row's box and label, from the row's left edge.
+pub fn label_width(ui: &Ui, label: &str) -> f32 {
+    BOX + SPACING
+        + galley(ui, label, size::BODY_L, Weight::W400, Color32::WHITE)
+            .size()
+            .x
+}
+
 /// A radio row; `clicked()` means "select me".
 pub fn radio(ui: &mut Ui, t: &Tokens, selected: bool, label: &str, name: &str) -> Response {
     indicator(ui, t, selected, label, 7.0, true, name, false).0

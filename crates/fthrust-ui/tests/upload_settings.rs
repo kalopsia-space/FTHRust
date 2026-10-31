@@ -5,8 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use fthrust_core::upload::CATBOX_LEGAL_VERSION;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_core::upload::{CATBOX_LEGAL_VERSION, PRIVACY_VERSION, TERMS_VERSION};
 use fthrust_ui::settings::upload::{self as up, Choice, PROVIDERS, SFTP_NOTE, StatusKind};
 use fthrust_ui::state::{AppState, DialogKind, DialogResult};
 use serde_json::{Value, json};
@@ -47,8 +47,6 @@ fn rig(extra: Value, answers: &[(&str, &str)]) -> Rig {
 fn enabled_rig(extra: Value, answers: &[(&str, &str)]) -> Rig {
     let mut e = json!({
         "upload_enabled": true,
-        "uploader_terms_accepted_version": TERMS_VERSION,
-        "uploader_privacy_accepted_version": PRIVACY_VERSION,
         "catbox_legal_accepted_version": CATBOX_LEGAL_VERSION,
     });
     for (k, v) in extra.as_object().unwrap() {
@@ -99,20 +97,11 @@ impl Rig {
 }
 
 #[test]
-fn enable_shows_consent_then_catbox() {
+fn enable_asks_only_for_catbox() {
     let mut r = rig(json!({}), &[]);
     up::set_enabled(&mut r.state, true, 0.0);
-    assert!(!r.saved().enabled(), "nothing enabled before consent");
-    assert_eq!(r.modal(), Some(DialogKind::UploadConsent));
-    assert_eq!(
-        fthrust_ui::dialogs::title_of(&DialogKind::UploadConsent),
-        "Enable FTHR Upload Extension"
-    );
-    r.answer(DialogResult::UploadConsent(true), 0.0);
-    let s = r.saved();
-    assert!(s.enabled() && s.consent_current());
-    assert!(!s.str("uploader_accepted_at").is_empty());
-    // Catbox (the default provider) asks next.
+    assert!(r.saved().enabled(), "no terms dialog first");
+    // Catbox (the default provider) asks for its own policies.
     let Some(DialogKind::CatboxConsent { context }) = r.modal() else {
         panic!("{:?}", r.modal());
     };
@@ -129,12 +118,12 @@ fn enable_shows_consent_then_catbox() {
         },
         0.0,
     );
-    assert!(r.saved().catbox_consent_current());
+    let s = r.saved();
+    assert!(s.enabled() && s.catbox_consent_current());
 
     // Cancelling the Catbox step during enable turns uploads off again.
     let mut r = rig(json!({}), &[]);
     up::set_enabled(&mut r.state, true, 0.0);
-    r.answer(DialogResult::UploadConsent(true), 0.0);
     let Some(DialogKind::CatboxConsent { context }) = r.modal() else {
         panic!()
     };
@@ -145,24 +134,10 @@ fn enable_shows_consent_then_catbox() {
         },
         0.0,
     );
-    let s = r.saved();
-    assert!(!s.enabled());
-    assert!(s.consent_current(), "the terms stay accepted");
-}
-
-#[test]
-fn cancel_install_unticks() {
-    let mut r = rig(json!({}), &[]);
-    up::set_enabled(&mut r.state, true, 0.0);
-    r.answer(DialogResult::UploadConsent(false), 0.0);
     assert!(!r.saved().enabled());
-    assert!(r.state.dialogs.modal.is_empty());
-    // Already accepted: enabling needs no dialog; disabling saves at once.
-    let mut r = rig(
-        json!({"upload_provider": "custom", "uploader_terms_accepted_version": TERMS_VERSION,
-               "uploader_privacy_accepted_version": PRIVACY_VERSION}),
-        &[],
-    );
+
+    // Another provider: no dialog at all; disabling saves at once.
+    let mut r = rig(json!({"upload_provider": "custom"}), &[]);
     up::set_enabled(&mut r.state, true, 0.0);
     assert!(r.state.dialogs.modal.is_empty());
     assert!(r.saved().enabled());
@@ -170,12 +145,34 @@ fn cancel_install_unticks() {
     assert!(!r.saved().enabled());
 }
 
+/// Terms accepted in an older version (the Qt app's) do not turn uploads
+/// off.
 #[test]
-fn consent_dialog_gates_accept() {
-    use fthrust_ui::dialogs::upload_consent::{accept_enabled, catbox_accept_enabled};
-    assert!(!accept_enabled([false, false]));
-    assert!(!accept_enabled([true, false]));
-    assert!(accept_enabled([true, true]));
+fn old_terms_versions_keep_uploads_on() {
+    let r = enabled_rig(
+        json!({"uploader_terms_accepted_version": "2026-08-24-v1",
+               "uploader_privacy_accepted_version": "2026-08-24-v1"}),
+        &[],
+    );
+    assert!(fthrust_ui::services::upload::uploader_enabled(&r.state));
+}
+
+/// The settings link opens the Terms and Privacy Policy, read only.
+#[test]
+fn terms_link_opens_the_documents() {
+    let mut r = rig(json!({}), &[]);
+    up::show_terms(&mut r.state);
+    assert_eq!(r.modal(), Some(DialogKind::UploaderTerms));
+    assert_eq!(
+        fthrust_ui::dialogs::title_of(&DialogKind::UploaderTerms),
+        "Uploader Terms & Privacy"
+    );
+    assert!(!r.saved().enabled(), "viewing changes nothing");
+}
+
+#[test]
+fn catbox_dialog_gates_accept() {
+    use fthrust_ui::dialogs::upload_consent::catbox_accept_enabled;
     assert!(!catbox_accept_enabled(false));
     assert!(catbox_accept_enabled(true));
 }

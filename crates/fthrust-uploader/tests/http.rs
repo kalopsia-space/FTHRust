@@ -114,7 +114,6 @@ fn home(settings: Value) -> Home {
     let paths = FthrPaths::new(dir.path());
     let mut s = UploaderSettings::default();
     s.set("upload_enabled", json!(true));
-    s.accept_terms("2026-10-23T00:00:00+00:00");
     s.accept_catbox("2026-10-23T00:00:00+00:00");
     for (k, v) in settings.as_object().unwrap() {
         s.set(k, v.clone());

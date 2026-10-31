@@ -1,12 +1,12 @@
 FTHR UPLOAD EXTENSION — PRIVACY POLICY
-Version: 2026-10-23-v4
+Version: 2026-10-31-v5
 
 Execution
 
 FTHR Clips Core contains no provider upload client. This extension is a
-separate program shipped next to FTHR Clips and is used only after consent. It
-runs only for an upload or connection-test request; it has no idle
-background service.
+separate program shipped next to FTHR Clips and is used only while you have
+uploads enabled. It runs only for an upload or connection-test request; it
+has no idle background service.
 
 Data kept locally
 

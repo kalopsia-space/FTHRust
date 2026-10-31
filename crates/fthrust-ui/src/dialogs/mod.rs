@@ -79,7 +79,7 @@ fn clear_drafts(state: &mut AppState) {
     state.input_draft = None;
     state.clip_length_draft = None;
     state.export_preset_draft = None;
-    state.consent_checks = [false; 2];
+    state.catbox_check = false;
 }
 
 /// The keys a dialog may act on this frame.
@@ -175,7 +175,7 @@ pub fn title_of(kind: &DialogKind) -> String {
             }
         }
         DialogKind::DiagnosticReport { .. } => "Diagnostic report exported".into(),
-        DialogKind::UploadConsent => upload_consent::TITLE.into(),
+        DialogKind::UploaderTerms => upload_consent::TERMS_TITLE.into(),
         DialogKind::CatboxConsent { .. } => upload_consent::CATBOX_TITLE.into(),
     }
 }
@@ -187,7 +187,7 @@ fn width_of(kind: &DialogKind) -> f32 {
         DialogKind::CustomClipLength { .. } => 340.0,
         DialogKind::ExportPreset { .. } => 420.0,
         DialogKind::DiagnosticReport { .. } => 480.0,
-        DialogKind::UploadConsent => 740.0,
+        DialogKind::UploaderTerms => 740.0,
         DialogKind::CatboxConsent { .. } => 560.0,
     }
 }
@@ -204,7 +204,6 @@ fn cancel_result(kind: &DialogKind) -> Option<DialogResult> {
         }),
         DialogKind::CustomClipLength { .. } => Some(DialogResult::ClipLength(None)),
         DialogKind::ExportPreset { .. } => Some(DialogResult::ExportPreset(None)),
-        DialogKind::UploadConsent => Some(DialogResult::UploadConsent(false)),
         DialogKind::CatboxConsent { context } => Some(DialogResult::CatboxConsent {
             accepted: false,
             context: context.clone(),
@@ -232,7 +231,7 @@ fn body(ui: &mut Ui, state: &mut AppState, kind: &DialogKind) {
         DialogKind::CustomClipLength { seconds } => custom_clip_length::body(ui, state, *seconds),
         DialogKind::ExportPreset { preset } => export_preset::body(ui, state, preset.as_ref()),
         DialogKind::DiagnosticReport { zip } => diagnostic_report::body(ui, state, zip),
-        DialogKind::UploadConsent => upload_consent::body(ui, state),
+        DialogKind::UploaderTerms => upload_consent::terms_body(ui, state),
         DialogKind::CatboxConsent { .. } => upload_consent::catbox_body(ui, state),
     }
 }
@@ -290,7 +289,11 @@ fn actions(ui: &mut Ui, state: &mut AppState, kind: &DialogKind, enter: bool) ->
                 return Outcome::Done(None);
             }
         }
-        DialogKind::UploadConsent => return upload_consent::actions(ui, state),
+        DialogKind::UploaderTerms => {
+            if buttons::primary(ui, &t, "Close", "QPushButton[Close]").clicked() || enter {
+                return Outcome::Done(None);
+            }
+        }
         DialogKind::CatboxConsent { context } => {
             return upload_consent::catbox_actions(ui, state, context);
         }

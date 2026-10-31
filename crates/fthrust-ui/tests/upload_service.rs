@@ -40,9 +40,6 @@ fn rig(uploader: &str, extra: Value) -> Rig {
     state.uploader_settings.set("upload_enabled", json!(true));
     state
         .uploader_settings
-        .accept_terms("2026-10-23T00:00:00+00:00");
-    state
-        .uploader_settings
         .accept_catbox("2026-10-23T00:00:00+00:00");
     state
         .uploader_settings
@@ -310,19 +307,10 @@ fn disabled_does_nothing() {
         json!({"upload_enabled": false}),
     );
     let clip = r.clip("h.mp4");
-    r.svc.enqueue(&mut r.state, clip.clone());
-    r.settle();
-    assert!(r.requests().is_empty());
-    assert!(r.state.pending_cards.is_empty());
-    // Old consent counts as disabled too.
-    let mut r = rig(
-        &uploader_ok("https://x/y"),
-        json!({"uploader_terms_accepted_version": "2026-10-15-v3"}),
-    );
-    let clip = r.clip("h.mp4");
     r.svc.enqueue(&mut r.state, clip);
     r.settle();
     assert!(r.requests().is_empty());
+    assert!(r.state.pending_cards.is_empty());
 }
 
 #[test]

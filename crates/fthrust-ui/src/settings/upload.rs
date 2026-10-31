@@ -329,20 +329,24 @@ fn save_settings(state: &mut AppState, failure_title: &str) -> bool {
     }
 }
 
-/// `_on_enabled_changed`: on asks for consent first (then Catbox's), off
-/// saves at once.
+/// `_on_enabled_changed`: on saves and asks for Catbox's consent when it is
+/// the provider; off saves at once. Our own Terms and Privacy Policy are the
+/// link under the checkbox, not a gate.
 pub fn set_enabled(state: &mut AppState, on: bool, _now: f64) {
     if !on {
         state.uploader_settings.set("upload_enabled", json!(false));
         save_settings(state, "Upload Extension");
         return;
     }
-    if !state.uploader_settings.consent_current() {
-        state.consent_checks = [false; 2];
-        state.dialogs.push_modal(DialogKind::UploadConsent);
-        return;
-    }
     enable_now(state);
+}
+
+/// The enable checkbox's label.
+const ENABLE_LABEL: &str = "Enable optional clip uploader";
+
+/// Opens the uploader's Terms and Privacy Policy (read only).
+pub fn show_terms(state: &mut AppState) {
+    state.dialogs.push_modal(DialogKind::UploaderTerms);
 }
 
 fn enable_now(state: &mut AppState) {
@@ -360,7 +364,7 @@ fn ensure_catbox(state: &mut AppState, context: &str) -> bool {
     if form(state).choice != Choice::Catbox || state.uploader_settings.catbox_consent_current() {
         return true;
     }
-    state.consent_checks = [false; 2];
+    state.catbox_check = false;
     state.dialogs.push_modal(DialogKind::CatboxConsent {
         context: context.to_owned(),
     });
@@ -513,14 +517,6 @@ pub fn service(state: &mut AppState, now: f64) {
     let mut keep = Vec::new();
     for r in std::mem::take(&mut state.dialogs.results) {
         match r {
-            DialogResult::UploadConsent(accepted) => {
-                if accepted {
-                    state
-                        .uploader_settings
-                        .accept_terms(&fthrust_core::upload::utc_now_iso());
-                    enable_now(state);
-                }
-            }
             DialogResult::CatboxConsent { accepted, context } => {
                 catbox_answer(state, accepted, &context, now)
             }
@@ -687,18 +683,43 @@ pub fn ui_with(ui: &mut Ui, state: &mut AppState, w: f32, support: SupportButton
     section::flat_header(ui, &t, "Upload", "Upload");
     space(ui, 12.0);
     let mut on = state.uploader_settings.enabled();
-    if check::checkbox_with(
+    let row = check::checkbox_with(
         ui,
         &t,
         &mut on,
-        "Enable optional clip uploader",
+        ENABLE_LABEL,
         true,
         true,
         "QCheckBox[Enable optional clip uploader]",
+    );
+    // The terms link sits at the right end of the checkbox row, in space the
+    // row already has, so nothing below moves. Added after the checkbox, it
+    // takes the clicks over its own rect; it never starts over the label.
+    let label_end = row.rect.left() + check::label_width(ui, ENABLE_LABEL);
+    let link = egui::Rect::from_min_max(
+        egui::pos2(
+            (row.rect.right() - 260.0).max(label_end + 16.0),
+            row.rect.top(),
+        ),
+        row.rect.right_bottom(),
+    );
+    let mut link_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(link)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    let terms = buttons::ghost(
+        &mut link_ui,
+        &t,
+        "Uploader terms & privacy",
+        "uploaderTermsLink",
     )
-    .changed()
-    {
+    .clicked();
+    if row.changed() && !terms {
         set_enabled(state, on, now);
+    }
+    if terms {
+        show_terms(state);
     }
     space(ui, 16.0);
     let p = panels(form(state).choice);

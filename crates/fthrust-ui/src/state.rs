@@ -162,8 +162,9 @@ pub enum DialogKind {
         /// ZIP path.
         zip: std::path::PathBuf,
     },
-    /// The uploader's Terms and Privacy Policy (two checkboxes).
-    UploadConsent,
+    /// The uploader's Terms and Privacy Policy, read only (the Upload
+    /// settings link).
+    UploaderTerms,
     /// Catbox's policies; `context` says what asked (`enable`, `save`,
     /// `test`, `provider:<previous id>`).
     CatboxConsent {
@@ -193,8 +194,6 @@ pub enum DialogResult {
     ClipLength(Option<u32>),
     /// Export preset saved.
     ExportPreset(Option<fthrust_core::export_presets::ExportPreset>),
-    /// The uploader consent dialog closed (accepted or not).
-    UploadConsent(bool),
     /// The Catbox consent dialog closed.
     CatboxConsent {
         /// Accepted.
@@ -525,8 +524,8 @@ pub struct AppState {
     pub saved_clips: Vec<std::path::PathBuf>,
     /// The upload settings form (loaded from the uploader settings).
     pub upload_form: Option<crate::settings::upload::UploadForm>,
-    /// The consent dialogs' checkboxes.
-    pub consent_checks: [bool; 2],
+    /// The Catbox consent dialog's checkbox.
+    pub catbox_check: bool,
     /// The uploader program (`None`: not installed).
     pub uploader_exe: Option<std::path::PathBuf>,
     /// Read the clipboard after this frame (VaultScope paste).
@@ -773,7 +772,7 @@ impl AppState {
             upload_keys: std::collections::HashMap::new(),
             editor_upload_queued_until: None,
             upload_form: None,
-            consent_checks: [false; 2],
+            catbox_check: false,
             uploader_exe: crate::services::upload::uploader_exe(),
             clipboard_read_requested: false,
             clipboard_paste: None,

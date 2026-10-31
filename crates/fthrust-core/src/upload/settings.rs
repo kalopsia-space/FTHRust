@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{CATBOX_LEGAL_VERSION, PRIVACY_VERSION, TERMS_VERSION, truthy};
+use super::{CATBOX_LEGAL_VERSION, truthy};
 use crate::FthrPaths;
 use crate::settings::SettingsStore;
 
@@ -179,22 +179,9 @@ impl UploaderSettings {
         self.flag("upload_enabled")
     }
 
-    /// Both uploader documents accepted at their current versions.
-    pub fn consent_current(&self) -> bool {
-        self.str("uploader_terms_accepted_version") == TERMS_VERSION
-            && self.str("uploader_privacy_accepted_version") == PRIVACY_VERSION
-    }
-
     /// Catbox's policies accepted at the current version.
     pub fn catbox_consent_current(&self) -> bool {
         self.str("catbox_legal_accepted_version") == CATBOX_LEGAL_VERSION
-    }
-
-    /// Records acceptance of the Terms and Privacy Policy at `now`.
-    pub fn accept_terms(&mut self, now: &str) {
-        self.set("uploader_terms_accepted_version", json!(TERMS_VERSION));
-        self.set("uploader_privacy_accepted_version", json!(PRIVACY_VERSION));
-        self.set("uploader_accepted_at", json!(now));
     }
 
     /// Records acceptance of Catbox's policies at `now`.

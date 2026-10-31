@@ -24,7 +24,6 @@ fn home(server: &TestServer, extra: Value) -> Home {
     let paths = FthrPaths::new(dir.path());
     let mut s = UploaderSettings::default();
     s.set("upload_enabled", json!(true));
-    s.accept_terms("2026-10-23T00:00:00+00:00");
     s.set("upload_provider", json!("sftp"));
     s.set("sftp_host", json!("127.0.0.1"));
     s.set("sftp_port", json!(server.port.to_string()));
