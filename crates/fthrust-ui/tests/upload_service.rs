@@ -176,6 +176,53 @@ fn runner_parses_last_line_and_failures() {
     assert_eq!(r.message, "test_connection");
 }
 
+/// A big upload on a slow link takes as long as it takes: the uploader is
+/// stopped when it goes quiet, not when it has been running for a while. It
+/// reports its progress on stderr while bytes move.
+#[test]
+fn a_slow_uploader_that_keeps_reporting_is_not_stopped_but_a_quiet_one_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = ChildSlot::default();
+    let req = json!({"action": "upload"});
+    let limit = Duration::from_millis(500);
+    // Reports every 100 ms for 1.5 s, three times the limit, then answers.
+    let slow = script(
+        dir.path(),
+        "slow",
+        "cat >/dev/null; i=0; while [ $i -lt 15 ]; do echo \"[Uploader] Sent $i.0 of 15.0 MB\" >&2; sleep 0.1; i=$((i+1)); done; echo '{\"ok\":true,\"message\":\"fine\"}'",
+    );
+    let started = Instant::now();
+    let r = run_request(&slow, &req, limit, &slot);
+    assert_eq!((r.ok, r.message.as_str()), (true, "fine"));
+    assert!(
+        started.elapsed() > Duration::from_millis(1200),
+        "{:?}",
+        started.elapsed()
+    );
+    // One that says something and then goes quiet is stopped a limit after
+    // its last word.
+    let quiet = script(
+        dir.path(),
+        "quiet",
+        "cat >/dev/null; echo '[Uploader] Sent 1.0 of 15.0 MB' >&2; sleep 30",
+    );
+    let started = Instant::now();
+    let r = run_request(&quiet, &req, limit, &slot);
+    assert_eq!(
+        (r.ok, r.message.as_str()),
+        (false, "The uploader did not finish in time.")
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // Progress is not the reason for a crash.
+    let crash = script(
+        dir.path(),
+        "crash",
+        "cat >/dev/null; echo '[Uploader] Sent 1.0 of 15.0 MB' >&2; echo 'thread panicked' >&2; exit 101",
+    );
+    let r = run_request(&crash, &req, Duration::from_secs(5), &slot);
+    assert_eq!((r.ok, r.message.as_str()), (false, "thread panicked"));
+}
+
 #[test]
 fn success_updates_card_and_toasts() {
     let mut r = rig(&uploader_ok("https://cdn.example/a.mp4"), json!({}));

@@ -10,7 +10,7 @@ use std::time::Duration;
 use fthrust_core::FthrPaths;
 use fthrust_core::upload::history::History;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_uploader::{Env, Response, handle};
+use fthrust_uploader::{Env, Pulse, Response, handle};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Default)]
@@ -1254,6 +1254,57 @@ mod stalls {
             took: started.elapsed(),
             connections: connections.load(Ordering::SeqCst),
         }
+    }
+
+    /// An upload that takes a long time says now and then that it is still
+    /// moving: the app stops an uploader that has gone quiet, and nothing
+    /// else, so a big clip on a slow link is not cut off for taking long. A
+    /// quick one says nothing.
+    #[tokio::test]
+    async fn a_slow_upload_reports_its_progress_and_a_quick_one_does_not() {
+        let said = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (url, _) = serve(Mode::Slow);
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
+        std::fs::write(&h.clip, vec![5u8; 24 << 20]).unwrap();
+        let mut env = h.env(&url);
+        let sink = said.clone();
+        env.progress = Pulse::new(Duration::from_millis(400), move |line| {
+            sink.lock().unwrap().push(line.to_owned());
+        });
+        env.io_timeout = Duration::from_secs(5);
+        let (ok, message, _) = tokio::time::timeout(Duration::from_secs(30), h.upload(&env))
+            .await
+            .expect("the upload hung");
+        assert!(ok, "{message}");
+        let lines = said.lock().unwrap().clone();
+        assert!(lines.len() >= 3, "over 3 s at 400 ms a line, got {lines:?}");
+        // "[Uploader] Sent 3.5 of 24.0 MB": growing, and never past the end.
+        let sent: Vec<f64> = lines
+            .iter()
+            .map(|l| {
+                let rest = l
+                    .strip_prefix("[Uploader] Sent ")
+                    .unwrap_or_else(|| panic!("{l}"));
+                let (sent, total) = rest.split_once(" of ").unwrap();
+                assert_eq!(total, "24.0 MB", "{l}");
+                sent.parse().unwrap()
+            })
+            .collect();
+        assert!(sent.windows(2).all(|w| w[0] <= w[1]), "{lines:?}");
+        assert!(sent.iter().all(|s| *s <= 24.0), "{lines:?}");
+
+        // Over before the first line is due: nothing to say.
+        let quiet = Arc::new(Mutex::new(Vec::<String>::new()));
+        let srv = server(vec![(200, "https://cdn.example/quick")]);
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+        let mut env = h.env("x");
+        let sink = quiet.clone();
+        env.progress = Pulse::new(fthrust_uploader::PULSE_EVERY, move |line| {
+            sink.lock().unwrap().push(line.to_owned());
+        });
+        let (ok, _, _) = h.upload(&env).await;
+        assert!(ok);
+        assert!(quiet.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

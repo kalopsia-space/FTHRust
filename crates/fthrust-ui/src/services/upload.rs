@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -44,7 +44,11 @@ pub const AGAIN_ACTION: &str = "upload-again:";
 /// Error-bar action that opens the upload settings.
 pub const OPEN_SETTINGS_ACTION: &str = "open-upload-settings";
 
-/// Process timeouts per request kind (`_invoke_plugin`).
+/// How long the uploader may go without a word per request kind
+/// (`_invoke_plugin`), before it is stopped: a program that keeps writing
+/// (an upload reports its progress on stderr) is working, however long it
+/// takes, and a clip as big as it is on a link as slow as it is must not be
+/// cut off for that.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeouts {
     /// `upload`.
@@ -54,6 +58,11 @@ pub struct Timeouts {
     /// `sftp_save` / `sftp_forget`.
     pub credentials: Duration,
 }
+
+/// The start of the lines in which an upload reports its progress on stderr
+/// (`[Uploader] Sent 12.0 of 456.7 MB`). Any output counts as a sign of
+/// life; these are not the reason a crashed uploader gives.
+const PROGRESS_LINE: &str = "[Uploader] Sent ";
 
 impl Default for Timeouts {
     fn default() -> Self {
@@ -134,8 +143,8 @@ pub fn uploader_exe() -> Option<PathBuf> {
 }
 
 /// Runs one request (`_invoke_plugin`): the request on stdin, the last
-/// non-blank stdout line parsed as the reply; the process is killed when
-/// `timeout` passes.
+/// non-blank stdout line parsed as the reply; the process is killed when it
+/// has written nothing, on stdout or stderr, for `timeout`.
 pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildSlot) -> Reply {
     use std::os::unix::process::CommandExt;
     let mut child = match Command::new(exe)
@@ -152,13 +161,28 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(request.to_string().as_bytes());
     }
+    let started = Instant::now();
+    // When the process last wrote a byte, in milliseconds since `started`.
+    let heard = Arc::new(AtomicU64::new(0));
     let read = |r: Option<Box<dyn Read + Send>>| {
+        let heard = heard.clone();
         std::thread::spawn(move || {
-            let mut s = String::new();
+            let mut bytes = Vec::new();
             if let Some(mut r) = r {
-                let _ = r.read_to_string(&mut s);
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match r.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            bytes.extend_from_slice(&chunk[..n]);
+                            heard.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
             }
-            s
+            String::from_utf8_lossy(&bytes).into_owned()
         })
     };
     let out = read(
@@ -173,11 +197,17 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
             .take()
             .map(|s| Box::new(s) as Box<dyn Read + Send>),
     );
-    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break Some(s),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None)
+                if started
+                    .elapsed()
+                    .saturating_sub(Duration::from_millis(heard.load(Ordering::Relaxed)))
+                    < timeout =>
+            {
+                std::thread::sleep(Duration::from_millis(25))
+            }
             _ => {
                 slot.kill();
                 let _ = child.kill();
@@ -193,7 +223,14 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
         return Reply::fail("The uploader did not finish in time.");
     };
     let Some(line) = stdout.lines().rev().find(|l| !l.trim().is_empty()) else {
-        let e = stderr.trim();
+        // What it said, bar the progress lines: how far it got is not why it
+        // died.
+        let said: Vec<&str> = stderr
+            .lines()
+            .filter(|l| !l.starts_with(PROGRESS_LINE))
+            .collect();
+        let e = said.join("\n");
+        let e = e.trim();
         return Reply::fail(if e.is_empty() {
             format!("Uploader exited with code {}", status.code().unwrap_or(-1))
         } else {

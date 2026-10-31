@@ -464,9 +464,11 @@ fn capitalized(who: &str) -> String {
 /// network errors ("Catbox", "your server").
 ///
 /// There is no overall timeout: a clip is as long as it is. The request is
-/// failed when it goes quiet for `limit` instead (see [`send_watched`]).
+/// failed when it goes quiet for `env.io_timeout` instead (see
+/// [`send_watched`]), and while it moves it says so now and then on stderr
+/// (`env.progress`), which is what keeps the app from stopping it.
 async fn multipart_post(
-    limit: Duration,
+    env: &Env,
     who: &str,
     url: &str,
     fields: &[(&str, &str)],
@@ -474,6 +476,7 @@ async fn multipart_post(
     path: &Path,
     authorization: Option<&str>,
 ) -> Result<(u16, String, Option<String>), Failure> {
+    let limit = env.io_timeout;
     let mut prefix = String::new();
     for (name, value) in fields {
         prefix.push_str(&format!(
@@ -500,6 +503,7 @@ async fn multipart_post(
     let length = prefix.len() as u64 + size + footer.len() as u64;
     let watch = Watch::new();
     let (taken, last) = (watch.clone(), watch.clone());
+    let mut count = env.progress.count(length);
     let body =
         futures_util::stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(prefix)) })
             .chain(tokio_util::io::ReaderStream::with_capacity(file, CHUNK))
@@ -507,7 +511,12 @@ async fn multipart_post(
                 last.finish();
                 Ok::<Bytes, std::io::Error>(Bytes::from(footer))
             }))
-            .inspect(move |_| taken.moved());
+            .inspect(move |piece| {
+                taken.moved();
+                if let Ok(bytes) = piece {
+                    count.add(bytes.len() as u64);
+                }
+            });
     // No read timeout: reqwest's covers the whole upload, not its silence.
     let client = client(limit, None, false).map_err(Failure::Permanent)?;
     let mut request = client
@@ -598,7 +607,7 @@ async fn upload_catbox(
         fields.push(("userhash", userhash.as_str()));
     }
     let (status, text, _) = multipart_post(
-        env.io_timeout,
+        env,
         "Catbox",
         &env.catbox_url,
         &fields,
@@ -653,16 +662,8 @@ async fn upload_custom(
     if let Some(problem) = unusable(&url, auth.as_deref()) {
         return Err(Failure::Settings(problem.into()));
     }
-    let (status, text, location) = multipart_post(
-        env.io_timeout,
-        "your server",
-        &url,
-        &[],
-        "clip",
-        path,
-        auth.as_deref(),
-    )
-    .await?;
+    let (status, text, location) =
+        multipart_post(env, "your server", &url, &[], "clip", path, auth.as_deref()).await?;
     if !(200..300).contains(&status) {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let to = redirect_target(&url, location.as_deref());

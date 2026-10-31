@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use fthrust_core::FthrPaths;
 use fthrust_core::upload::history::History;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_uploader::{Env, handle, vault};
+use fthrust_uploader::{Env, Pulse, handle, vault};
 use serde_json::{Value, json};
 use support::sftp_server::{self as srv, TestServer};
 
@@ -513,6 +513,37 @@ async fn timed_upload(
     let (ok, msg) = h.upload(&env).await;
     assert!(ok, "{msg}");
     started.elapsed()
+}
+
+/// A transfer that takes a while says now and then that it is still moving
+/// (the app stops an uploader that goes quiet, and nothing else).
+#[tokio::test]
+async fn a_slow_sftp_upload_reports_its_progress() {
+    let server = srv::start(40).await;
+    // 60 ms round trip: 24 MiB takes a couple of seconds.
+    let port = delayed_relay(server.port, std::time::Duration::from_millis(30)).await;
+    let h = home(
+        &server,
+        json!({"sftp_fingerprint": server.fingerprint(), "sftp_port": port.to_string()}),
+    );
+    std::fs::write(&h.clip, vec![7u8; 24 << 20]).unwrap();
+    let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut env = h.env();
+    let sink = said.clone();
+    env.progress = Pulse::new(std::time::Duration::from_millis(100), move |line| {
+        sink.lock().unwrap().push(line.to_owned());
+    });
+    h.save_password(&env, srv::PASSWORD).await;
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let lines = said.lock().unwrap().clone();
+    assert!(lines.len() >= 2, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.starts_with("[Uploader] Sent ") && l.ends_with(" of 24.0 MB")),
+        "{lines:?}"
+    );
 }
 
 /// Measures the SFTP write window: `cargo t -p fthrust-uploader --test sftp

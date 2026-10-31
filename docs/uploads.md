@@ -70,7 +70,7 @@ Upload to any server you can reach over SFTP, such as a seedbox, a NAS or a web 
 
 **Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. When a server has several host keys and you haven't pinned one, FTHRust asks for the type you already have on record for it (ECDSA, RSA or Ed25519), as `ssh` does, so an old `known_hosts` entry of any of them is enough. A pinned fingerprint decides on its own: `known_hosts` is not consulted for it and does not change which key is asked for. Only password logins are supported for now.
 
-Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops a stuck uploader after 10 minutes), the next upload of the same clip removes the leftover `.part` file (and writes under another name if the server won't let it go). **Forget saved password for this host and user** removes the password from the keyring.
+Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops an uploader that has gone 10 minutes without a word), the next upload of the same clip removes the leftover `.part` file (and writes under another name if the server won't let it go). **Forget saved password for this host and user** removes the password from the keyring.
 
 **VaultScope** in the provider list is SFTP with VaultScope's settings filled in. **Paste VaultScope login** fills the fields from the login details VaultScope gives you.
 
@@ -119,7 +119,7 @@ A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reaso
 
 Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
 
-An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The upload as a whole still has to finish within 10 minutes, after which the app stops it.
+An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The app doesn't cap the time either: while data moves, the uploader reports its progress every 10 seconds or so (HTTP and SFTP alike), and the app stops it only after 10 minutes without a word, so a big clip on a slow connection takes as long as it takes. A failure after an upload has been running for about 9 minutes isn't retried on its own; use **RETRY NOW**.
 
 [Troubleshooting](troubleshooting.md) lists every upload error code.
 

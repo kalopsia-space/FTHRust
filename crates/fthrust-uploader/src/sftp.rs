@@ -18,9 +18,9 @@ use serde_json::{Map, Value, json};
 use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::Env;
 use crate::http::Failure;
 use crate::vault;
+use crate::{Env, Pulse};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// How long removing the leftovers of a failed upload may take in all.
@@ -497,6 +497,7 @@ fn in_folder(folder: &str, name: &str) -> String {
 
 async fn send(
     conn: &Connection,
+    progress: &Pulse,
     path: &Path,
     part: &str,
     remote: &str,
@@ -530,6 +531,7 @@ async fn send(
     // With a full window a write is answered only after the ones ahead of it
     // have gone out, which on a slow link takes longer than a lone request.
     conn.sftp.set_timeout(TRANSFER_TIMEOUT_S);
+    let mut count = progress.count(size);
     let copied = async {
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
@@ -538,6 +540,7 @@ async fn send(
                 break;
             }
             file.write_all(&buf[..n]).await?;
+            count.add(n as u64);
         }
         file.shutdown().await
     }
@@ -588,7 +591,7 @@ pub async fn upload(
         // for as long as that lasts; write under a name of our own.
         part = in_folder(&conn.folder, &spare_part_name(path));
     }
-    let sent = send(&conn, path, &part, &remote, !base.is_empty()).await;
+    let sent = send(&conn, &env.progress, path, &part, &remote, !base.is_empty()).await;
     if sent.is_err() {
         // A failed upload leaves nothing on the server: not the partial
         // file, and not a finished one that then failed its checks. (On a
