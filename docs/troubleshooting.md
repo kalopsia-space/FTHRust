@@ -112,7 +112,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 - **Crashes**: a panic is written, with its backtrace, to `~/.fthr/logs/fthr-crash.log`.
 
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
-- **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through; the log filter above must allow that level too, for example `FTHRUST_LOG=debug`.
+- **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through. Each log's own filter must allow that level too: `RUST_LOG` for the app (it already passes `info`), `FTHRUST_LOG` for the engine, for example `RUST_LOG=debug FTHRUST_LOG=debug`.
 
 If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that.
 

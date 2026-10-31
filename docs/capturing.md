@@ -181,6 +181,8 @@ On first start, FTHRust tests every encoder your system might have with a real o
 | **Intel Quick Sync** | Intel GPUs. |
 | **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, with as many threads as FFmpeg picks for it. |
 
+The preset only applies with **NVIDIA NVENC** chosen, where it is shown. Every other choice, **Automatic** included, runs its encoder at the default preset (P4 Balanced).
+
 **Automatic (recommended)** tries NVENC, then VA-API, then Quick Sync, and **never falls back to software on its own**. If none works you get a clear error rather than a game that suddenly stutters. Choose **Software** yourself if that's what you want.
 
 **Codec** is H.264, HEVC or AV1. Automatic prefers H.264, which every chat app and browser plays, and only moves on to HEVC or AV1 if your encoder can't do H.264. HEVC and AV1 give smaller files at the same quality if your encoder supports them.
@@ -201,7 +203,7 @@ Everything lives under your clips folder, `~/Videos/FTHR Clips` by default (chan
 └── Shared/         size-targeted files made by Share
 ```
 
-Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` (exports and screenshots use a hidden `.<name>.partial.<code>` file) and are never shown in the library. If a crash leaves any of them behind, the next start removes the ones more than a day old from the clips and recordings folders, along with leftover `.fthr-finalize-*` folders. A finished clip or recording is never touched, not even one a crash cut short. If a finished clip can't be renamed into place (a folder on an unusual network or FUSE filesystem), it is kept under its `.partial` name and **CLIP SAVE FAILED** says where; move or rename it yourself, since the startup clean-up removes it once it is a day old.
+Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` (exports and screenshots use a hidden `.<name>.partial.<code>` file) and are never shown in the library. If a crash leaves any of them behind, the next start removes the ones more than a day old from the clips and recordings folders, along with leftover `.fthr-finalize-*` folders. A finished clip or recording is never touched, not even one a crash cut short. If a finished clip can't be renamed into place (a folder on an unusual network or FUSE filesystem), it is saved as `<name>_unpublished.mp4` instead, or kept under its `.partial` name, and **CLIP WAS NOT SAVED** says which. A finished clip left as `.partial` is never removed: once it is a day old, the next start publishes it under its own name, or as `<name> (recovered).mp4` if that is taken, and leaves it alone if renaming still fails.
 
 ## What's not there yet
 
