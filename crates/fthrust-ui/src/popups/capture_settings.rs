@@ -129,6 +129,23 @@ pub fn content(ui: &mut Ui, state: &mut AppState) {
     );
 }
 
+/// Saves the clip length. The replay buffer is sized from it when the
+/// engine starts, so a change that alters the buffer needs a restart: the
+/// Apply row appears, as for the other capture settings (the buffer used to
+/// stay at the old size, and a 120 s clip still came out about 32 s long).
+pub fn set_clip_length(state: &mut AppState, seconds: i64) {
+    let buffer = |s: &AppState| {
+        fthrust_core::capture_config::CaptureConfig::from_settings(&s.settings)
+            .ok()
+            .map(|c| c.buffer_seconds)
+    };
+    let before = buffer(state);
+    state.set_setting("clip_length", json!(seconds));
+    if buffer(state) != before {
+        state.restart_pending = true;
+    }
+}
+
 fn clips_fields(body: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
     let w = body.available_width();
@@ -137,7 +154,7 @@ fn clips_fields(body: &mut Ui, state: &mut AppState) {
     let labels: Vec<String> = clip_values.iter().map(|s| clip_length_label(*s)).collect();
     let sel = clip_values.iter().position(|v| *v == cur_clip).unwrap_or(0);
     if let Some(i) = combo_row(body, state, "Clip length", labels, sel) {
-        state.set_setting("clip_length", json!(clip_values[i]));
+        set_clip_length(state, clip_values[i]);
     }
     // Add custom clip length.
     let opts = Opts {
