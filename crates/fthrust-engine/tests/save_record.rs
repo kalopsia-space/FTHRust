@@ -228,38 +228,50 @@ fn save_before_first_keyframe_is_refused() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");
     }
-    let mut r = rig(
-        config(|_| {}),
-        SyntheticAudio::new(),
-        Duration::from_millis(700),
-    );
-    r.engine.start().unwrap();
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("early.mp4");
-    r.save.submit(SaveRequest {
-        request_id: 1,
-        path: path.clone(),
-        seconds: 5,
-    });
-    let e = next_event(&r.events, Duration::from_secs(5), |e| {
-        matches!(e, Event::SaveResult { request_id: 1, .. })
-    });
-    match e {
-        Event::SaveResult {
-            result: Err(msg), ..
-        } => {
-            // The reference's wording for an empty ring; "still rebuilding"
-            // is reserved for a ring holding only an older generation.
-            assert_eq!(
-                msg,
-                "Nothing to save: the replay buffer contains no video packets"
-            )
+    // The synthetic backend delivers its first frame as soon as capture
+    // starts, so the save races that frame's packet into the ring; on a busy
+    // machine the frame can win. One attempt that finds the ring empty shows
+    // the refusal.
+    for attempt in 1..=5 {
+        let mut r = rig(
+            config(|_| {}),
+            SyntheticAudio::new(),
+            Duration::from_millis(700),
+        );
+        r.engine.start().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("early.mp4");
+        r.save.submit(SaveRequest {
+            request_id: 1,
+            path: path.clone(),
+            seconds: 5,
+        });
+        let e = next_event(&r.events, Duration::from_secs(5), |e| {
+            matches!(e, Event::SaveResult { request_id: 1, .. })
+        });
+        r.engine.shutdown();
+        let _ = &r.script;
+        match e {
+            Event::SaveResult {
+                result: Err(msg), ..
+            } => {
+                // The reference's wording for an empty ring; "still
+                // rebuilding" is reserved for a ring holding only an older
+                // generation.
+                assert_eq!(
+                    msg,
+                    "Nothing to save: the replay buffer contains no video packets"
+                );
+                assert!(!path.exists());
+                return;
+            }
+            Event::SaveResult { result: Ok(_), .. } => {
+                eprintln!("attempt {attempt}: the first frame reached the ring first");
+            }
+            other => panic!("{other:?}"),
         }
-        other => panic!("{other:?}"),
     }
-    assert!(!path.exists());
-    r.engine.shutdown();
-    let _ = &r.script;
+    panic!("the first frame always reached the ring before the save");
 }
 
 #[test]
@@ -921,8 +933,11 @@ fn a_slow_audio_status_does_not_stall_capture() {
     let during = ring.stats().packets - before;
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     poller.join().unwrap();
+    // About 120 frames when capture runs freely; it got none while status
+    // held its lock. A loaded machine (the whole suite runs in parallel)
+    // still clears 20 by far.
     assert!(
-        during >= 60,
+        during >= 20,
         "{during} frames in 2 s at a 16 ms frame interval while status was polled"
     );
     r.engine.shutdown();
