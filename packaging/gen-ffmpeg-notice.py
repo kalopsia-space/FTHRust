@@ -93,6 +93,13 @@ def main():
                 f"{e['id']} is marked gpl but has no signatures and in_libraries (lists of strings, the signatures printable "
                 "and without spaces): verify-appdir.sh needs them to check the claim"
             )
+    # The tables and the GPL wording say what a supporting library is built for.
+    needers = {e["id"]: e for e in supporting}
+    needers.update({e["id"]: e for e in gpl})
+    for lid, e in needers.items():
+        needed_by = e.get("needed_by")
+        if not (isinstance(needed_by, list) and needed_by and all(isinstance(n, str) and n for n in needed_by)):
+            problems.append(f"{lid} has no needed_by (a list of what it is built for): the notices name it")
     on_disk = {f for f in os.listdir(args.licenses) if f.endswith(".txt")} if os.path.isdir(args.licenses) else set()
     for f in sorted(on_disk - {e["text"] for e in libs + supporting}):
         problems.append(f"licenses/ffmpeg/{f} belongs to no library in the registry")

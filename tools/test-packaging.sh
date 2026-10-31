@@ -639,6 +639,14 @@ group_ffnotice() {
         else fail "ffnotice_rejects_unusable_gpl_evidence ($bad)" "$out"; fi
     done
 
+    # A GPL entry (or any supporting library) without needed_by used to stop the generator with a KeyError.
+    for bad in '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.needed_by)' '(.supporting_libraries[] | select(.id == "libogg")) |= del(.needed_by)' '(.supporting_libraries[] | select(.id == "libogg") | .needed_by) = []'; do
+        jq "$bad" "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-noneeded.json"
+        if out="$(python3 -I "$gen" --libraries "$WORK/reg-noneeded.json" 2>&1)"; then fail "ffnotice_supporting_libraries_say_what_they_are_for ($bad)" "exit 0"
+        elif grep -q "has no needed_by" <<<"$out" && ! grep -q Traceback <<<"$out"; then pass "ffnotice_supporting_libraries_say_what_they_are_for ($bad)"
+        else fail "ffnotice_supporting_libraries_say_what_they_are_for ($bad)" "$out"; fi
+    done
+
     printf '{{ffmpeg.licence_summary}}|{{ffmpeg.licence_row}}|{{ffmpeg.configuration_sentence}}|{{ffmpeg.gpl_consequence}}\n<!-- ffmpeg-libraries -->\n' > "$WORK/tpl-licence.md"
     out="$(python3 -I "$gen" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"
     if [ "$(grep -o 'FFTW' <<<"$out" | wc -l)" -ge 3 ] && grep -q 'libavformat' <<<"$out"; then pass ffnotice_licence_wording_names_the_gpl_library

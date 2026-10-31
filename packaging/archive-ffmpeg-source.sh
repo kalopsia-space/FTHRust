@@ -97,7 +97,7 @@ Source of the FFmpeg libraries shipped in FTHRust Clips
 =======================================================
 
 FTHRust Clips bundles the unmodified shared libraries of BtbN's FFmpeg build
-$(field .version) (LGPL, shared):
+$(field .version):
 
   asset    $(field .source.asset)
   from     $(field .source.url)
