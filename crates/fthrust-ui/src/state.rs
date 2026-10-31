@@ -320,6 +320,10 @@ pub struct AppState {
     pub source_label: String,
     /// Settings keys changed since the last engine configure (plan 5 consumes).
     pub changed_keys: Vec<&'static str>,
+    /// Settings changed by a dragged control, written once it settles.
+    pub settings_save_due: Option<std::time::Instant>,
+    /// The theme likewise (colour pickers).
+    pub theme_save_due: Option<std::time::Instant>,
     /// Bottom error bar.
     pub error_bar: crate::shell::error_bar::ErrorBarState,
     /// Running page slide.
@@ -606,6 +610,9 @@ pub enum BrowseKind {
     SoundFile(String),
 }
 
+/// How long a dragged value must stay put before it is written.
+pub const SAVE_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Capture settings profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CaptureProfile {
@@ -667,6 +674,8 @@ impl AppState {
             window: WindowState::default(),
             source_label: "Source".into(),
             changed_keys: Vec::new(),
+            settings_save_due: None,
+            theme_save_due: None,
             error_bar,
             page_slide: Default::default(),
             toolbar_anchors: [egui::Rect::NOTHING; 4],
@@ -820,6 +829,45 @@ impl AppState {
     /// Reads a bool setting with the reference default.
     pub fn flag(&self, key: &str, default: bool) -> bool {
         self.settings.get_bool(key).unwrap_or(default)
+    }
+
+    /// [`set_setting`](Self::set_setting) for a value a slider is still
+    /// dragging: written once it has settled for [`SAVE_SETTLE`], not on
+    /// every step (each save is a create, write, fsync and rename).
+    pub fn set_setting_live(&mut self, key: &'static str, value: Value) {
+        self.settings.set(key, value);
+        if !self.changed_keys.contains(&key) {
+            self.changed_keys.push(key);
+        }
+        self.save_settings_soon();
+    }
+
+    /// Writes the settings once the current drag settles.
+    pub fn save_settings_soon(&mut self) {
+        self.settings_save_due = Some(std::time::Instant::now() + SAVE_SETTLE);
+    }
+
+    /// Writes the theme once the current colour drag settles.
+    pub fn save_theme_soon(&mut self) {
+        self.theme_save_due = Some(std::time::Instant::now() + SAVE_SETTLE);
+    }
+
+    /// Writes deferred settings and theme changes that are due (all of
+    /// them with `force`, at exit).
+    pub fn flush_saves(&mut self, force: bool) {
+        let now = std::time::Instant::now();
+        if self.settings_save_due.is_some_and(|at| force || now >= at) {
+            self.settings_save_due = None;
+            if let Err(e) = self.settings.save() {
+                tracing::warn!("settings not saved: {e}");
+            }
+        }
+        if self.theme_save_due.is_some_and(|at| force || now >= at) {
+            self.theme_save_due = None;
+            if let Err(e) = self.theme.save() {
+                tracing::warn!("theme not saved: {e}");
+            }
+        }
     }
 
     /// Sets a setting and records the key for the next engine configure.

@@ -538,7 +538,7 @@ fn left_column(ui: &mut Ui, state: &mut AppState) {
         Vec2::new(w - 108.0 - 8.0 - 42.0, 26.0),
     )));
     if slider::settings_slider(&mut s, &t, &mut gain, 0.0..=200.0, "micGainSlider").changed() {
-        state.set_setting("mic_volume", json!(gain as i64));
+        state.set_setting_live("mic_volume", json!(gain as i64));
     }
     cell_label(
         ui,
@@ -770,7 +770,7 @@ fn right_column(ui: &mut Ui, state: &mut AppState) {
             let key: &'static str = SOUNDS[i].0;
             let _ = key;
             state.settings.set(&setting, json!(v as i64));
-            let _ = state.settings.save();
+            state.save_settings_soon();
         }
         let vrect = Rect::from_min_size(Pos2::new(top.x + w - 42.0, top.y), Vec2::new(42.0, 26.0));
         let text = format!("{}%", v as i64);

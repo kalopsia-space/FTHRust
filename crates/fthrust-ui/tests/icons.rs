@@ -100,3 +100,29 @@ fn cache_uses_theme_tint_and_custom_override() {
     });
     out.textures_delta.clear();
 }
+
+/// Audit 2026-10-31: textures drawn through the stand-in while the cache
+/// is lent out are kept (Customize and the dialogs used to drop one cache
+/// or the other, re-rasterising every icon each frame).
+#[test]
+fn lent_cache_keeps_what_the_stand_in_drew() {
+    let ctx = egui::Context::default();
+    let tokens = Tokens::default();
+    let mut slot = IconCache::default();
+    slot.texture(&ctx, Icon::Close, 16.0, &tokens);
+    let lent = std::mem::take(&mut slot);
+    slot.texture(&ctx, Icon::Dropdown, 16.0, &tokens);
+    slot.give_back(lent);
+    assert_eq!(slot.len(), 2, "both the header's and the body's textures");
+    // Again: nothing is re-rasterised.
+    let lent = std::mem::take(&mut slot);
+    slot.texture(&ctx, Icon::Dropdown, 16.0, &tokens);
+    slot.give_back(lent);
+    assert_eq!(slot.len(), 2);
+    // A body that cleared the cache (Apply theme) makes the lent one stale.
+    let lent = std::mem::take(&mut slot);
+    slot.clear();
+    slot.texture(&ctx, Icon::Play, 16.0, &tokens);
+    slot.give_back(lent);
+    assert_eq!(slot.len(), 1, "only the fresh texture");
+}

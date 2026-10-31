@@ -336,3 +336,29 @@ fn use_default_commits_the_default_clips_folder() {
     let reloaded = AppState::load(s.paths.clone()).unwrap();
     assert_eq!(reloaded.settings.clips_directory().unwrap(), default);
 }
+
+/// Audit 2026-10-31: a dragged slider writes settings.json once it settles,
+/// not once per step.
+#[test]
+fn dragged_values_are_saved_once_they_settle() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let file = s.paths.settings_file();
+    let on_disk = |f: &std::path::Path| {
+        std::fs::read_to_string(f)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("mic_volume").and_then(serde_json::Value::as_i64))
+    };
+    for v in [101, 120, 150] {
+        s.set_setting_live("mic_volume", serde_json::json!(v));
+        s.flush_saves(false);
+    }
+    assert_eq!(s.settings.get_i64("mic_volume"), Some(150));
+    assert_ne!(on_disk(&file), Some(150), "not written mid-drag");
+    std::thread::sleep(fthrust_ui::state::SAVE_SETTLE + std::time::Duration::from_millis(50));
+    s.flush_saves(false);
+    assert_eq!(on_disk(&file), Some(150), "written once settled");
+    s.set_setting_live("mic_volume", serde_json::json!(80));
+    s.flush_saves(true);
+    assert_eq!(on_disk(&file), Some(80), "exit writes whatever is pending");
+}

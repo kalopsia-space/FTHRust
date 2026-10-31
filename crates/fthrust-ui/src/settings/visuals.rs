@@ -413,7 +413,7 @@ fn options_column(ui: &mut Ui, state: &mut AppState) {
     )
     .changed()
     {
-        state.set_setting("image_overlay_opacity", json!(opacity as i64));
+        state.set_setting_live("image_overlay_opacity", json!(opacity as i64));
     }
     let vrect = Rect::from_min_size(Pos2::new(top.x + w - 34.0, top.y), Vec2::new(34.0, 38.0));
     let text = format!("{}%", opacity as i64);
@@ -591,7 +591,7 @@ fn options_column(ui: &mut Ui, state: &mut AppState) {
     {
         let mut kb2 = kb.clone();
         kb2["intensity"] = json!(intensity as i64);
-        state.set_setting("third_party_keyboard", kb2);
+        state.set_setting_live("third_party_keyboard", kb2);
     }
     let text = format!("{}%", intensity as i64);
     let vrect = Rect::from_min_size(Pos2::new(top.x + w - 34.0, top.y), Vec2::new(34.0, lh));

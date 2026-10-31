@@ -129,7 +129,7 @@ fn draw_centered(
         |ui| body(ui, &mut cell.borrow_mut(), kind),
         |ui| outcome = actions(ui, &mut cell.borrow_mut(), kind, enter),
     );
-    state.icons = icons;
+    state.icons.give_back(icons);
     if frame.close_clicked || escape {
         outcome = Outcome::Done(cancel_result(kind));
     }
@@ -153,7 +153,7 @@ pub fn draw_at(ui: &mut Ui, state: &mut AppState, kind: &DialogKind, pos: Pos2) 
         |ui| body(ui, &mut cell.borrow_mut(), kind),
         |ui| outcome = actions(ui, &mut cell.borrow_mut(), kind, enter),
     );
-    state.icons = icons;
+    state.icons.give_back(icons);
     if frame.close_clicked {
         outcome = Outcome::Done(cancel_result(kind));
     }
