@@ -650,6 +650,62 @@ fn the_same_metadata_failure_is_not_logged_again_by_user_actions() {
     );
 }
 
+#[test]
+fn opening_a_clip_says_so_when_the_clip_details_cannot_be_opened() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    // A directory where the details database belongs: it cannot be opened.
+    let db = r.s.paths.clip_metadata_db();
+    std::fs::create_dir_all(&db).unwrap();
+    assert!(!sessions::open(&mut r.s, &a));
+    let messages = r.messages();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0].0, "Could not open clip");
+    assert!(
+        messages[0].1.contains("cannot start") && messages[0].1.contains("unable to open"),
+        "the message says what and why: {}",
+        messages[0].1
+    );
+    assert!(r.s.editor.is_none() && r.s.editor_slots.is_empty());
+    // Once the database can be opened, the same click works.
+    std::fs::remove_dir(&db).unwrap();
+    assert!(sessions::open(&mut r.s, &a), "{:?}", r.messages());
+}
+
+#[test]
+fn the_details_panel_does_not_open_the_database_every_frame() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.tokens.reduce_motion = true;
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("clip.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    // CLIP DETAILS open, and a directory where the database belongs.
+    s.editor_panels[4] = true;
+    std::fs::create_dir_all(s.paths.clip_metadata_db()).unwrap();
+    let tokens = s.tokens.clone();
+    let warnings = logged_warnings(|| {
+        let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+            fthrust_ui::shell::frame(ui, &mut s);
+        });
+        h.run_steps(60);
+    });
+    assert!(s.clip_metadata.is_none());
+    // One look, one log line; it used to look on every one of the frames
+    // (and say nothing).
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one log line for 60 frames (first: {:?})",
+        warnings.first()
+    );
+}
+
 /// Ticks the editor with `rs` until its first video frame is a texture.
 fn first_video_texture(r: &mut Rig, rs: &egui_wgpu::RenderState) -> Option<egui::TextureId> {
     for _ in 0..500 {

@@ -953,10 +953,9 @@ fn look_body(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState, x: f32, y: f32,
 
 fn details_body(ui: &mut Ui, c: &mut Col<'_>, state: &mut AppState, x: f32, y: f32, w: f32) {
     let t = c.t;
-    if state.clip_metadata.is_none() {
-        state.clip_metadata =
-            fthrust_core::clip_metadata::ClipMetadataStore::open(&state.paths).ok();
-    }
+    // Drawn every frame: a store that will not open is looked at again every
+    // few seconds, not every frame.
+    let _ = super::sessions::store_retrying(state);
     let Some(e) = state.editor.as_mut() else {
         return;
     };

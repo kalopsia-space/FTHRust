@@ -125,6 +125,18 @@ fn activate(state: &mut AppState, index: usize, restore: Option<SessionState>) -
     let path = state.editor_slots[index].path.clone();
     let f = factory(state);
     if store(state).is_none() {
+        // The editor reads the clip's tag, description and draft from the
+        // store before it starts; without it the click would do nothing.
+        let reason = state
+            .clip_metadata_failure
+            .as_ref()
+            .map_or_else(String::new, |(why, _)| format!("\n{why}"));
+        state.dialogs.push_message(
+            "Could not open clip",
+            format!(
+                "The clip details (tags, notes and editor drafts) could not be opened, so the editor cannot start.{reason}"
+            ),
+        );
         return false;
     }
     let Some(st) = state.clip_metadata.as_ref() else {
