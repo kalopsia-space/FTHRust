@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use fthrust_core::FthrPaths;
 use fthrust_core::settings::SettingsStore;
+use fthrust_core::upload::CATBOX_LEGAL_VERSION;
 use fthrust_core::upload::history::{Entry, History};
 use fthrust_core::upload::settings::{Provider, UploaderSettings, migrate_legacy_core_keys};
 use fthrust_core::upload::validate;
-use fthrust_core::upload::{CATBOX_LEGAL_VERSION, PRIVACY_VERSION, TERMS_VERSION};
 use serde_json::{Map, Value, json};
 
 fn home() -> (tempfile::TempDir, FthrPaths) {
@@ -94,21 +94,10 @@ fn settings_save_sorted_atomic_without_password() {
 }
 
 #[test]
-fn consent_versions() {
+fn catbox_consent_version() {
     let (_d, paths) = home();
-    assert_eq!(TERMS_VERSION, "2026-10-23-v4");
-    assert_eq!(PRIVACY_VERSION, "2026-10-23-v4");
     assert_eq!(CATBOX_LEGAL_VERSION, "catbox-legal-2021-03-06");
     let mut s = UploaderSettings::load(&paths);
-    s.set("uploader_terms_accepted_version", json!("2026-10-15-v3"));
-    s.set("uploader_privacy_accepted_version", json!("2026-10-15-v3"));
-    assert!(!s.consent_current());
-    s.accept_terms("2026-10-23T12:00:00+00:00");
-    assert!(s.consent_current());
-    assert_eq!(
-        s.get("uploader_accepted_at"),
-        Some(&json!("2026-10-23T12:00:00+00:00"))
-    );
     assert!(!s.catbox_consent_current());
     s.accept_catbox("2026-10-23T12:00:01+00:00");
     assert!(s.catbox_consent_current());

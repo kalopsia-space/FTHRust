@@ -134,7 +134,7 @@ The app runs `fthrust-uploader` (from `$FTHRUST_UPLOADER`, or next to the app) i
 | `test_connection` | Check settings without uploading. |
 | `sftp_save`, `sftp_forget` | Store or remove an SFTP password in the keyring. |
 
-Every request carries the accepted Terms and Privacy versions, and the uploader refuses if they don't match its own. It reads only from the clips folder and imported folders. The app kills it after 10 minutes for an upload, 75 seconds for a connection test, or 30 seconds for keyring actions.
+The uploader refuses `upload` and `test_connection` while uploads are disabled, and Catbox requests until Catbox's policies are accepted at the current version. It reads only from the clips folder and imported folders. The app kills it after 10 minutes for an upload, 75 seconds for a connection test, or 30 seconds for keyring actions.
 
 ## Design rules
 

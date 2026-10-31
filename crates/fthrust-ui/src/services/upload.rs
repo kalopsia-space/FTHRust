@@ -197,9 +197,9 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
     }
 }
 
-/// Uploads are on: enabled with the current terms accepted.
+/// Uploads are on.
 pub fn uploader_enabled(state: &AppState) -> bool {
-    state.uploader_settings.enabled() && state.uploader_settings.consent_current()
+    state.uploader_settings.enabled()
 }
 
 fn approved_roots(state: &AppState) -> Vec<PathBuf> {

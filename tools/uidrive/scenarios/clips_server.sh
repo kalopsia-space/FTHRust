@@ -26,9 +26,6 @@ step "enable the uploader"; run uidrive click settingsGearBtn
 run uidrive click "settingsTabBtn[General]"
 run uidrive wait "QCheckBox[Enable optional clip uploader]" --timeout 5
 run uidrive click "QCheckBox[Enable optional clip uploader]"
-run uidrive wait-text "Enable FTHR Upload Extension" --timeout 5
-run uidrive click "QCheckBox[terms]"; run uidrive click "QCheckBox[privacy]"
-run uidrive click "QPushButton[accept]"
 run uidrive wait-text "Connect Catbox" --timeout 5
 run uidrive click "QCheckBox[catbox]"; run uidrive click "QPushButton[Accept & continue]"
 run uidrive wait "QLabel[Host]" --timeout 5

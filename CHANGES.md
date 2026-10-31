@@ -2,7 +2,8 @@
 
 ## Fixed
 
-- The uploader ships inside the app as `fthrust-uploader` and is enabled by the consent dialog; the reference's install root, bundle hash and executable were Windows-only, so uploading could not be turned on under Linux.
+- The uploader ships inside the app as `fthrust-uploader` and is turned on with the Upload checkbox; the reference's install root, bundle hash and executable were Windows-only, so uploading could not be turned on under Linux.
+- The uploader's own Terms and Privacy Policy are a link in the Upload settings instead of a gate. The reference made you tick both before enabling uploads, and refused every upload after a version change until you accepted them again. Catbox's consent is unchanged.
 - Saved SFTP passwords work on Linux through the desktop keyring (the reference required Windows Credential Manager).
 - Test connection reports a refused or missing endpoint: your server's 401/403 ("rejected the authorization header") and other 4xx/5xx replies fail, as do Catbox 5xx replies (the reference reported any HTTP reply as reachable).
 - Uploads retry only network errors, 429 and 5xx replies, and never past 540 s (the reference retried every failure, including a bad URL, and could outlive its own 600 s timeout).

@@ -23,11 +23,12 @@ All upload code (HTTP, SFTP and the keyring) lives in its own program, `fthrust-
 <img src="images/settings-general.png" alt="Settings, General tab, with the Upload section" width="860">
 
 1. Open **Settings → General → Upload** and tick **Enable optional clip uploader**.
-2. Read the **Enable FTHR Upload Extension** dialog. It shows the Terms of Service and Privacy Policy for the upload extension. Tick both boxes and press **ACCEPT & ENABLE UPLOADER**.
-3. Choose a **Provider**, fill in its fields, and press **Test connection**.
-4. Press **Save upload settings**.
+2. Choose a **Provider**, fill in its fields, and press **Test connection**. Catbox asks you to accept its own policies first.
+3. Press **Save upload settings**.
 
-If the terms are updated in a later version, you'll be asked to accept them again before the next upload.
+The **Uploader terms & privacy** link at the right of the checkbox opens the upload extension's Terms of Service and Privacy Policy. They apply while uploads are on; there is nothing to accept.
+
+Upload settings carried over from FTHR Clips take effect at first launch, including interval uploads and auto-delete. Check the Upload section after upgrading.
 
 ## Providers
 

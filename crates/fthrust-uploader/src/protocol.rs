@@ -48,12 +48,6 @@ async fn perform(env: &Env, request: &Value) -> Result<Response, String> {
     if matches!(action.as_str(), "upload" | "test_connection") && !settings.enabled() {
         return Err("The Upload Extension is disabled in FTHR Clips.".into());
     }
-    if settings.str("uploader_terms_accepted_version") != fthrust_core::upload::TERMS_VERSION {
-        return Err("Uploader Terms of Service must be accepted again.".into());
-    }
-    if settings.str("uploader_privacy_accepted_version") != fthrust_core::upload::PRIVACY_VERSION {
-        return Err("Uploader Privacy Policy must be accepted again.".into());
-    }
     let config = config_of(request);
     match action.as_str() {
         "sftp_save" => return sftp::save(env, &config).map(Response::done),

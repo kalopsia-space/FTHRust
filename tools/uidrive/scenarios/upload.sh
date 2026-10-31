@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Turn the uploader on through Settings (both consent dialogs), point it at
-# a local server, upload a clip from its card and copy the returned link.
+# Read the uploader terms from the Settings link, turn the uploader on
+# (Catbox's consent only), point it at a local server, upload a clip from
+# its card and copy the returned link.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 "$HERE/upload_server.py" "$BENCH/received" "$BENCH/upload-port" &
@@ -16,12 +17,16 @@ run uidrive wait cardThumb --timeout 15
 step "enable the uploader"; run uidrive click settingsGearBtn
 run uidrive click "settingsTabBtn[General]"
 run uidrive wait "QCheckBox[Enable optional clip uploader]" --timeout 5
+step "terms link opens the documents"; run uidrive click uploaderTermsLink
+run uidrive wait-text "Uploader Terms & Privacy" --timeout 5
+run uidrive shot terms
+run uidrive click "QPushButton[Close]"
+python3 - "$BENCH/home/.fthr/uploader/settings.json" <<'PY' || fail "the link toggled the uploader"
+import json, os, sys
+s = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
+assert not s.get("upload_enabled"), s
+PY
 run uidrive click "QCheckBox[Enable optional clip uploader]"
-run uidrive wait-text "Enable FTHR Upload Extension" --timeout 5
-run uidrive shot consent
-run uidrive click "QCheckBox[terms]"
-run uidrive click "QCheckBox[privacy]"
-run uidrive click "QPushButton[accept]"
 step "accept Catbox"; run uidrive wait-text "Connect Catbox" --timeout 5
 run uidrive click "QCheckBox[catbox]"
 run uidrive click "QPushButton[Accept & continue]"
@@ -42,7 +47,7 @@ s = json.load(open(sys.argv[1]))
 assert s["upload_enabled"] is True, s
 assert s["upload_provider"] == "custom", s
 assert s["upload_server_url"] == f"http://127.0.0.1:{sys.argv[2]}/upload", s
-assert s["uploader_terms_accepted_version"] and s["catbox_legal_accepted_version"], s
+assert s["catbox_legal_accepted_version"], s
 PY
 step "upload from the card"; run uidrive click homeBtn
 run uidrive wait cardShareBtn --timeout 5

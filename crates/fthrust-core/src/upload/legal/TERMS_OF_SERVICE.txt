@@ -1,9 +1,10 @@
 FTHR UPLOAD EXTENSION — TERMS OF SERVICE
-Version: 2026-10-23-v4
+Version: 2026-10-31-v5
 
 The FTHR Upload Extension is optional software that transfers clips to a host
-you select. It stays switched off until you enable uploads and accept these
-Terms and the accompanying Privacy Policy.
+you select. It stays switched off until you enable uploads in Settings. These Terms and
+the accompanying Privacy Policy apply while uploads are enabled; both are
+linked from the Upload settings.
 
 You are responsible for every file uploaded through the extension and must have
 the right to share it. You may not upload illegal content, malware, material
