@@ -47,7 +47,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
-russh = { version = "0.64", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3"
 keyring-core = "1"
 zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
