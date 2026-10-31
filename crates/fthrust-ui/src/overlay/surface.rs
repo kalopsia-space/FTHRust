@@ -35,80 +35,159 @@ pub enum OverlayError {
     Gpu(String),
 }
 
-/// The surface plus its renderer.
+/// The GPU side of a thread's overlays, kept for the thread's lifetime:
+/// one Vulkan device and one egui renderer for every surface it shows.
+/// egui hands a Context's font atlas to a renderer once, so the old
+/// renderer-per-card (with one Context per thread) drew the second and
+/// later cards without any text ("Missing texture") or panicked on a
+/// partial atlas update; it also built a Vulkan instance, adapter and
+/// device for every card. After a GPU error, [`reset`](Self::reset) it and
+/// start a fresh egui Context, since a new renderer has none of the old
+/// one's textures.
+pub struct OverlayGpu {
+    instance: wgpu::Instance,
+    device: Option<GpuDevice>,
+}
+
+struct GpuDevice {
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    renderer: egui_wgpu::Renderer,
+    format: wgpu::TextureFormat,
+}
+
+impl Default for OverlayGpu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OverlayGpu {
+    /// A Vulkan instance; the device comes with the first surface.
+    pub fn new() -> Self {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::VULKAN;
+        OverlayGpu {
+            instance: wgpu::Instance::new(desc),
+            device: None,
+        }
+    }
+
+    /// Drops the device and renderer (after a GPU error).
+    pub fn reset(&mut self) {
+        self.device = None;
+    }
+
+    /// Whether a device is up (tests).
+    pub fn has_device(&self) -> bool {
+        self.device.is_some()
+    }
+
+    fn device_for(&mut self, surface: &wgpu::Surface<'_>) -> Result<&mut GpuDevice, OverlayError> {
+        if let Some(d) = &self.device
+            && !d.adapter.is_surface_supported(surface)
+        {
+            return Err(OverlayError::Gpu(
+                "the overlay GPU cannot present to this output".into(),
+            ));
+        }
+        if self.device.is_none() {
+            let adapter =
+                pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(surface),
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                }))
+                .map_err(|e| OverlayError::Gpu(e.to_string()))?;
+            let (device, queue) =
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                    label: Some("fthrust-overlay"),
+                    ..Default::default()
+                }))
+                .map_err(|e| OverlayError::Gpu(e.to_string()))?;
+            let caps = surface.get_capabilities(&adapter);
+            let format = caps
+                .formats
+                .iter()
+                .copied()
+                .find(|f| {
+                    matches!(
+                        f,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                    )
+                })
+                .or_else(|| caps.formats.first().copied())
+                .ok_or_else(|| OverlayError::Gpu("no surface format".into()))?;
+            let renderer =
+                egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
+            self.device = Some(GpuDevice {
+                adapter,
+                device,
+                queue,
+                renderer,
+                format,
+            });
+        }
+        self.device
+            .as_mut()
+            .ok_or_else(|| OverlayError::Gpu("no device".into()))
+    }
+}
+
+/// One layer surface and its swapchain; drawn with a thread's
+/// [`OverlayGpu`].
 pub struct OverlaySurface {
     // Drop order: the GPU surface and its swapchain go before the
     // wl_surface they were created on.
-    renderer: egui_wgpu::Renderer,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     layer: LayerSurface,
-    ctx: Context,
     size: (u32, u32),
 }
 
 impl OverlaySurface {
     /// Creates a `size` (physical px) overlay on `output` with `margins`
-    /// (top, right, bottom, left); `ctx` must have the app fonts installed.
+    /// (top, right, bottom, left).
     pub fn new(
+        gpu: &mut OverlayGpu,
         output: Option<&str>,
         size: (u32, u32),
         margins: (i32, i32, i32, i32),
-        ctx: Context,
     ) -> Result<Self, OverlayError> {
         OverlaySurface::new_placed(
+            gpu,
             output,
             fthrust_wayland::layer_shell::Placement::Corner { size, margins },
             "fthrust-capture-card",
-            ctx,
         )
     }
 
     /// Creates an overlay with any placement and layer namespace.
     pub fn new_placed(
+        gpu: &mut OverlayGpu,
         output: Option<&str>,
         placement: fthrust_wayland::layer_shell::Placement,
         namespace: &str,
-        ctx: Context,
     ) -> Result<Self, OverlayError> {
         let layer = LayerSurface::create_placed(output, placement, namespace)?;
         let size = layer.size();
         let handles = layer.handles();
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(handles));
-        desc.backends = wgpu::Backends::VULKAN;
-        let instance = wgpu::Instance::new(desc);
         // The handles point at libwayland objects owned by `layer`; the
         // field order drops the GPU surface before the wl_surface.
-        let surface = instance
+        let surface = gpu
+            .instance
             .create_surface(handles)
             .map_err(|e| OverlayError::Gpu(e.to_string()))?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|e| OverlayError::Gpu(e.to_string()))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("fthrust-overlay"),
-            ..Default::default()
-        }))
-        .map_err(|e| OverlayError::Gpu(e.to_string()))?;
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| {
-                matches!(
-                    f,
-                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
-                )
-            })
-            .or_else(|| caps.formats.first().copied())
-            .ok_or_else(|| OverlayError::Gpu("no surface format".into()))?;
+        let dev = gpu.device_for(&surface)?;
+        let caps = surface.get_capabilities(&dev.adapter);
+        if !caps.formats.contains(&dev.format) {
+            return Err(OverlayError::Gpu(format!(
+                "this output does not take {:?}",
+                dev.format
+            )));
+        }
         let alpha_mode = if caps
             .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
@@ -122,7 +201,7 @@ impl OverlaySurface {
         };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
+            format: dev.format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.0.max(1),
             height: size.1.max(1),
@@ -131,18 +210,11 @@ impl OverlaySurface {
             alpha_mode,
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
-        let renderer =
-            egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
-        ctx.set_pixels_per_point(1.0);
+        surface.configure(&dev.device, &config);
         Ok(OverlaySurface {
-            layer,
             surface,
-            device,
-            queue,
             config,
-            renderer,
-            ctx,
+            layer,
             size,
         })
     }
@@ -158,24 +230,34 @@ impl OverlaySurface {
     }
 
     /// Processes Wayland events; `false` once the compositor closed us.
-    pub fn pump(&mut self) -> bool {
+    pub fn pump(&mut self, gpu: &OverlayGpu) -> bool {
         let alive = self.layer.pump(Duration::ZERO);
         let new = self.layer.size();
-        if new != self.size && new.0 > 0 && new.1 > 0 {
+        if new != self.size
+            && new.0 > 0
+            && new.1 > 0
+            && let Some(dev) = &gpu.device
+        {
             self.size = new;
             self.config.width = new.0;
             self.config.height = new.1;
-            self.surface.configure(&self.device, &self.config);
+            self.surface.configure(&dev.device, &self.config);
         }
         alive
     }
 
-    /// Renders one frame: `draw` paints into the full surface rect.
+    /// Renders one frame with `ctx` (the thread's Context, fonts
+    /// installed): `draw` paints into the full surface rect.
     pub fn render(
         &mut self,
+        gpu: &mut OverlayGpu,
+        ctx: &Context,
         time: f64,
         draw: impl FnOnce(&Context, &egui::Painter, Rect),
     ) -> Result<(), OverlayError> {
+        let Some(dev) = gpu.device.as_mut() else {
+            return Err(OverlayError::Gpu("no device".into()));
+        };
         let rect = Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::Vec2::new(self.size.0 as f32, self.size.1 as f32),
@@ -185,7 +267,7 @@ impl OverlaySurface {
             time: Some(time),
             ..Default::default()
         };
-        let ctx = self.ctx.clone();
+        let ctx = ctx.clone();
         ctx.begin_pass(raw);
         {
             let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), rect);
@@ -196,13 +278,13 @@ impl OverlaySurface {
         let mut textures_delta = output.textures_delta;
         for (id, deltas) in &textures_delta.set {
             for delta in deltas {
-                self.renderer
-                    .update_texture(&self.device, &self.queue, *id, delta);
+                dev.renderer
+                    .update_texture(&dev.device, &dev.queue, *id, delta);
             }
         }
-        let result = self.draw_frame(&jobs, output.pixels_per_point);
+        let result = self.draw_frame(dev, &jobs, output.pixels_per_point);
         for id in &textures_delta.free {
-            self.renderer.free_texture(id);
+            dev.renderer.free_texture(id);
         }
         textures_delta.clear();
         result
@@ -210,6 +292,7 @@ impl OverlaySurface {
 
     fn draw_frame(
         &mut self,
+        dev: &mut GpuDevice,
         jobs: &[egui::ClippedPrimitive],
         pixels_per_point: f32,
     ) -> Result<(), OverlayError> {
@@ -217,7 +300,7 @@ impl OverlaySurface {
         let frame = match self.surface.get_current_texture() {
             Cur::Success(f) | Cur::Suboptimal(f) => f,
             Cur::Outdated | Cur::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                self.surface.configure(&dev.device, &self.config);
                 match self.surface.get_current_texture() {
                     Cur::Success(f) | Cur::Suboptimal(f) => f,
                     other => return Err(OverlayError::Gpu(format!("surface texture: {other:?}"))),
@@ -229,7 +312,7 @@ impl OverlaySurface {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
+        let mut encoder = dev
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("fthrust-overlay"),
@@ -239,8 +322,8 @@ impl OverlaySurface {
             pixels_per_point,
         };
         let user_cmds =
-            self.renderer
-                .update_buffers(&self.device, &self.queue, &mut encoder, jobs, &screen);
+            dev.renderer
+                .update_buffers(&dev.device, &dev.queue, &mut encoder, jobs, &screen);
         {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -260,14 +343,14 @@ impl OverlaySurface {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
-            self.renderer.render(&mut pass, jobs, &screen);
+            dev.renderer.render(&mut pass, jobs, &screen);
         }
-        self.queue.submit(
+        dev.queue.submit(
             user_cmds
                 .into_iter()
                 .chain(std::iter::once(encoder.finish())),
         );
-        self.queue.present(frame);
+        dev.queue.present(frame);
         Ok(())
     }
 }
