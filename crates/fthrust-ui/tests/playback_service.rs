@@ -506,24 +506,107 @@ fn pause_stops_audio_and_shows_the_paused_frame() {
         Box::new(NullOutput::new(clock.func())),
     );
     svc.play();
-    clock.run(&mut svc, 400);
+    let shown = *clock.run(&mut svc, 400).last().expect("frames while playing");
     svc.pause();
     let paused = svc.position_ms();
     // Time passes; nothing may move.
     clock.run_with(&mut svc, 400, false);
     assert_eq!(svc.position_ms(), paused, "position after pause");
-    let frame = (0..20)
+    // The picture on screen is the paused frame: the one that was showing when
+    // the pause came, or a newer one the service delivers because that was not
+    // the frame at the paused position.
+    let delivered = (0..20).find_map(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        svc.tick();
+        svc.take_frame()
+    });
+    let on_screen = delivered.map_or(shown, |f| f.pts_ms);
+    assert!(
+        on_screen + 40 >= paused && on_screen <= paused + 40,
+        "paused frame {on_screen} for position {paused}"
+    );
+    svc.close();
+}
+
+#[test]
+fn pausing_on_the_current_picture_does_not_seek_and_playing_continues_from_it() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("clip.mp4");
+    if support::write_test_clip(&clip, 4, true).is_none() {
+        return;
+    }
+    let clock = Clock::new();
+    let mut svc = open(
+        &clip,
+        d.path(),
+        &clock,
+        Box::new(NullOutput::new(clock.func())),
+    );
+    svc.play();
+    let before: Vec<u64> = clock.run(&mut svc, 500);
+    let shown = *before.last().expect("frames while playing");
+    let seeks = svc.video_seeks();
+    svc.pause();
+    // Time passes with the UI still asking for frames: the picture holds.
+    let paused: Vec<u64> = clock.run_with(&mut svc, 300, true);
+    assert_eq!(
+        svc.video_seeks(),
+        seeks,
+        "pausing decoded a GOP again to land on the picture that is on screen"
+    );
+    assert!(
+        paused.iter().all(|&p| p <= shown + 40),
+        "no later picture shows while paused: shown {shown}, then {paused:?}"
+    );
+    // Playing on continues with the frames after the one on screen: none
+    // repeated and no jump.
+    svc.play();
+    let after = clock.run(&mut svc, 400);
+    assert!(!after.is_empty(), "frames after resuming");
+    assert!(after[0] > shown, "{after:?} repeats {shown}");
+    let mut last = shown;
+    for &p in &after {
+        assert!(p > last && p - last <= 100, "a jump from {last} to {p}");
+        last = p;
+    }
+    svc.close();
+}
+
+#[test]
+fn pausing_before_any_picture_was_shown_still_lands_on_the_paused_frame() {
+    let d = tempfile::tempdir().unwrap();
+    let clip = d.path().join("clip.mp4");
+    if support::write_test_clip(&clip, 3, true).is_none() {
+        return;
+    }
+    let clock = Clock::new();
+    let mut svc = open(
+        &clip,
+        d.path(),
+        &clock,
+        Box::new(NullOutput::new(clock.func())),
+    );
+    svc.seek_ms(1500);
+    svc.play();
+    // Nothing was taken since the seek, so the screen may be anywhere: the
+    // worker has to find the frame.
+    let seeks = svc.video_seeks();
+    clock.run_with(&mut svc, 100, false);
+    svc.pause();
+    let paused = svc.position_ms();
+    let frame = (0..100)
         .find_map(|_| {
             std::thread::sleep(Duration::from_millis(10));
             svc.tick();
             svc.take_frame()
         })
-        .expect("the paused frame");
+        .expect("a picture for the paused position");
     assert!(
-        frame.pts_ms + 40 >= paused && frame.pts_ms <= paused + 40,
+        frame.pts_ms + 80 >= paused && frame.pts_ms <= paused + 80,
         "paused frame {} for position {paused}",
         frame.pts_ms
     );
+    assert!(svc.video_seeks() > seeks, "this pause had to seek");
     svc.close();
 }
 

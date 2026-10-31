@@ -475,6 +475,10 @@ pub struct PlaybackService {
     /// Each source's `0:a:N` index (`None`: not an audio stream).
     audio_indexes: Vec<Option<u32>>,
     last_frame_pts: Option<u64>,
+    /// Paused with the frames the worker had read ahead still queued: they
+    /// follow the picture on screen and are what playing continues with, so
+    /// they are not shown while paused.
+    read_ahead_kept: bool,
     eof_reported: bool,
     /// The audio ran out before the video: the wall clock carries the rest.
     audio_ended: bool,
@@ -613,6 +617,7 @@ impl PlaybackService {
             source_labels,
             audio_indexes,
             last_frame_pts: None,
+            read_ahead_kept: false,
             eof_reported: false,
             audio_ended: false,
             proxy: Some((prx, cancel)),
@@ -686,6 +691,7 @@ impl PlaybackService {
         }
         self.playing = true;
         self.eof_reported = false;
+        self.read_ahead_kept = false;
         let pos = self.position_ms();
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Play);
@@ -696,15 +702,32 @@ impl PlaybackService {
         self.arm_guard();
     }
 
+    /// One frame's length, for judging how stale a picture is.
+    fn frame_interval_ms(&self) -> u64 {
+        if self.info.fps > 0.0 {
+            (1000.0 / self.info.fps).ceil() as u64
+        } else {
+            40
+        }
+    }
+
     /// Pauses at the current position.
     pub fn pause(&mut self) {
         if !self.playing {
             return;
         }
         let pos = self.position_ms();
+        // The picture on screen is current when it is the frame at the paused
+        // position, give or take the UI's frame pacing. Then the frames the
+        // worker has decoded ahead are exactly what playing continues with,
+        // and a seek here would decode a whole GOP to land on the picture
+        // that is already shown.
+        let slack = 2 * self.frame_interval_ms() + 16;
+        let current = self
+            .last_frame_pts
+            .is_some_and(|p| p <= pos + 16 && pos <= p + slack);
         self.playing = false;
-        // Stop exactly here: no queued audio tail, and the frame on screen is
-        // the one at the paused position (the worker may have decoded ahead).
+        // Stop exactly here: no queued audio tail.
         if let Some(a) = &self.audio {
             a.send(AudioCmd::Pause);
             a.send(AudioCmd::Seek(pos));
@@ -713,7 +736,12 @@ impl PlaybackService {
         self.clock_base_ms = pos;
         self.clock_started_ms = None;
         self.video.send(VideoCmd::Pause);
-        self.video.send(VideoCmd::Seek(pos));
+        self.read_ahead_kept = current;
+        if !current {
+            // Land on the frame at the paused position (the worker may be
+            // behind, or have decoded past it).
+            self.video.send(VideoCmd::Seek(pos));
+        }
         self.last_frame_pts = None;
         if self.holding {
             self.output.resume();
@@ -732,6 +760,7 @@ impl PlaybackService {
         self.queue.clear();
         self.clock_base_ms = ms;
         self.clock_started_ms = self.playing.then(|| self.now_ms());
+        self.read_ahead_kept = false;
         self.video.send(VideoCmd::Seek(ms));
         self.last_frame_pts = None;
         if self.holding {
@@ -824,13 +853,16 @@ impl PlaybackService {
         let position = self.position_ms();
         let mut frames = self.video.shared.frames.lock().ok()?;
         let mut chosen: Option<Frame> = None;
-        if !self.playing {
+        if !self.playing && !self.read_ahead_kept {
             // Paused: the seek target (or whatever is queued) shows at once.
             if let Some(f) = frames.pop_front() {
                 frames.clear();
                 chosen = Some(f);
             }
         } else {
+            // Playing, or paused on a picture that is current with the frames
+            // read ahead still queued behind it: only a frame whose time has
+            // come is shown.
             while let Some(f) = frames.front() {
                 if f.pts_ms <= position + 16 {
                     chosen = frames.pop_front();
@@ -848,6 +880,11 @@ impl PlaybackService {
             }
         }
         chosen
+    }
+
+    /// How many seeks the video worker has done (diagnostics and tests).
+    pub fn video_seeks(&self) -> u64 {
+        self.video.shared.seeks.load(Ordering::Relaxed)
     }
 
     /// Runs the sync rule, collects worker events, reports EOF.
@@ -883,6 +920,7 @@ impl PlaybackService {
         {
             if p != self.source_path {
                 let pos = self.position_ms();
+                self.read_ahead_kept = false;
                 self.video.send(VideoCmd::Reopen(p, pos));
                 self.events.push(PlaybackEvent::ProxyReady);
             }
