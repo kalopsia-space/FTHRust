@@ -144,6 +144,11 @@ impl FirstDmabufFrame {
         self.waiting_since = None;
     }
 
+    /// Whether the switch's first dmabuf frame is still awaited.
+    pub fn pending(&self) -> bool {
+        self.waiting_since.is_some()
+    }
+
     /// Whether the first dmabuf frame is [`DMABUF_FIRST_FRAME_DEADLINE`]
     /// late at `now`.
     pub fn overdue(&self, now: std::time::Instant) -> bool {
