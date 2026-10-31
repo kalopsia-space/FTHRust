@@ -37,7 +37,13 @@ sudo apt install pkg-config clang libclang-dev \
 sudo pacman -S --needed base-devel clang ffmpeg pipewire wayland libxkbcommon
 ```
 
-Your distribution's FFmpeg is fine for development. Release builds use a pinned FFmpeg instead; see [Packaging](packaging.md).
+Your distribution's FFmpeg is fine for development. CI and the release build use the pinned BtbN FFmpeg instead (see [Packaging](packaging.md)); to build and test against exactly that:
+
+```sh
+packaging/fetch-third-party.sh --ffmpeg
+export PKG_CONFIG_PATH=$PWD/packaging/.cache/ffmpeg/lib/pkgconfig
+LD_LIBRARY_PATH=$PWD/packaging/.cache/ffmpeg/lib cargo test --workspace
+```
 
 ### Compiling
 
@@ -45,7 +51,7 @@ Your distribution's FFmpeg is fine for development. Release builds use a pinned 
 cargo build -p fthrust-ui -p fthrust-engine -p fthrust-uploader
 ```
 
-That gives you three binaries in `target/debug/`: `fthrust` (the app), `fthrust-engine` and `fthrust-uploader`. Add `--release` for an optimised build. The uploader is optional; without it, uploads fail with a message saying it's missing.
+That gives you three binaries in `target/debug/`: `fthrust` (the app), `fthrust-engine` and `fthrust-uploader`. Add `--release` for an optimised build: it links with fat LTO and one codegen unit, which makes the binaries about a third smaller (76.7 MB to 51.7 MB combined) but is a slow link that needs several GB of memory, so use the debug build while you iterate. The uploader is optional; without it, uploads fail with a message saying it's missing.
 
 ## Running from a checkout
 
@@ -80,7 +86,7 @@ Handy variables while developing:
 cargo test --workspace
 ```
 
-About 930 tests across the crates, as integration tests under `crates/*/tests/` plus unit tests. Some notes:
+More than a thousand tests across the crates, as integration tests under `crates/*/tests/` plus unit tests. Some notes:
 
 - `fthrust-ui` tests render real egui frames headlessly through wgpu. They need a Vulkan driver; CI uses Mesa's lavapipe with `WGPU_BACKEND=vulkan`.
 - Font-measuring and fidelity tests need **Noto Sans Mono** (`fonts-noto-mono`), the monospace face the reference screenshots were taken with.
@@ -160,19 +166,24 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 | `tools/check-assets.sh` | Checks bundled assets against their manifests (and against the original app's copies, if `reference/` exists). |
 | `tools/check-version.sh` | The workspace version is the only version: every crate inherits it, a release tag must equal `v<version>`, and built binaries must report it. |
 | `tools/gen-notices.sh [--check]` | Regenerates `THIRD_PARTY_NOTICES.md` with cargo-about, or checks it's current. |
-| `tools/test-packaging.sh` | Tests the packaging scripts and gates. |
+| `tools/test-packaging.sh` | Tests the packaging scripts and gates (groups `fetch`, `gate`, `version`, `install`, `notes`, `archive`, `links`, `ffnotice`). |
+| `tools/uidrive/bench-unit.sh` | Tests the bench launcher's own rules (engine backend names, bench directory, teardown); needs no compositor. |
+| `packaging/check-notice-links.sh FILE...` | Fails on a relative markdown link whose target is missing. CI runs it on the README, `CHANGES.md` and `docs/`; the packaging scripts run it on the notices of every package. |
 | `cargo deny check` | Licence allow-list, security advisories and crate sources, per `deny.toml`. |
 
-`gen-notices.sh` needs `cargo install cargo-about --locked --features cli` at the version pinned in the script.
+`gen-notices.sh` needs cargo-about at the version pinned in the script (`cargo install cargo-about --locked --features cli --version <pin>`, or the prebuilt binary from its releases page; CI uses the latter) and `python3`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request, in two jobs:
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main` (and by hand, and when the release workflow calls it), once per change: a newer push to the same branch cancels the running one. Every job has a timeout, and every third-party action is pinned to a commit SHA with its version in a comment; Dependabot (`.github/dependabot.yml`) proposes the updates, for the actions and for both Cargo workspaces. There are three jobs:
 
-- **check** (Ubuntu 24.04): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full test suite, `cargo deny`, the isolation, asset, version and notices checks, and the packaging tests.
-- **uidrive** (Ubuntu): builds release binaries and runs the `smoke`, `save_clip`, `export`, `overlays` and `upload` scenarios on the bench with a software renderer and a software encoder (there's no GPU on the runners). If one fails, the bench folder is uploaded as the `uidrive-bench` artifact.
+- **check** (Ubuntu 24.04): the quick checks first (`cargo fmt --all --check`, `cargo deny`, the isolation, asset and version scripts, no tracked bytecode, doc links, the notices and the packaging tests), then `cargo clippy`, the engine build and the full test suite. It builds and tests against the pinned BtbN FFmpeg that the AppImage ships, not Ubuntu's. cargo-deny and cargo-about are installed prebuilt, the build is cached with `Swatinem/rust-cache`, and every cargo command is `--locked`.
+- **uidrive-tools** (Ubuntu 24.04): `bench-unit.sh`, and the bench crate's `cargo fmt`, `clippy` and tests, including its live headless-cage test.
+- **uidrive** (Ubuntu 24.04): builds release binaries and runs the `smoke`, `save_clip`, `export`, `overlays` and `upload` scenarios on the bench with a software renderer and a software encoder (there's no GPU on the runners). If one fails, the bench folder is uploaded as the `uidrive-bench` artifact.
 
-`.github/workflows/release.yml` builds the AppImage; see [Packaging](packaging.md#releasing).
+`.github/workflows/release.yml` runs the full CI on a tag before it builds anything, and then builds the AppImage; see [Packaging](packaging.md#releasing).
+
+The Rust toolchain version lives in three places that move together: `rust-toolchain.toml`, the `dtolnay/rust-toolchain` pins in the workflows (a branch named after the version, so Dependabot leaves it alone), and the build image, which reads `rust-toolchain.toml`.
 
 ## Conventions
 

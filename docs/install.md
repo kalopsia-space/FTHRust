@@ -60,6 +60,16 @@ Keep the folder together: the app finds its engine, uploader, FFmpeg and assets 
 
 Only one copy of the app runs at a time. Launching it again just brings the existing window to the front.
 
+### Verifying a download
+
+The `.sha256` files only prove the download is intact. Every release is also built by GitHub Actions from this repository, which signs a build provenance attestation for the AppImage and the tarball. With the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify FTHRust-*-x86_64.AppImage --repo kalopsia-space/FTHRust
+```
+
+The same release carries `FTHRust-ffmpeg-source-<version>.tar.xz`, the source of the bundled FFmpeg libraries; see [Licences and notices](packaging.md#licences-and-notices).
+
 ## Your first minute
 
 When the window opens, the app starts its capture engine and the toolbar status in the top right moves to **Capturing**. From that moment the replay buffer is filling.
