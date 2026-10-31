@@ -445,6 +445,91 @@ fn default_bindings_drive_the_editor() {
     assert!(r.s.editor_sessions.is_empty());
 }
 
+/// Runs `f` and returns what it logged at WARN or above, one string per event.
+fn logged_warnings(f: impl FnOnce()) -> Vec<String> {
+    use std::sync::Mutex;
+    use tracing_subscriber::fmt::MakeWriter;
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Sink {
+        type Writer = Sink;
+        fn make_writer(&'a self) -> Sink {
+            self.clone()
+        }
+    }
+    let sink = Sink::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(sink.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    text.lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn an_unavailable_clip_metadata_database_is_retried_on_a_timer_and_logged_once() {
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    s.editor = Some(Editor::for_tests(
+        &tmp.path().join("clip.mp4"),
+        10_000,
+        Lifecycle::Paused,
+    ));
+    // A directory where the database file belongs: it cannot be opened.
+    let db = s.paths.clip_metadata_db();
+    std::fs::create_dir_all(&db).unwrap();
+    let warnings = logged_warnings(|| {
+        for _ in 0..120 {
+            s.tick_editor(None);
+        }
+    });
+    assert!(s.clip_metadata.is_none());
+    assert_eq!(
+        warnings.len(),
+        1,
+        "two seconds of frames, one log line (first: {:?})",
+        warnings.first()
+    );
+    // The cause goes away. The next frame does not look again...
+    std::fs::remove_dir(&db).unwrap();
+    s.tick_editor(None);
+    assert!(s.clip_metadata.is_none(), "not retried every frame");
+    // ...the retry does, a few seconds later.
+    s.editor_clock = std::time::Instant::now() - Duration::from_secs(30);
+    s.tick_editor(None);
+    assert!(s.clip_metadata.is_some(), "retried after the interval");
+}
+
+#[test]
+fn the_same_metadata_failure_is_not_logged_again_by_user_actions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    std::fs::create_dir_all(s.paths.clip_metadata_db()).unwrap();
+    let warnings = logged_warnings(|| {
+        for _ in 0..20 {
+            assert!(sessions::store(&mut s).is_none());
+        }
+    });
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one log line for 20 attempts (first: {:?})",
+        warnings.first()
+    );
+}
+
 /// Ticks the editor with `rs` until its first video frame is a texture.
 fn first_video_texture(r: &mut Rig, rs: &egui_wgpu::RenderState) -> Option<egui::TextureId> {
     for _ in 0..500 {

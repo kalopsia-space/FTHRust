@@ -48,18 +48,50 @@ fn factory(state: &mut AppState) -> PlayerFactory {
         .clone()
 }
 
-/// The clip metadata store, opened on first use.
-pub(crate) fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
+/// How long the per-frame tick waits before it tries a store that would not
+/// open again.
+const STORE_RETRY_S: f64 = 5.0;
+
+/// The clip metadata store, opened on first use. Each call looks again when
+/// it is closed (it serves clicks and file operations, not frames); a
+/// failure is logged once, until the reason changes.
+pub fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
     if state.clip_metadata.is_none() {
+        let now = state.editor_now();
         match ClipMetadataStore::open(&state.paths) {
-            Ok(s) => state.clip_metadata = Some(s),
+            Ok(s) => {
+                state.clip_metadata = Some(s);
+                state.clip_metadata_failure = None;
+            }
             Err(e) => {
-                tracing::warn!(error = %e, "clip metadata store unavailable");
+                let reason = e.to_string();
+                let known = state
+                    .clip_metadata_failure
+                    .as_ref()
+                    .is_some_and(|(was, _)| *was == reason);
+                if !known {
+                    tracing::warn!(error = %reason, "clip metadata store unavailable");
+                }
+                state.clip_metadata_failure = Some((reason, now));
                 return None;
             }
         }
     }
     state.clip_metadata.as_mut()
+}
+
+/// [`store`] for the frame loop: after a failure it does not look again for
+/// [`STORE_RETRY_S`] (opening touches the disk).
+pub fn store_retrying(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
+    if state.clip_metadata.is_none()
+        && state
+            .clip_metadata_failure
+            .as_ref()
+            .is_some_and(|(_, at)| state.editor_now() < at + STORE_RETRY_S)
+    {
+        return None;
+    }
+    store(state)
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
