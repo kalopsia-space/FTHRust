@@ -249,6 +249,11 @@ enum Job {
 
 struct Done {
     path: PathBuf,
+    /// The uploaded file's key in the history (its canonical path), taken
+    /// before the upload: auto-delete removes the file, and a path that is
+    /// gone cannot be resolved (behind a symlink it would come out spelled
+    /// differently from the uploader's key).
+    key: PathBuf,
     reply: Reply,
     /// The uploaded compressed copy: path, size, plan summary.
     compressed: Option<(PathBuf, u64, String)>,
@@ -304,15 +309,19 @@ impl UploadService {
                     }
                     let done =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.run(&job)))
-                            .unwrap_or_else(|_| Done {
-                                path: match &job {
+                            .unwrap_or_else(|_| {
+                                let path = match &job {
                                     Job::Upload { path, .. } | Job::Compressed { path, .. } => {
                                         path.clone()
                                     }
-                                },
-                                reply: Reply::fail("The upload stopped unexpectedly."),
-                                compressed: None,
-                                compression_failed: false,
+                                };
+                                Done {
+                                    key: path.clone(),
+                                    path,
+                                    reply: Reply::fail("The upload stopped unexpectedly."),
+                                    compressed: None,
+                                    compression_failed: false,
+                                }
                             });
                     if out.send(done).is_err() {
                         break;
@@ -626,19 +635,19 @@ impl UploadService {
         }
         let compressed = done.compressed.is_some();
         // The uploader records the upload in the history itself. When it
-        // could not, its reply still carries the entry: save it from here,
-        // and failing that keep it for this session (below), so the card
-        // still offers the link and the clip is not uploaded again.
-        let uploaded = resolved(
-            done.compressed
-                .as_ref()
-                .map_or(done.path.as_path(), |(copy, _, _)| copy.as_path()),
-        );
-        let unsaved = unsaved_entry(&state.paths, &uploaded, done.reply.upload_info.as_ref());
-        if let Some((copy, size, _)) = &done.compressed {
-            let (original, copy) = (resolved(&done.path), resolved(copy));
+        // could not (it says so in its warning), its reply still carries the
+        // entry: save it from here, and failing that keep it for this
+        // session (below), so the card still offers the link and the clip is
+        // not uploaded again.
+        let unsaved = if done.reply.warning.is_some() {
+            unsaved_entry(&state.paths, &done.key, done.reply.upload_info.as_ref())
+        } else {
+            None
+        };
+        if let Some((_, size, _)) = &done.compressed {
+            let original = resolved(&done.path);
             if let Err(e) = History::update(&state.paths, |h| {
-                h.alias_compressed(&original, &copy, *size)
+                h.alias_compressed(&original, &done.key, *size)
             }) {
                 tracing::warn!(error = %e, "upload history alias not saved");
             }
@@ -646,12 +655,12 @@ impl UploadService {
         self.history_mtime = None;
         self.reload_history(state);
         if let Some(entry) = unsaved {
-            state.upload_history.record(&uploaded, entry);
+            state.upload_history.record(&done.key, entry);
             if let Some((_, size, _)) = &done.compressed {
                 let original = resolved(&done.path);
                 state
                     .upload_history
-                    .alias_compressed(&original, &uploaded, *size);
+                    .alias_compressed(&original, &done.key, *size);
             }
         }
         if let Some(warning) = &done.reply.warning {
@@ -847,12 +856,17 @@ impl Worker {
                 path,
                 roots,
                 clips_root,
-            } => Done {
-                path: path.clone(),
-                reply: self.upload(path, roots, clips_root),
-                compressed: None,
-                compression_failed: false,
-            },
+            } => {
+                // The key before the upload: auto-delete may remove the file.
+                let key = resolved(path);
+                Done {
+                    path: path.clone(),
+                    key,
+                    reply: self.upload(path, roots, clips_root),
+                    compressed: None,
+                    compression_failed: false,
+                }
+            }
             Job::Compressed {
                 path,
                 roots,
@@ -862,15 +876,18 @@ impl Worker {
             } => match compress(path, clips_root, *provider, *limit, &self.cancel) {
                 Err((message, failed)) => Done {
                     path: path.clone(),
+                    key: path.clone(),
                     reply: Reply::fail(message),
                     compressed: None,
                     compression_failed: failed,
                 },
                 Ok((copy, size, summary)) => {
+                    let key = resolved(&copy);
                     let reply = self.upload(&copy, roots, clips_root);
                     let ok = reply.ok;
                     Done {
                         path: path.clone(),
+                        key,
                         reply,
                         compressed: ok.then_some((copy, size, summary)),
                         compression_failed: false,

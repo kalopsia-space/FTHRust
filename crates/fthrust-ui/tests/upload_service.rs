@@ -304,6 +304,51 @@ fn an_entry_the_uploader_could_not_save_is_kept() {
     assert!(!r.svc.busy(), "queued again although it was uploaded");
 }
 
+/// Auto-delete removes the clip, and the clips folder may be reached through
+/// a symlink: the history entry is the uploader's, under the real path. The
+/// app must not add a second one under the symlink's spelling (a path that
+/// is gone cannot be canonicalized any more).
+#[test]
+fn a_deleted_clip_behind_a_symlink_keeps_one_history_entry() {
+    let entry = r#"{"status":"ok","provider":"custom","url":"https://cdn.example/d","raw_url":"https://cdn.example/d"}"#;
+    let script = format!(
+        r#"read -r line
+path=$(echo "$line" | sed 's/.*"path":"\([^"]*\)".*/\1/')
+real=$(readlink -f "$path")
+rm -f "$path"
+mkdir -p "$(dirname "$HISTORY")"
+printf '{{"%s": %s}}' "$real" '{entry}' > "$HISTORY"
+echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry}}}'"#
+    );
+    let mut r = rig(&script, json!({"upload_auto_delete": true}));
+    let real_dir = r.dir.path().join("real");
+    std::fs::create_dir_all(real_dir.join("Desktop")).unwrap();
+    let link = r.dir.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+    r.state
+        .settings
+        .set("clips_directory", json!(link.to_string_lossy()));
+    r.state.library.clips_root = link.clone();
+    let clip = link.join("Desktop").join("d.mp4");
+    std::fs::write(&clip, b"x").unwrap();
+    r.state.library.upsert(&clip, false);
+    let real = clip.canonicalize().unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert!(!real.exists(), "the fake uploader was meant to delete it");
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(r.state.paths.upload_history_file()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        file.as_object().unwrap().len(),
+        1,
+        "a second entry was added: {file}"
+    );
+    assert!(r.state.upload_history.is_uploaded(&real));
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+}
+
 #[test]
 fn queue_dedups_and_waits_for_readiness() {
     let mut r = rig(&uploader_ok("https://cdn.example/b.mp4"), json!({}));
