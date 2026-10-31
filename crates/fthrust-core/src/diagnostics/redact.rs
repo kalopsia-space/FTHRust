@@ -16,20 +16,37 @@ static RE_BEARER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(Bearer|Token|Basic|ApiKey)\s+\S+").expect("valid regex"));
 static RE_HEADER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)\b(Authorization|Cookie|Set-Cookie|X-Api-Key|X-Auth-Token|Proxy-Authorization)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s}\]]+)"#,
+        r#"(?i)\b(Authorization|X-Api-Key|X-Auth-Token|Proxy-Authorization)\s*["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s}\]]+)"#,
     )
     .expect("valid regex")
 });
+/// A cookie header holds several `name=value` pairs separated by `;`, and
+/// every one of them is a credential: an unquoted value runs to the end of
+/// the line.
+static RE_COOKIE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b(Set-Cookie|Cookie)\s*["']?\s*[:=]\s*("[^"]*"|'[^']*'|[^\r\n]*)"#)
+        .expect("valid regex")
+});
+/// `key=value` / `"key": "value"` for secret-looking names. The name may
+/// carry a prefix (`sftp_password`, `client_secret`, `upload_token`,
+/// `catbox_userhash`, `clientSecret`): anything that ends in a secret word.
 static RE_KV: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)\b(token|api_key|apikey|password|passwd|secret|auth|access_token|refresh_token|upload_auth_header)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;&\s}\]]+)"#,
+        r#"(?i)\b([a-z0-9_.-]*(?:token|api_?key|password|passwd|secret|auth|userhash|passphrase)|upload_auth_header)\b(\s*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^,;&\s}\]]+)"#,
     )
     .expect("valid regex")
+});
+/// A userhash named in running text, without a `=` or `:` (`using userhash
+/// 0123456789abcdef`): the hex that follows it.
+static RE_USERHASH_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(\buserhash\b[^\n]{0,40}?\b)[0-9a-f]{8,}\b").expect("valid regex")
 });
 
 /// Strips anything credential-shaped out of `text`: URL user-info, bearer
-/// style schemes, authorization-style headers and secret-looking key/value
-/// pairs. Never fails.
+/// style schemes, authorization-style headers (a `Cookie` header to the end
+/// of the line), secret-looking key/value pairs (`password=`,
+/// `sftp_password=`, `client_secret=`, `upload_token=`...) and a userhash
+/// named in running text. Never fails.
 pub fn redact(text: &str) -> String {
     let text = RE_URL_CREDS.replace_all(text, format!("://{REDACTED}:{REDACTED}@").as_str());
     let text = RE_BEARER.replace_all(&text, |caps: &regex::Captures| {
@@ -38,8 +55,14 @@ pub fn redact(text: &str) -> String {
     let text = RE_HEADER.replace_all(&text, |caps: &regex::Captures| {
         format!("{}: {REDACTED}", &caps[1])
     });
+    let text = RE_COOKIE.replace_all(&text, |caps: &regex::Captures| {
+        format!("{}: {REDACTED}", &caps[1])
+    });
     let text = RE_KV.replace_all(&text, |caps: &regex::Captures| {
         format!("{}{}{REDACTED}", &caps[1], &caps[2])
+    });
+    let text = RE_USERHASH_TEXT.replace_all(&text, |caps: &regex::Captures| {
+        format!("{}{REDACTED}", &caps[1])
     });
     text.into_owned()
 }
@@ -88,37 +111,63 @@ pub fn sanitize_url_for_log(url: &str) -> String {
     }
 }
 
-/// Object keys whose values are always replaced, whatever they contain.
-const SECRET_KEYS: &[&str] = &[
+/// Words that mark a JSON object key as holding a secret wherever they sit in
+/// it (`sftp_password`, `X-Api-Key`, `clientSecret`, `catbox_userhash`).
+const SECRET_WORDS: &[&str] = &[
     "token",
     "api_key",
     "apikey",
     "password",
     "passwd",
+    "passphrase",
     "secret",
-    "auth",
-    "access_token",
-    "refresh_token",
-    "upload_auth_header",
-    "authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-auth-token",
-    "proxy-authorization",
     "userhash",
-    "catbox_userhash",
+    "authorization",
+    "auth_header",
+    "cookie",
+    "credential",
+    "credentials",
 ];
 
+/// `clientSecret` and `X-Api-Key` become `client_secret` and `x_api_key`.
+fn snake_case(key: &str) -> String {
+    let mut out = String::with_capacity(key.len() + 4);
+    let mut prev_lower = false;
+    for c in key.chars() {
+        if c.is_ascii_uppercase() && prev_lower {
+            out.push('_');
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        out.push(match c {
+            '-' | '.' | ' ' => '_',
+            c => c.to_ascii_lowercase(),
+        });
+    }
+    out
+}
+
+/// Whether the value under the JSON object key `key` is always replaced,
+/// whatever it contains.
+fn is_secret_key(key: &str) -> bool {
+    let padded = format!("_{}_", snake_case(key));
+    // A key whose last word ends in `auth` (`auth`, `oauth`, `proxy_auth`) is
+    // a secret, but one that merely starts with it (`auth_required`) is not.
+    padded.ends_with("auth_")
+        || SECRET_WORDS
+            .iter()
+            .any(|w| padded.contains(&format!("_{w}_")))
+}
+
 /// Redacts a JSON value in place: string values go through [`redact_path`],
-/// and any object entry whose key names a secret is replaced wholesale.
+/// and any object entry whose key names a secret (`password`, `sftp_password`,
+/// `upload_token`, `Cookie`...) is replaced wholesale.
 pub fn redact_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(s) => *s = redact_path(s),
         serde_json::Value::Array(items) => items.iter_mut().for_each(redact_json),
         serde_json::Value::Object(map) => {
             for (key, entry) in map.iter_mut() {
-                if SECRET_KEYS.contains(&key.to_ascii_lowercase().as_str()) {
+                if is_secret_key(key) {
                     *entry = serde_json::Value::String(REDACTED.to_string());
                 } else {
                     redact_json(entry);
