@@ -47,6 +47,9 @@ fn sweep_stale_partials(state: &AppState) {
 }
 
 fn main() {
+    // First, while this is the only thread: the log's timestamps are in local
+    // time, and the `time` crate cannot read the offset once another exists.
+    fthrust_core::diagnostics::logging::init_local_offset();
     fthrust_media::capabilities::handle_probe_argv();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--version") {
@@ -92,7 +95,8 @@ fn main() {
         eprintln!("FTHR Clips is already running; activated the existing window");
         return;
     }
-    // While the process is still single-threaded (the log stamps local time).
+    // The activation thread above already exists, so the log's local time
+    // offset was read at the top of main (see init_local_offset).
     let _log = start_logging(&paths);
     paths.restrict_private_dirs();
     let mut state = match AppState::load(paths) {

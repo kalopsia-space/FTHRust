@@ -30,12 +30,25 @@ const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
 /// The local UTC offset, read once. The `time` crate refuses to read it once
-/// other threads exist, so asking per line would give local time for the
-/// start banner and UTC for everything after it; the first call (the banner,
-/// while the app is still single-threaded) decides for the whole log.
+/// a second thread exists (reading the time zone is not thread-safe on Linux),
+/// so asking per line would give local time for the first line and UTC for
+/// the rest; the first call decides for the whole log. That is
+/// [`init_local_offset`] when the process made it first thing, and otherwise
+/// the log's start banner, by which time other threads usually exist and the
+/// answer is UTC. A change of offset during the run (daylight saving time) is
+/// not followed.
 fn local_offset() -> UtcOffset {
     static OFFSET: OnceLock<UtcOffset> = OnceLock::new();
     *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
+}
+
+/// Reads the local UTC offset for the log's timestamps. Call it as the first
+/// thing `main` does: the `time` crate can only read the offset while the
+/// process has a single thread, and `init_logging` runs after the single
+/// instance check has started its activation thread, when it no longer can
+/// (the log would then be in UTC).
+pub fn init_local_offset() {
+    let _ = local_offset();
 }
 
 /// Log files are private to the user (paths, window titles and game names end
@@ -47,11 +60,38 @@ fn private_log() -> OpenOptions {
     options
 }
 
-fn local_now_text() -> String {
-    OffsetDateTime::now_utc()
-        .to_offset(local_offset())
+/// `at` as `YYYY-MM-DD HH:MM:SS` in `offset`.
+fn timestamp_text(at: OffsetDateTime, offset: UtcOffset) -> String {
+    at.to_offset(offset)
         .format(DATE_FORMAT)
         .unwrap_or_else(|_| "0000-00-00 00:00:00".into())
+}
+
+fn local_now_text() -> String {
+    timestamp_text(OffsetDateTime::now_utc(), local_offset())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::{datetime, offset};
+
+    #[test]
+    fn timestamps_are_written_in_the_offset_they_are_given() {
+        let at = datetime!(2026-07-01 23:30:05 UTC);
+        assert_eq!(timestamp_text(at, offset!(UTC)), "2026-07-01 23:30:05");
+        // British summer time: the log's date changes with the hour.
+        assert_eq!(timestamp_text(at, offset!(+1)), "2026-07-02 00:30:05");
+        assert_eq!(timestamp_text(at, offset!(-5:30)), "2026-07-01 18:00:05");
+    }
+
+    #[test]
+    fn the_offset_is_fixed_once_and_stays_fixed() {
+        init_local_offset();
+        let first = local_offset();
+        init_local_offset();
+        assert_eq!(local_offset(), first);
+    }
 }
 
 /// What the app logs without `RUST_LOG`: info for FTHRust's own crates (every
@@ -328,8 +368,9 @@ impl Drop for LogGuard {
 /// else [`DEFAULT_LOG_FILTER`]. Records from the `log` crate (wgpu, winit...)
 /// are forwarded too. Fails if a global subscriber is already installed.
 ///
-/// Call it while the process is still single-threaded: the log's timestamps
-/// use the local offset read then.
+/// The log's timestamps use the local offset read by [`init_local_offset`]
+/// (call that first thing in `main`, while there is a single thread); without
+/// it they are UTC once other threads exist.
 pub fn init_logging(paths: &FthrPaths, app_version: &str) -> Result<LogGuard> {
     let logger = Logger::open(paths, app_version)?;
     logger
