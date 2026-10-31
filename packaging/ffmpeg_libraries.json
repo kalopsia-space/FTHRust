@@ -16,7 +16,10 @@
       "url": "https://www.gnu.org/software/libiconv/",
       "pinned_repo": "https://git.savannah.gnu.org/git/libiconv.git",
       "pinned_commit": "9d19c66d0a1768cffcf497b2db70bf4018b578d7",
-      "text": "iconv.txt"
+      "text": "iconv.txt",
+      "source_files": [
+        "COPYING.LIB"
+      ]
     },
     {
       "id": "zlib",
@@ -28,7 +31,10 @@
       "url": "https://zlib.net/",
       "pinned_repo": "https://github.com/madler/zlib.git",
       "pinned_commit": "e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca",
-      "text": "zlib.txt"
+      "text": "zlib.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "libxml2",
@@ -40,7 +46,10 @@
       "url": "https://gitlab.gnome.org/GNOME/libxml2",
       "pinned_repo": "https://github.com/GNOME/libxml2.git",
       "pinned_commit": "c8eaf2236ff16667970f96f3f01e119c99d38ab2",
-      "text": "libxml2.txt"
+      "text": "libxml2.txt",
+      "source_files": [
+        "Copyright"
+      ]
     },
     {
       "id": "soxr",
@@ -52,7 +61,11 @@
       "url": "https://sourceforge.net/projects/soxr/",
       "pinned_repo": "https://git.code.sf.net/p/soxr/code",
       "pinned_commit": "945b592b70470e29f917f4de89b4281fbbd540c0",
-      "text": "soxr.txt"
+      "text": "soxr.txt",
+      "source_files": [
+        "LICENCE",
+        "COPYING.LGPL"
+      ]
     },
     {
       "id": "openssl",
@@ -64,7 +77,10 @@
       "url": "https://www.openssl.org/",
       "pinned_repo": "https://github.com/openssl/openssl.git",
       "pinned_commit": "openssl-3.6.3",
-      "text": "openssl.txt"
+      "text": "openssl.txt",
+      "source_files": [
+        "LICENSE.txt"
+      ]
     },
     {
       "id": "vmaf",
@@ -76,7 +92,10 @@
       "url": "https://github.com/Netflix/vmaf",
       "pinned_repo": "https://github.com/Netflix/vmaf.git",
       "pinned_commit": "e9909adb89306a270d9c78207bd12acf730279ad",
-      "text": "vmaf.txt"
+      "text": "vmaf.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "fontconfig",
@@ -88,7 +107,10 @@
       "url": "https://www.freedesktop.org/wiki/Software/fontconfig/",
       "pinned_repo": "https://gitlab.freedesktop.org/fontconfig/fontconfig.git",
       "pinned_commit": "939e33ee473d70a790c89b624385c2c0a5875a51",
-      "text": "fontconfig.txt"
+      "text": "fontconfig.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "harfbuzz",
@@ -100,7 +122,10 @@
       "url": "https://harfbuzz.github.io/",
       "pinned_repo": "https://github.com/harfbuzz/harfbuzz.git",
       "pinned_commit": "fe9501b08d1bf40bf5c6285d336157aa82b29e40",
-      "text": "harfbuzz.txt"
+      "text": "harfbuzz.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "freetype",
@@ -112,7 +137,12 @@
       "url": "https://freetype.org/",
       "pinned_repo": "https://gitlab.freedesktop.org/freetype/freetype.git",
       "pinned_commit": "5336c0d4da22a13dab3389eb153b12672fdf841c",
-      "text": "freetype.txt"
+      "text": "freetype.txt",
+      "source_files": [
+        "docs/FTL.TXT",
+        "docs/GPLv2.TXT",
+        "LICENSE.TXT"
+      ]
     },
     {
       "id": "fribidi",
@@ -124,7 +154,10 @@
       "url": "https://github.com/fribidi/fribidi",
       "pinned_repo": "https://github.com/fribidi/fribidi.git",
       "pinned_commit": "069a7e3d31e6aa74f2068a8e0804106ce7906639",
-      "text": "fribidi.txt"
+      "text": "fribidi.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "vulkan-headers",
@@ -137,6 +170,11 @@
       "pinned_repo": "https://github.com/KhronosGroup/Vulkan-Headers.git",
       "pinned_commit": "v1.4.356",
       "text": "vulkan-headers.txt",
+      "source_files": [
+        "LICENSE.md",
+        "LICENSES/Apache-2.0.txt",
+        "LICENSES/MIT.txt"
+      ],
       "note": "Headers; the Vulkan loader is the user's system library."
     },
     {
@@ -150,6 +188,9 @@
       "pinned_repo": "https://github.com/google/shaderc.git",
       "pinned_commit": "49a8724d561c13db22b52f99f2a0e2707a9a9e3c",
       "text": "shaderc.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "note": "Builds glslang and SPIRV-Tools (Apache-2.0, BSD-3-Clause, MIT) with it; their notices are not reproduced here."
     },
     {
@@ -162,7 +203,10 @@
       "url": "https://xiph.org/vorbis/",
       "pinned_repo": "https://github.com/xiph/vorbis.git",
       "pinned_commit": "e3c9861ff096d52378e131ff8c334552e09cdffa",
-      "text": "vorbis.txt"
+      "text": "vorbis.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libxcb",
@@ -174,7 +218,10 @@
       "url": "https://xcb.freedesktop.org/",
       "pinned_repo": "https://gitlab.freedesktop.org/xorg/lib/libxcb.git",
       "pinned_commit": "4d6e1c8fffaf811cf4d0e68ff3bc6f50e62c32c7",
-      "text": "libxcb.txt"
+      "text": "libxcb.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libx11",
@@ -186,7 +233,10 @@
       "url": "https://www.x.org/",
       "pinned_repo": "https://gitlab.freedesktop.org/xorg/lib/libx11.git",
       "pinned_commit": "b10abf6b99d5acf846c26f305f1a14a86360a96c",
-      "text": "libx11.txt"
+      "text": "libx11.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "pulseaudio",
@@ -198,7 +248,10 @@
       "url": "https://www.freedesktop.org/wiki/Software/PulseAudio/",
       "pinned_repo": "https://gitlab.freedesktop.org/pulseaudio/pulseaudio.git",
       "pinned_commit": "b096704c0d42c5e784deb781a07b23cfb5286a82",
-      "text": "pulseaudio.txt"
+      "text": "pulseaudio.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "gmp",
@@ -211,6 +264,11 @@
       "pinned_repo": "https://github.com/BtbN/gmplib.git",
       "pinned_commit": "9994908f090c694f8a152d660dc6852e0c48557a",
       "text": "gmp.txt",
+      "source_files": [
+        "COPYING.LESSERv3",
+        "COPYINGv2",
+        "COPYINGv3"
+      ],
       "note": "BtbN builds its own fork."
     },
     {
@@ -223,7 +281,11 @@
       "url": "https://tukaani.org/xz/",
       "pinned_repo": "https://github.com/tukaani-project/xz.git",
       "pinned_commit": "f3b5688159c60495f48db3942a36509671dfce89",
-      "text": "xz.txt"
+      "text": "xz.txt",
+      "source_files": [
+        "COPYING",
+        "COPYING.LGPLv2.1"
+      ]
     },
     {
       "id": "lcevc-dec",
@@ -235,7 +297,11 @@
       "url": "https://github.com/v-novaltd/LCEVCdec",
       "pinned_repo": "https://github.com/v-novaltd/LCEVCdec.git",
       "pinned_commit": "a254bd474649e5dcd8182689ac414420bfe8d8c3",
-      "text": "lcevc-dec.txt"
+      "text": "lcevc-dec.txt",
+      "source_files": [
+        "LICENSE.md",
+        "COPYING"
+      ]
     },
     {
       "id": "opencl-headers",
@@ -248,6 +314,9 @@
       "pinned_repo": "https://github.com/KhronosGroup/OpenCL-Headers.git",
       "pinned_commit": "a98488062f50c77c3e2edaf9c4f8dca7c41781ec",
       "text": "opencl-headers.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "note": "Headers; the OpenCL runtime is the user's system library."
     },
     {
@@ -261,6 +330,9 @@
       "pinned_repo": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git",
       "pinned_commit": "6ec029531e356102aafe1e236cfd0ddf739939da",
       "text": "amf.txt",
+      "source_files": [
+        "LICENSE.txt"
+      ],
       "note": "Headers; AMD's driver is the user's system library."
     },
     {
@@ -273,7 +345,11 @@
       "url": "https://aomedia.googlesource.com/aom",
       "pinned_repo": "https://aomedia.googlesource.com/aom",
       "pinned_commit": "43f2b6a99000057184332c8c2dd4bedc19fdec6f",
-      "text": "aom.txt"
+      "text": "aom.txt",
+      "source_files": [
+        "LICENSE",
+        "PATENTS"
+      ]
     },
     {
       "id": "aribb24",
@@ -285,7 +361,10 @@
       "url": "https://github.com/nkoriyama/aribb24",
       "pinned_repo": "https://github.com/nkoriyama/aribb24.git",
       "pinned_commit": "5e9be272f96e00f15a2f3c5f8ba7e124862aec38",
-      "text": "aribb24.txt"
+      "text": "aribb24.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "chromaprint",
@@ -297,7 +376,10 @@
       "url": "https://github.com/acoustid/chromaprint",
       "pinned_repo": "https://github.com/acoustid/chromaprint.git",
       "pinned_commit": "ab48115481c14873eb870e7a88334550c68d36c1",
-      "text": "chromaprint.txt"
+      "text": "chromaprint.txt",
+      "source_files": [
+        "LICENSE.md"
+      ]
     },
     {
       "id": "dav1d",
@@ -309,7 +391,10 @@
       "url": "https://code.videolan.org/videolan/dav1d",
       "pinned_repo": "https://code.videolan.org/videolan/dav1d.git",
       "pinned_commit": "c150ba6c9b9be0956330a9ddfee33ad88f2b1bc5",
-      "text": "dav1d.txt"
+      "text": "dav1d.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "nv-codec-headers",
@@ -322,6 +407,9 @@
       "pinned_repo": "https://github.com/FFmpeg/nv-codec-headers.git",
       "pinned_commit": "15ee32753c92faddbabbff11676779618fc6db7e",
       "text": "nv-codec-headers.txt",
+      "source_files": [
+        "include/ffnvcodec/dynlink_loader.h (the notice at the top)"
+      ],
       "note": "No licence file: this is the notice at the top of include/ffnvcodec/dynlink_loader.h. NVENC itself is NVIDIA's driver on the user's system (see licenses/NVIDIA-NVENC-SDK-LICENSE.txt)."
     },
     {
@@ -334,7 +422,10 @@
       "url": "https://github.com/libgme/game-music-emu",
       "pinned_repo": "https://github.com/libgme/game-music-emu.git",
       "pinned_commit": "dd3182a8bdae3ff761438632aace418fbcaed439",
-      "text": "game-music-emu.txt"
+      "text": "game-music-emu.txt",
+      "source_files": [
+        "license.txt"
+      ]
     },
     {
       "id": "kvazaar",
@@ -346,7 +437,10 @@
       "url": "https://github.com/ultravideo/kvazaar",
       "pinned_repo": "https://github.com/ultravideo/kvazaar.git",
       "pinned_commit": "d6815293f34a094e26ba6c50b8644660ddc13e09",
-      "text": "kvazaar.txt"
+      "text": "kvazaar.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "libaribcaption",
@@ -358,7 +452,10 @@
       "url": "https://github.com/xqq/libaribcaption",
       "pinned_repo": "https://github.com/xqq/libaribcaption.git",
       "pinned_commit": "f9d8c50fe5e51c98d101f69d74591295cb568036",
-      "text": "libaribcaption.txt"
+      "text": "libaribcaption.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "libass",
@@ -370,7 +467,10 @@
       "url": "https://github.com/libass/libass",
       "pinned_repo": "https://github.com/libass/libass.git",
       "pinned_commit": "4a05d8127f525943ebf45fdc6497c9e665947f0d",
-      "text": "libass.txt"
+      "text": "libass.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libbluray",
@@ -382,7 +482,10 @@
       "url": "https://www.videolan.org/developers/libbluray.html",
       "pinned_repo": "https://code.videolan.org/videolan/libbluray.git",
       "pinned_commit": "8b4fb6e2562bb86601ea5a2c4140af6d8f3f1cf4",
-      "text": "libbluray.txt"
+      "text": "libbluray.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libjxl",
@@ -395,6 +498,10 @@
       "pinned_repo": "https://github.com/libjxl/libjxl.git",
       "pinned_commit": "f0a1c5ff9dbba51ffa932433ffb80e5e6b6e22a7",
       "text": "libjxl.txt",
+      "source_files": [
+        "LICENSE",
+        "PATENTS"
+      ],
       "note": "Also builds highway and skcms (Apache-2.0, BSD-3-Clause); their notices are not reproduced here."
     },
     {
@@ -408,6 +515,10 @@
       "pinned_repo": "https://svn.code.sf.net/p/lame/svn/trunk/lame",
       "pinned_commit": "",
       "text": "lame.txt",
+      "source_files": [
+        "LICENSE",
+        "COPYING"
+      ],
       "note": "Not pinned by BtbN: its script follows the Subversion trunk."
     },
     {
@@ -420,7 +531,10 @@
       "url": "https://opus-codec.org/",
       "pinned_repo": "https://github.com/xiph/opus.git",
       "pinned_commit": "3da9f7a6db1c05c3996cb363a9d1931a978bf1be",
-      "text": "opus.txt"
+      "text": "opus.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libplacebo",
@@ -432,7 +546,10 @@
       "url": "https://code.videolan.org/videolan/libplacebo",
       "pinned_repo": "https://code.videolan.org/videolan/libplacebo.git",
       "pinned_commit": "05ac2cca6571c04d06369a26825d207781b73f32",
-      "text": "libplacebo.txt"
+      "text": "libplacebo.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "librist",
@@ -444,7 +561,10 @@
       "url": "https://code.videolan.org/rist/librist",
       "pinned_repo": "https://code.videolan.org/rist/librist.git",
       "pinned_commit": "6e2a5e341bbdbe4ca283f3f79e42db8be0f2e027",
-      "text": "librist.txt"
+      "text": "librist.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libssh",
@@ -456,7 +576,10 @@
       "url": "https://www.libssh.org/",
       "pinned_repo": "https://gitlab.com/libssh/libssh-mirror.git",
       "pinned_commit": "689d7320644bbf06f77911a58d41a68e3e68675b",
-      "text": "libssh.txt"
+      "text": "libssh.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "theora",
@@ -468,7 +591,11 @@
       "url": "https://xiph.org/theora/",
       "pinned_repo": "https://github.com/xiph/theora.git",
       "pinned_commit": "28fd5ec77f0ad0e07a371cef1047828116f6bd8a",
-      "text": "theora.txt"
+      "text": "theora.txt",
+      "source_files": [
+        "COPYING",
+        "LICENSE"
+      ]
     },
     {
       "id": "libvpx",
@@ -480,7 +607,11 @@
       "url": "https://www.webmproject.org/code/",
       "pinned_repo": "https://chromium.googlesource.com/webm/libvpx",
       "pinned_commit": "8592391cdb3ef142c56d835788d71d6d4de36a63",
-      "text": "libvpx.txt"
+      "text": "libvpx.txt",
+      "source_files": [
+        "LICENSE",
+        "PATENTS"
+      ]
     },
     {
       "id": "libwebp",
@@ -492,7 +623,11 @@
       "url": "https://developers.google.com/speed/webp",
       "pinned_repo": "https://chromium.googlesource.com/webm/libwebp",
       "pinned_commit": "733c91e461c18cf1127c9ed0a80dccbcfed599d3",
-      "text": "libwebp.txt"
+      "text": "libwebp.txt",
+      "source_files": [
+        "COPYING",
+        "PATENTS"
+      ]
     },
     {
       "id": "libzmq",
@@ -504,7 +639,10 @@
       "url": "https://zeromq.org/",
       "pinned_repo": "https://github.com/zeromq/libzmq.git",
       "pinned_commit": "2e8a6ccb414ca79636392604893c79c3b0d00dc4",
-      "text": "libzmq.txt"
+      "text": "libzmq.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "lilv",
@@ -516,7 +654,10 @@
       "url": "https://drobilla.net/software/lilv.html",
       "pinned_repo": "https://github.com/lv2/lilv.git",
       "pinned_commit": "4b8f30055fa5cb4134a2eb45fc1555bc04289314",
-      "text": "lilv.txt"
+      "text": "lilv.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libvpl",
@@ -528,7 +669,10 @@
       "url": "https://github.com/intel/libvpl",
       "pinned_repo": "https://github.com/intel/libvpl.git",
       "pinned_commit": "d77f9195cf495b937631607333288fd917ae8939",
-      "text": "libvpl.txt"
+      "text": "libvpl.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "openal-soft",
@@ -540,7 +684,11 @@
       "url": "https://openal-soft.org/",
       "pinned_repo": "https://github.com/kcat/openal-soft.git",
       "pinned_commit": "93358135d92f3aa2672ed95f9c6bb04f8482d578",
-      "text": "openal-soft.txt"
+      "text": "openal-soft.txt",
+      "source_files": [
+        "COPYING",
+        "BSD-3Clause"
+      ]
     },
     {
       "id": "openapv",
@@ -552,7 +700,10 @@
       "url": "https://github.com/AcademySoftwareFoundation/openapv",
       "pinned_repo": "https://github.com/AcademySoftwareFoundation/openapv.git",
       "pinned_commit": "9f6fd2a7369db90acec67d99fc57724f1136fb84",
-      "text": "openapv.txt"
+      "text": "openapv.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "opencore-amr",
@@ -565,7 +716,10 @@
       "url": "https://opencore-amr.sourceforge.io/",
       "pinned_repo": "https://git.code.sf.net/p/opencore-amr/code",
       "pinned_commit": "7dba8c32238418ce0b316a852b2224df586ca896",
-      "text": "opencore-amr.txt"
+      "text": "opencore-amr.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "openh264",
@@ -577,7 +731,10 @@
       "url": "https://www.openh264.org/",
       "pinned_repo": "https://github.com/cisco/openh264.git",
       "pinned_commit": "a8e04adb69c79757da014007d4694684a64c7b74",
-      "text": "openh264.txt"
+      "text": "openh264.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "openjpeg",
@@ -589,7 +746,10 @@
       "url": "https://www.openjpeg.org/",
       "pinned_repo": "https://github.com/uclouvain/openjpeg.git",
       "pinned_commit": "9dd4b3c98a78f50a48fb08f27bf198d4ae1d8528",
-      "text": "openjpeg.txt"
+      "text": "openjpeg.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "libopenmpt",
@@ -601,7 +761,10 @@
       "url": "https://lib.openmpt.org/libopenmpt/",
       "pinned_repo": "https://github.com/OpenMPT/openmpt.git",
       "pinned_commit": "4c3ba47c7977fe3016b474f8ed192e619ae85f7d",
-      "text": "libopenmpt.txt"
+      "text": "libopenmpt.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "rav1e",
@@ -613,7 +776,11 @@
       "url": "https://github.com/xiph/rav1e",
       "pinned_repo": "https://github.com/xiph/rav1e.git",
       "pinned_commit": "564ae3b0007ae2b06893fd7166bf88c5a84c5b63",
-      "text": "rav1e.txt"
+      "text": "rav1e.txt",
+      "source_files": [
+        "LICENSE",
+        "PATENTS"
+      ]
     },
     {
       "id": "sdl2",
@@ -625,7 +792,10 @@
       "url": "https://libsdl.org/",
       "pinned_repo": "https://github.com/libsdl-org/SDL.git",
       "pinned_commit": "b8b3f5ef2001cbe7c11f62d41a9bf47d4a2d8b07",
-      "text": "sdl2.txt"
+      "text": "sdl2.txt",
+      "source_files": [
+        "LICENSE.txt"
+      ]
     },
     {
       "id": "snappy",
@@ -637,7 +807,10 @@
       "url": "https://github.com/google/snappy",
       "pinned_repo": "https://github.com/google/snappy.git",
       "pinned_commit": "3ac3722e1bee4b99860a282fb779e8e72fa18163",
-      "text": "snappy.txt"
+      "text": "snappy.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "srt",
@@ -649,7 +822,10 @@
       "url": "https://github.com/Haivision/srt",
       "pinned_repo": "https://github.com/Haivision/srt.git",
       "pinned_commit": "c39196c9a568ae4e3289dd65cf54ba4154deb4a1",
-      "text": "srt.txt"
+      "text": "srt.txt",
+      "source_files": [
+        "LICENSE"
+      ]
     },
     {
       "id": "svt-av1",
@@ -661,7 +837,11 @@
       "url": "https://gitlab.com/AOMediaCodec/SVT-AV1",
       "pinned_repo": "https://gitlab.com/AOMediaCodec/SVT-AV1.git",
       "pinned_commit": "d3c4cb3947a8bfed0aa5a2be996b37bb117fa1bd",
-      "text": "svt-av1.txt"
+      "text": "svt-av1.txt",
+      "source_files": [
+        "LICENSE.md",
+        "PATENTS.md"
+      ]
     },
     {
       "id": "twolame",
@@ -673,7 +853,10 @@
       "url": "https://www.twolame.org/",
       "pinned_repo": "https://github.com/njh/twolame.git",
       "pinned_commit": "6fced852d4d5cfad58cf9dbe3ea619b08e87d398",
-      "text": "twolame.txt"
+      "text": "twolame.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "uavs3d",
@@ -685,7 +868,10 @@
       "url": "https://github.com/uavs3/uavs3d",
       "pinned_repo": "https://github.com/uavs3/uavs3d.git",
       "pinned_commit": "0e20d2c291853f196c68922a264bcd8471d75b68",
-      "text": "uavs3d.txt"
+      "text": "uavs3d.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "libdrm",
@@ -698,6 +884,9 @@
       "pinned_repo": "https://gitlab.freedesktop.org/mesa/drm.git",
       "pinned_commit": "35c7c536d5d1c0124a416a531df4432508d7d2f1",
       "text": "libdrm.txt",
+      "source_files": [
+        "xf86drm.c (the licence comment)"
+      ],
       "note": "No licence file: this is the notice in xf86drm.c."
     },
     {
@@ -711,6 +900,9 @@
       "pinned_repo": "https://github.com/intel/libva.git",
       "pinned_commit": "28388a091187e2ba9e99cb750ec7426f91f73cbb",
       "text": "libva.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "note": "The VA-API drivers are the user's system libraries."
     },
     {
@@ -723,7 +915,10 @@
       "url": "https://github.com/fraunhoferhhi/vvenc",
       "pinned_repo": "https://github.com/fraunhoferhhi/vvenc.git",
       "pinned_commit": "7d60406c66fa1659b8df74dd8d62bc41d3c90157",
-      "text": "vvenc.txt"
+      "text": "vvenc.txt",
+      "source_files": [
+        "LICENSE.txt"
+      ]
     },
     {
       "id": "zimg",
@@ -735,7 +930,10 @@
       "url": "https://github.com/sekrit-twc/zimg",
       "pinned_repo": "https://github.com/sekrit-twc/zimg.git",
       "pinned_commit": "b3647572a01927e2aa8d0b7aaa917207c9c1ae5d",
-      "text": "zimg.txt"
+      "text": "zimg.txt",
+      "source_files": [
+        "COPYING"
+      ]
     },
     {
       "id": "zvbi",
@@ -747,7 +945,10 @@
       "url": "https://github.com/zapping-vbi/zvbi",
       "pinned_repo": "https://github.com/zapping-vbi/zvbi",
       "pinned_commit": "41477c97c8edf7a01f1594b2a95b94f0117eed21",
-      "text": "zvbi.txt"
+      "text": "zvbi.txt",
+      "source_files": [
+        "COPYING.md"
+      ]
     }
   ],
   "supporting_libraries": [
@@ -759,6 +960,9 @@
       "pinned_repo": "https://github.com/xiph/ogg.git",
       "pinned_commit": "06a5e0262cdc28aa4ae6797627a783b5010440f0",
       "text": "libogg.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "libvorbis",
         "libtheora",
@@ -773,6 +977,9 @@
       "pinned_repo": "https://github.com/glennrp/libpng.git",
       "pinned_commit": "d1d0abeffede1cc898ddc3d0e600839cf026d749",
       "text": "libpng.txt",
+      "source_files": [
+        "LICENSE.md"
+      ],
       "needed_by": [
         "aribb24"
       ]
@@ -785,6 +992,9 @@
       "pinned_repo": "https://github.com/google/brotli.git",
       "pinned_commit": "27cc9fe9a4aa8901be3b3ba29f2f09eaddb08f97",
       "text": "brotli.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "libjxl"
       ]
@@ -797,6 +1007,9 @@
       "pinned_repo": "https://github.com/mm2/Little-CMS.git",
       "pinned_commit": "5cc0eec7ae8350dd0f6c4c07b077f78f18dfe970",
       "text": "lcms2.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "libjxl"
       ]
@@ -809,6 +1022,9 @@
       "pinned_repo": "https://github.com/ARMmbed/mbedtls.git",
       "pinned_commit": "v4.1.0",
       "text": "mbedtls.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "librist"
       ]
@@ -821,6 +1037,9 @@
       "pinned_repo": "https://github.com/adah1972/libunibreak.git",
       "pinned_commit": "3ce4bfa3129ff3738046a44a6db533d2ce25af2b",
       "text": "libunibreak.txt",
+      "source_files": [
+        "LICENCE"
+      ],
       "needed_by": [
         "libass"
       ]
@@ -833,6 +1052,9 @@
       "pinned_repo": "https://code.videolan.org/videolan/libudfread.git",
       "pinned_commit": "139a2194525f2745b98a98e4d8fa627d07440176",
       "text": "libudfread.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "libbluray"
       ]
@@ -845,6 +1067,9 @@
       "pinned_repo": "https://github.com/KhronosGroup/SPIRV-Cross.git",
       "pinned_commit": "81fc2ea76c2b8018d4427c380961a6886cb3ce7d",
       "text": "spirv-cross.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "libplacebo",
         "shaderc"
@@ -858,6 +1083,9 @@
       "pinned_repo": "https://github.com/KhronosGroup/SPIRV-Headers.git",
       "pinned_commit": "02c0394e57af6dfdda7f68973df6aa20fc3f5def",
       "text": "spirv-headers.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "shaderc",
         "libplacebo"
@@ -871,6 +1099,9 @@
       "pinned_repo": "https://github.com/BtbN/Vulkan-Shim-Loader.git",
       "pinned_commit": "65b3936528cd92eb4ea3de485d03f858a3850484",
       "text": "vulkan-shim-loader.txt",
+      "source_files": [
+        "LICENSE"
+      ],
       "needed_by": [
         "Vulkan support"
       ]
@@ -883,6 +1114,9 @@
       "pinned_repo": "https://github.com/lv2/lv2.git",
       "pinned_commit": "3c57dae600a5ad8d05acd53ee3490f7d91cb7be6",
       "text": "lv2.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "Lilv"
       ]
@@ -895,6 +1129,9 @@
       "pinned_repo": "https://github.com/drobilla/serd.git",
       "pinned_commit": "b6053bb2a4533e6a8e3821c1061f140d5e666938",
       "text": "serd.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "Lilv"
       ]
@@ -907,6 +1144,9 @@
       "pinned_repo": "https://github.com/drobilla/sord.git",
       "pinned_commit": "4b5232bb91e7f2f1b84df384494d073fabbcd312",
       "text": "sord.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "Lilv"
       ]
@@ -919,6 +1159,9 @@
       "pinned_repo": "https://github.com/lv2/sratom.git",
       "pinned_commit": "9e8ee84eed502e6030ce8bb49694fd28542b08fc",
       "text": "sratom.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "Lilv"
       ]
@@ -931,6 +1174,9 @@
       "pinned_repo": "https://github.com/drobilla/zix.git",
       "pinned_commit": "17d632393f5addb6fa24dda2927b96515407cca7",
       "text": "zix.txt",
+      "source_files": [
+        "COPYING"
+      ],
       "needed_by": [
         "Lilv"
       ]
