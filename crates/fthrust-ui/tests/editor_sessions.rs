@@ -446,6 +446,44 @@ fn default_bindings_drive_the_editor() {
 }
 
 #[test]
+fn escape_in_the_share_picker_closes_the_picker_not_the_editor() {
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    fthrust_ui::editor::share::open_picker(&mut r.s);
+    assert!(r.s.share_picker.is_some());
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.share_picker.is_none(), "Escape closes the picker");
+    assert!(r.s.editor.is_some(), "and leaves the editor open");
+    // With the picker gone Escape is the editor's again.
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+    assert!(r.s.editor.is_none(), "the next Escape closes the editor");
+}
+
+#[test]
+fn editor_shortcuts_wait_while_the_share_picker_is_open() {
+    use fthrust_ui::editor::Lifecycle;
+    let mut r = rig();
+    if opened(&mut r).is_none() {
+        return;
+    }
+    fthrust_ui::editor::share::open_picker(&mut r.s);
+    let mut h = keys_harness(&mut r.s);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    drop(h);
+    assert_ne!(
+        r.s.editor.as_ref().unwrap().lifecycle,
+        Lifecycle::Playing,
+        "Space does not play behind the picker"
+    );
+}
+
+#[test]
 fn escape_leaves_fullscreen_first() {
     let mut r = rig();
     if opened(&mut r).is_none() {

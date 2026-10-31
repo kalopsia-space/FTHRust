@@ -8,7 +8,12 @@ use crate::state::AppState;
 
 /// Runs once per frame before the sessions service.
 pub fn handle(ctx: &egui::Context, state: &mut AppState) {
-    if !state.dialogs.modal.is_empty() || state.editor_dialog.is_some() {
+    // The share picker is modal too: its Escape is its own (it is read later
+    // in the frame, after this would have closed the editor with it).
+    if !state.dialogs.modal.is_empty()
+        || state.editor_dialog.is_some()
+        || state.share_picker.is_some()
+    {
         return;
     }
     for action in triggered_actions(ctx, state, "Application") {
