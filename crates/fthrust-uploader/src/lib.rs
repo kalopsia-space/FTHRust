@@ -11,7 +11,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::time::Duration;
+use std::io::Write;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use fthrust_core::FthrPaths;
 use serde_json::{Map, Value};
@@ -31,11 +33,76 @@ pub const RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(15),
     Duration::from_secs(45),
 ];
-/// No retry starts once this much of the caller's 600 s budget is gone.
+/// No retry starts once an upload has taken this long: a transfer that long
+/// is not repeated on its own, the user is offered RETRY NOW instead.
 pub const DEADLINE: Duration = Duration::from_secs(540);
 /// How long an HTTP upload may go without moving a byte, and how long a
 /// server may take to answer (`timeout=120` in the reference).
 pub const IO_TIMEOUT: Duration = Duration::from_secs(120);
+/// How often an upload that is moving says so on stderr (see [`Pulse`]).
+pub const PULSE_EVERY: Duration = Duration::from_secs(10);
+
+/// What an upload tells the app while it runs: a line on stderr now and then
+/// (`[Uploader] Sent 12.0 of 456.7 MB`) for as long as bytes move. The app
+/// stops an uploader that has gone quiet for ten minutes, and no other, so a
+/// big clip on a slow link is never cut off for taking long.
+#[derive(Clone)]
+pub struct Pulse {
+    every: Duration,
+    sink: Arc<dyn Fn(&str) + Send + Sync>,
+}
+
+impl Pulse {
+    /// Lines on stderr, one every [`PULSE_EVERY`].
+    pub fn stderr() -> Pulse {
+        Pulse::new(PULSE_EVERY, |line| {
+            let _ = writeln!(std::io::stderr(), "{line}");
+        })
+    }
+
+    /// Lines to `sink`, one every `every`.
+    pub fn new(every: Duration, sink: impl Fn(&str) + Send + Sync + 'static) -> Pulse {
+        Pulse {
+            every,
+            sink: Arc::new(sink),
+        }
+    }
+
+    /// The count of one transfer of `total` bytes.
+    pub fn count(&self, total: u64) -> Count {
+        Count {
+            pulse: self.clone(),
+            total,
+            sent: 0,
+            next: Instant::now() + self.every,
+        }
+    }
+}
+
+/// The bytes of one transfer that have gone out.
+pub struct Count {
+    pulse: Pulse,
+    total: u64,
+    sent: u64,
+    next: Instant,
+}
+
+impl Count {
+    /// `bytes` more have gone out; says so when a line is due.
+    pub fn add(&mut self, bytes: u64) {
+        self.sent += bytes;
+        let now = Instant::now();
+        if now >= self.next {
+            self.next = now + self.pulse.every;
+            let mb = |n: u64| format!("{:.1}", n as f64 / (1024.0 * 1024.0));
+            (self.pulse.sink)(&format!(
+                "[Uploader] Sent {} of {} MB",
+                mb(self.sent),
+                mb(self.total)
+            ));
+        }
+    }
+}
 
 /// Where the uploader talks to and keeps its state.
 pub struct Env {
@@ -49,6 +116,8 @@ pub struct Env {
     pub deadline: Duration,
     /// The stall limit of an HTTP upload (see [`IO_TIMEOUT`]).
     pub io_timeout: Duration,
+    /// Where an upload says it is still moving.
+    pub progress: Pulse,
     /// Saved passwords.
     pub vault: Box<dyn vault::Vault>,
 }
@@ -68,6 +137,7 @@ impl Env {
             retry_delays: RETRY_DELAYS.to_vec(),
             deadline: DEADLINE,
             io_timeout: IO_TIMEOUT,
+            progress: Pulse::stderr(),
             vault: Box::new(vault::SecretService),
         };
         #[cfg(debug_assertions)]
@@ -82,7 +152,8 @@ impl Env {
         Ok(env)
     }
 
-    /// A test environment: no retry waits, an in-memory vault.
+    /// A test environment: no retry waits, no progress lines, an in-memory
+    /// vault.
     pub fn for_tests(paths: FthrPaths) -> Env {
         Env {
             paths,
@@ -90,6 +161,7 @@ impl Env {
             retry_delays: vec![Duration::ZERO; RETRY_DELAYS.len()],
             deadline: DEADLINE,
             io_timeout: IO_TIMEOUT,
+            progress: Pulse::new(PULSE_EVERY, |_| {}),
             vault: Box::new(vault::Memory::default()),
         }
     }
@@ -108,9 +180,14 @@ pub struct Response {
     /// same request cannot help. Written only when true.
     pub settings_problem: bool,
     /// What the user should know about an upload that worked: no link came
-    /// back, the clip could not be deleted, the history could not be saved.
-    /// Written only when there is one.
+    /// back, the history could not be saved. Written only when there is one.
     pub warning: Option<String>,
+    /// The clip may be deleted now: the upload is confirmed (a link the app
+    /// can offer, saved in the history), the settings ask for auto-delete and
+    /// the clip is inside the clips folder. The uploader never deletes a clip
+    /// itself; the app does it by the library's own rules, which know about
+    /// the exports, shares and editors of a clip. Written only when true.
+    pub delete: bool,
 }
 
 impl Response {
@@ -122,6 +199,7 @@ impl Response {
             upload_info: None,
             settings_problem: false,
             warning: None,
+            delete: false,
         }
     }
 
@@ -133,6 +211,7 @@ impl Response {
             upload_info: None,
             settings_problem: false,
             warning: None,
+            delete: false,
         }
     }
 
@@ -149,6 +228,9 @@ impl Response {
         }
         if let Some(warning) = &self.warning {
             m.insert("warning".into(), Value::String(warning.clone()));
+        }
+        if self.delete {
+            m.insert("delete".into(), Value::Bool(true));
         }
         Value::Object(m).to_string()
     }

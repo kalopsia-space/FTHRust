@@ -70,7 +70,7 @@ Upload to any server you can reach over SFTP, such as a seedbox, a NAS or a web 
 
 **Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. When a server has several host keys and you haven't pinned one, FTHRust asks for the type you already have on record for it (ECDSA, RSA or Ed25519), as `ssh` does, so an old `known_hosts` entry of any of them is enough. A pinned fingerprint decides on its own: `known_hosts` is not consulted for it and does not change which key is asked for. Only password logins are supported for now.
 
-Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops a stuck uploader after 10 minutes), the next upload of the same clip removes the leftover `.part` file (and writes under another name if the server won't let it go). **Forget saved password for this host and user** removes the password from the keyring.
+Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops an uploader that has gone 10 minutes without a word), the next upload of the same clip removes the leftover `.part` file (and writes under another name if the server won't let it go). **Forget saved password for this host and user** removes the password from the keyring.
 
 **VaultScope** in the provider list is SFTP with VaultScope's settings filled in. **Paste VaultScope login** fills the fields from the login details VaultScope gives you.
 
@@ -82,7 +82,9 @@ Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters
 - **Upload immediately after capture**: every saved clip is uploaded.
 - **Upload on an interval**: new clips are collected and sent every few minutes, hours or days. Files changed in the last 30 seconds are left for the next round.
 
-**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link FTHRust can use: an `http://` or `https://` address, or an SFTP location. If no link comes back, or the reply is something else (a word such as `queued`, a `file:` address, several lines of text), your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead.
+**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link FTHRust can use: an `http://` or `https://` address, or an SFTP location. If no link comes back, or the reply is something else (a word such as `queued`, a `file:` address, several lines of text), your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead, and the card keeps it until you quit the app (renaming the clip included).
+
+The app does the deleting when the upload ends, by the same rules as the clip's **bin button**, and with more care. A clip that an export or share is still working from is kept, whatever was started while the upload ran, and so is a clip that is open in the editor, in the window or parked in the left rail: the bar says so (delete it yourself afterwards; the bar is behind the editor, so you see the note when you close it). The bin button, pressed by you, deletes the clip and closes its editors along with its saved draft; an automatic delete never takes a clip you are working in. Switch auto-delete off while an upload runs and that clip is kept as well.
 
 Auto-delete only ever removes clips inside your clips folder. Clips in folders you've imported are uploaded like any other (interval uploads include them) but are never deleted, even with the box ticked, so a whole imported library can't disappear by accident.
 
@@ -95,7 +97,7 @@ When an upload finishes, a capture card shows **UPLOADED ORIGINAL** (or **UPLOAD
 
 The link isn't copied to your clipboard automatically.
 
-If a server takes a clip but doesn't send a link back, the clip still gets the **Uploaded** badge, and the bar says there is no link to copy. Pressing **Upload clip** on such a clip says so again and offers **UPLOAD AGAIN**, which sends it once more; the immediate and interval modes never do. When the clip can't be deleted after an upload, or the upload couldn't be saved to the history, the bar says that too.
+If a server takes a clip but doesn't send a link back, the clip still gets the **Uploaded** badge, and the bar says there is no link to copy. Pressing **Upload clip** on such a clip shows *Already uploaded* on the card and says so again in the bar, which offers **UPLOAD AGAIN** to send it once more; in the editor, which has no bar, the **Upload** button reads *Upload again* for such a clip. The immediate and interval modes never upload it again. When the clip can't be deleted after an upload, is kept because an export or share is still using it, or the upload couldn't be saved to the history, the bar says that too. These notices hold a link or explain a button, so they show even when *Show capture error messages* is off.
 
 ## What's stored where
 
@@ -113,11 +115,11 @@ The uploader only reads clips inside your clips folder and folders you've import
 
 ## When an upload fails
 
-A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too.
+A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too. Renaming or deleting the clip dismisses its **RETRY NOW** and **UPLOAD AGAIN** notices, since their buttons would name a file that is no longer there; upload from the clip's card instead.
 
 Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
 
-An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The upload as a whole still has to finish within 10 minutes, after which the app stops it.
+An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The app doesn't cap the time either: while data moves, the uploader reports its progress every 10 seconds or so (HTTP and SFTP alike), and the app stops it only after 10 minutes without a word, so a big clip on a slow connection takes as long as it takes. A failure after an upload has been running for about 9 minutes isn't retried on its own; use **RETRY NOW**.
 
 [Troubleshooting](troubleshooting.md) lists every upload error code.
 

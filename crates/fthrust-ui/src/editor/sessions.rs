@@ -393,6 +393,17 @@ pub fn exporting(state: &AppState, path: &Path) -> bool {
     state.export_queue.active_for(path) || state.active_shares.iter().any(|p| same_path(p, path))
 }
 
+/// An editor session holds `path`: the open editor, or one parked in the
+/// rail. A delete the user asks for closes them ([`clip_deleted`]); one the
+/// app starts on its own leaves a clip that is open alone.
+pub fn holds(state: &AppState, path: &Path) -> bool {
+    state.editor_slots.iter().any(|s| same_path(&s.path, path))
+        || state
+            .editor
+            .as_ref()
+            .is_some_and(|e| same_path(&e.path, path))
+}
+
 /// The library renamed `old` to `new`: the editor sessions that hold the
 /// clip follow it (its draft moved with the rest of its metadata), so the
 /// rail still opens the clip.

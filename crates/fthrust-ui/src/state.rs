@@ -527,6 +527,12 @@ pub struct AppState {
     pub uploader_settings: fthrust_core::upload::settings::UploaderSettings,
     /// `~/.fthr/uploader/upload_history.json` (reloaded when it changes).
     pub upload_history: fthrust_core::upload::history::History,
+    /// History entries only this session knows: the upload worked but neither
+    /// the uploader nor the app could write the file. They are put back
+    /// whenever the history is read from its file again, and follow their
+    /// clip when it is renamed.
+    pub upload_unsaved:
+        std::collections::HashMap<std::path::PathBuf, fthrust_core::upload::history::Entry>,
     /// Card overlays of clips being uploaded (`Uploading…`).
     pub upload_status: std::collections::HashMap<std::path::PathBuf, String>,
     /// Clips the engine committed since the last tick (immediate uploads).
@@ -815,6 +821,7 @@ impl AppState {
             upload_requested: None,
             uploader_settings,
             upload_history,
+            upload_unsaved: std::collections::HashMap::new(),
             upload_status: std::collections::HashMap::new(),
             saved_clips: Vec::new(),
             upload_keys: std::collections::HashMap::new(),
