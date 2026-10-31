@@ -555,10 +555,11 @@ impl EngineHandle {
             .clone()
     }
 
-    /// Installs or removes the packet tap.
+    /// Installs or removes the packet tap. Installing one also asks the
+    /// encoder for a keyframe, so a recording starts at once.
     pub fn set_packet_tap(&self, tap: Option<Sender<EncodedPacket>>) {
-        if tap.is_some() {
-            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        let installing = tap.is_some();
+        if installing {
             self.inner.record_overflow.store(false, Ordering::SeqCst);
         }
         *self
@@ -566,6 +567,12 @@ impl EngineHandle {
             .packet_tap
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = tap;
+        // Only once the tap is in place: requested before it, the capture
+        // thread could encode that keyframe and find no tap yet, and the
+        // recording waited for the next scheduled keyframe (up to 2 s).
+        if installing {
+            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Whether the packet tap overflowed since it was installed (cleared on
