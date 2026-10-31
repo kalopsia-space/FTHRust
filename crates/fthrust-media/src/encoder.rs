@@ -375,7 +375,8 @@ impl Encoder {
     }
 
     /// Whether `name` exists and completes a real one-frame 640×360 encode
-    /// (registration alone does not prove a driver works).
+    /// that yields a packet with data (registration alone does not prove a
+    /// driver works, and accepting a frame does not prove it encodes).
     pub fn encoder_works(name: &'static str) -> bool {
         if crate::init().is_err() || !RawEncoder::exists(name) {
             return false;
@@ -411,6 +412,7 @@ impl Encoder {
             .encode(&black, 640 * 4, 640, 360, 0, &mut out)
             .is_ok()
             && encoder.flush(&mut out).is_ok()
+            && out.iter().any(|p| !p.data.is_empty())
     }
 
     /// Name of the encoder in use.

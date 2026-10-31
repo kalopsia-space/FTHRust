@@ -152,6 +152,23 @@ fn real_probe_reports_a_working_software_h264() {
 }
 
 #[test]
+fn an_encoder_must_return_a_packet_to_work() {
+    use fthrust_media::encoder::{encoder_exists, encoder_works};
+    fthrust_media::init().unwrap();
+    // `vnull` takes every frame and never returns a packet.
+    if encoder_exists("vnull") {
+        assert!(!encoder_works("vnull"));
+    } else {
+        eprintln!("skipping the no-packet case: this FFmpeg has no vnull encoder");
+    }
+    for name in ["libopenh264", "libx264"] {
+        if encoder_exists(name) {
+            assert!(encoder_works(name), "{name}");
+        }
+    }
+}
+
+#[test]
 fn child_runner_treats_crash_and_timeout_as_unavailable() {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
