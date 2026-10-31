@@ -420,6 +420,71 @@ async fn failed_rename_cleans_part_and_keeps_clip() {
     assert!(h.clip.exists());
 }
 
+/// The app kills a stuck uploader (SIGKILL), so nothing can clean up after
+/// an upload that dies mid-transfer. The next upload of the same clip does:
+/// the partial file has a name that only depends on the clip.
+#[tokio::test]
+async fn a_killed_upload_is_cleaned_up_by_the_next_one_of_the_same_clip() {
+    let server = srv::start(20).await;
+    let h = home(&server, pinned(&server));
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let up = server.root.join("up");
+    // Somebody else's partial file stays where it is.
+    std::fs::write(up.join("fthr-someone-else.part"), b"theirs").unwrap();
+
+    // The upload hangs in its first write. Kill it (drop it, as SIGKILL
+    // would) once its partial file is on the server.
+    server.knobs.stall_writes.store(true, Ordering::SeqCst);
+    let partial_appears = async {
+        while !srv::names(&up)
+            .iter()
+            .any(|n| n.ends_with(".part") && n != "fthr-someone-else.part")
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    let killed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::select! {
+            r = h.upload(&env) => panic!("the upload was meant to hang: {r:?}"),
+            () = partial_appears => {}
+        }
+    })
+    .await;
+    assert!(killed.is_ok(), "no partial file ever appeared");
+    let left = srv::names(&up);
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(
+        left.iter().any(|n| n == "fthr-someone-else.part"),
+        "{left:?}"
+    );
+
+    server.knobs.stall_writes.store(false, Ordering::SeqCst);
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let names = srv::names(&up);
+    assert_eq!(
+        names.len(),
+        2,
+        "the dead attempt's file is still there: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "fthr-someone-else.part"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.ends_with(".MP4") || n.ends_with(".mp4")),
+        "{names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.ends_with(".part") && n != "fthr-someone-else.part")
+    );
+}
+
 #[tokio::test]
 async fn chmod_failure_fails_without_link() {
     let server = srv::start(11).await;
@@ -439,6 +504,10 @@ async fn chmod_failure_fails_without_link() {
             .get(&h.clip.canonicalize().unwrap())
             .is_none()
     );
+    // The file was renamed into place before the chmod failed: a failed
+    // upload leaves nothing on the server.
+    let left = srv::names(&server.root.join("up"));
+    assert!(left.is_empty(), "the failed upload left {left:?}");
 }
 
 #[tokio::test]

@@ -70,7 +70,7 @@ Upload to any server you can reach over SFTP, such as a seedbox, a NAS or a web 
 
 **Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. When a server has several host keys, FTHRust asks for the type you already have on record for it (ECDSA, RSA or Ed25519), as `ssh` does, so an old `known_hosts` entry of any of them is enough. Only password logins are supported for now.
 
-Files are uploaded as `fthr-<random>.mp4` under a temporary name, renamed when complete, and size-checked. **Forget saved password for this host and user** removes the password from the keyring.
+Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops a stuck uploader after 10 minutes), the next upload of the same clip removes the leftover `.part` file. **Forget saved password for this host and user** removes the password from the keyring.
 
 **VaultScope** in the provider list is SFTP with VaultScope's settings filled in. **Paste VaultScope login** fills the fields from the login details VaultScope gives you.
 

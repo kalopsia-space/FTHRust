@@ -23,6 +23,9 @@ pub struct Knobs {
     pub auth_attempts: AtomicUsize,
     pub fail_rename: AtomicBool,
     pub fail_chmod_644: AtomicBool,
+    /// Writes never get an answer: the client is stuck in the middle of the
+    /// transfer, the way a killed uploader leaves the server.
+    pub stall_writes: AtomicBool,
 }
 
 pub struct TestServer {
@@ -306,6 +309,9 @@ impl russh_sftp::server::Handler for Sftp {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        if self.knobs.stall_writes.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
         let f = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
         f.seek(SeekFrom::Start(offset)).map_err(code)?;
         f.write_all(&data).map_err(code)?;

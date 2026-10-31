@@ -3,6 +3,7 @@
 //! credential is sent, uploads written as `.part`, size-checked and renamed.
 
 use std::borrow::Cow;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKey, PublicKeyOrCertific
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use serde_json::{Map, Value, json};
+use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::Env;
@@ -21,6 +23,8 @@ use crate::http::Failure;
 use crate::vault;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long removing the leftovers of a failed upload may take in all.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SFTP_TIMEOUT_S: u64 = 20;
 const TRANSFER: &str =
     "SFTP connection or transfer failed. Check the server, folder and permissions.";
@@ -433,6 +437,25 @@ fn remote_name(path: &Path) -> String {
     format!("fthr-{hex}{suffix}")
 }
 
+/// The name an upload of `path` is written under until it is whole. It only
+/// depends on the clip, so an attempt that died with no chance to clean up
+/// (the app ends a stuck uploader with SIGKILL) is cleaned up by the next
+/// attempt at the same clip.
+fn part_name(path: &Path) -> String {
+    let digest = sha2::Sha256::digest(path.as_os_str().as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    format!("fthr-{hex}.part")
+}
+
+/// `name` in the remote `folder`.
+fn in_folder(folder: &str, name: &str) -> String {
+    if folder.ends_with('/') {
+        format!("{folder}{name}")
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
 async fn send(
     conn: &Connection,
     path: &Path,
@@ -514,15 +537,20 @@ pub async fn upload(
         .await
         .map_err(Failure::Permanent)?;
     let name = remote_name(path);
-    let remote = if conn.folder.ends_with('/') {
-        format!("{}{name}", conn.folder)
-    } else {
-        format!("{}/{name}", conn.folder)
-    };
-    let part = format!("{remote}.part");
+    let remote = in_folder(&conn.folder, &name);
+    let part = in_folder(&conn.folder, &part_name(path));
+    // What an earlier attempt at this clip left behind if it was killed.
+    let _ = conn.sftp.remove_file(part.clone()).await;
     let sent = send(&conn, path, &part, &remote, !base.is_empty()).await;
     if sent.is_err() {
-        let _ = conn.sftp.remove_file(part.clone()).await;
+        // A failed upload leaves nothing on the server: not the partial
+        // file, and not a finished one that then failed its checks. (On a
+        // dead connection these wait for nothing; do not wait long.)
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, async {
+            let _ = conn.sftp.remove_file(part.clone()).await;
+            let _ = conn.sftp.remove_file(remote.clone()).await;
+        })
+        .await;
     }
     conn.close().await;
     sent.map_err(Failure::Permanent)?;
