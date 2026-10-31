@@ -29,12 +29,22 @@ impl AacEncoder {
     /// Bitrate the reference uses.
     pub const BITRATE_BPS: i64 = 128_000;
 
+    /// Most channels FFmpeg's native AAC encoder takes (its 16-channel
+    /// program-config layout).
+    pub const MAX_CHANNELS: u32 = 16;
+
     /// Opens the native `aac` encoder at `sample_rate` Hz and `channels`.
     pub fn new(sample_rate: u32, channels: u32, global_header: bool) -> Result<Self> {
         if sample_rate == 0 || channels == 0 {
             return Err(MediaError::Invalid(
                 "audio sample rate and channel count must be non-zero".into(),
             ));
+        }
+        if channels > Self::MAX_CHANNELS {
+            return Err(MediaError::Invalid(format!(
+                "AAC takes 1 to {} audio channels, got {channels}",
+                Self::MAX_CHANNELS
+            )));
         }
         // SAFETY: each FFmpeg call is checked and everything allocated so
         // far is released on every failure path via `release`.
@@ -167,7 +177,10 @@ impl AacEncoder {
     /// Sends `n` frames starting at `offset` samples into `pending`.
     fn send_frame(&mut self, offset: usize, n: usize) -> Result<()> {
         // SAFETY: frame and swr are valid; the source slice covers n frames
-        // of `channels` samples each (checked by the callers).
+        // of `channels` samples each (checked by the callers). A planar
+        // frame has one plane per channel behind `extended_data`, which
+        // `av_frame_get_buffer` sized for the channel count (`data` holds
+        // only the first eight).
         unsafe {
             super::check(ffi::av_frame_make_writable(self.frame))?;
             (*self.frame).nb_samples = n as i32;
@@ -178,7 +191,7 @@ impl AacEncoder {
             let mut src_data: [*const u8; 1] = [src];
             let converted = ffi::swr_convert(
                 self.swr,
-                (*self.frame).data.as_mut_ptr() as _,
+                (*self.frame).extended_data as _,
                 n as i32,
                 src_data.as_mut_ptr() as _,
                 n as i32,
@@ -248,5 +261,119 @@ impl Drop for AacEncoder {
                 ffi::avcodec_free_context(&mut self.ctx);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One second of interleaved float32 where channel `c` has its own tone.
+    fn tones(channels: usize) -> Vec<f32> {
+        (0..48_000usize)
+            .flat_map(|i| {
+                (0..channels).map(move |c| {
+                    let hz = 200.0 * (c + 1) as f32;
+                    (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.25
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn send_frame_fills_every_planar_channel() {
+        crate::init().unwrap();
+        const CH: usize = 16;
+        const N: usize = 1024;
+        let (flt, fltp) = (
+            ffi::AVSampleFormat::AV_SAMPLE_FMT_FLT,
+            ffi::AVSampleFormat::AV_SAMPLE_FMT_FLTP,
+        );
+        // `new` with an unopened codec context: FFmpeg 7 and later open
+        // the AAC encoder with at most eight channels, but the conversion
+        // into the frame's sixteen planes is what is under test, and it
+        // runs before the codec is asked for anything.
+        // SAFETY: every call is checked; Drop frees what is built here.
+        let mut enc = unsafe {
+            let codec = ffi::avcodec_find_encoder(ffi::AVCodecID::AV_CODEC_ID_AAC);
+            let mut layout: ffi::AVChannelLayout = std::mem::zeroed();
+            ffi::av_channel_layout_default(&mut layout, CH as i32);
+            let mut swr = ptr::null_mut();
+            let ret = ffi::swr_alloc_set_opts2(
+                &mut swr,
+                &layout,
+                fltp,
+                48_000,
+                &layout,
+                flt,
+                48_000,
+                0,
+                ptr::null_mut(),
+            );
+            assert!(ret >= 0 && ffi::swr_init(swr) >= 0);
+            let frame = ffi::av_frame_alloc();
+            (*frame).nb_samples = N as i32;
+            (*frame).format = fltp as i32;
+            (*frame).sample_rate = 48_000;
+            assert!(ffi::av_channel_layout_copy(&mut (*frame).ch_layout, &layout) >= 0);
+            assert!(ffi::av_frame_get_buffer(frame, 0) >= 0);
+            AacEncoder {
+                ctx: ffi::avcodec_alloc_context3(codec),
+                swr,
+                frame,
+                pkt: ffi::av_packet_alloc(),
+                frame_size: N,
+                channels: CH,
+                sample_rate: 48_000,
+                next_pts: 0,
+                pending: (0..N * CH).map(|i| i as f32).collect(),
+            }
+        };
+        assert!(
+            enc.send_frame(0, N).is_err(),
+            "the unopened codec refuses the frame"
+        );
+        // SAFETY: the frame holds CH planes of N floats behind extended_data.
+        unsafe {
+            for c in 0..CH {
+                let plane = *(*enc.frame).extended_data.add(c) as *const f32;
+                for i in [0, 1, N - 1] {
+                    assert_eq!(
+                        *plane.add(i),
+                        (i * CH + c) as f32,
+                        "channel {c}, sample {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn encodes_sixteen_channels_where_ffmpeg_can() {
+        crate::init().unwrap();
+        // FFmpeg 6.1 opens sixteen channels as its hexadecagonal layout;
+        // later versions refuse more than eight.
+        let Ok(mut enc) = AacEncoder::new(48_000, 16, false) else {
+            eprintln!("skipping: this FFmpeg's AAC encoder takes at most eight channels");
+            return;
+        };
+        let mut packets = 0;
+        enc.encode(&tones(16), |p| {
+            assert!(!p.data.is_empty());
+            packets += 1;
+        })
+        .unwrap();
+        enc.flush(|_| packets += 1).unwrap();
+        assert!(packets >= 40, "{packets} packets");
+    }
+
+    #[test]
+    fn rejects_channel_counts_the_encoder_cannot_take() {
+        crate::init().unwrap();
+        assert!(AacEncoder::new(48_000, 0, false).is_err());
+        let err = AacEncoder::new(48_000, 17, false).unwrap_err();
+        assert!(err.to_string().contains("17"), "{err}");
+        assert!(AacEncoder::new(48_000, u32::MAX, false).is_err());
+        assert!(AacEncoder::new(48_000, 2, false).is_ok());
     }
 }
