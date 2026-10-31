@@ -157,3 +157,29 @@ fn theme_export_asks_where_and_writes_a_zip() {
         "with theme.json inside"
     );
 }
+
+/// The engine reports a failed listing on stderr; that error reaches the
+/// log instead of a JSON parse error about empty output.
+#[test]
+fn a_failed_listing_reports_the_engines_error() {
+    use fthrust_ui::services::devices::listing_result;
+    assert_eq!(
+        listing_result(
+            false,
+            b"",
+            b"some log line\n{\"schema_version\":1,\"error\":\"cannot connect to PipeWire\"}\n"
+        )
+        .unwrap_err(),
+        "cannot connect to PipeWire"
+    );
+    assert!(listing_result(false, b"", b"").is_err());
+    assert_eq!(
+        listing_result(
+            true,
+            br#"{"schema_version":1,"microphones":[{"endpoint_id":"a","display_name":"A"}]}"#,
+            b""
+        )
+        .unwrap(),
+        vec![("A".to_owned(), "a".to_owned())]
+    );
+}

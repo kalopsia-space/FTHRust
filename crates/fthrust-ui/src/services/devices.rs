@@ -84,19 +84,38 @@ pub fn parse_listing(text: &str) -> Result<DeviceList, String> {
         .collect())
 }
 
-/// Runs `engine FLAG` and parses its listing.
+/// Runs `engine FLAG` and parses its listing (stdout), or its error
+/// (`{"schema_version":1,"error":...}` on stderr).
 pub async fn list(engine: &Path, flag: &str) -> Result<DeviceList, String> {
     let run = tokio::process::Command::new(engine)
         .arg(flag)
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
     let output = tokio::time::timeout(LISTING_TIMEOUT, run)
         .await
         .map_err(|_| format!("{flag} timed out"))?
         .map_err(|e| format!("{}: {e}", engine.display()))?;
-    parse_listing(&String::from_utf8_lossy(&output.stdout))
+    listing_result(output.status.success(), &output.stdout, &output.stderr)
+}
+
+/// A finished listing run's result: the listing when it succeeded, else
+/// the engine's own error (the stderr JSON) or what went wrong.
+pub fn listing_result(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<DeviceList, String> {
+    if success {
+        return parse_listing(&String::from_utf8_lossy(stdout));
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    let last = stderr
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    match parse_listing(last) {
+        Err(e) => Err(e),
+        Ok(_) if last.is_empty() => Err("the device listing failed".into()),
+        Ok(_) => Err(format!("the device listing failed: {last}")),
+    }
 }
 
 /// Opens the folder holding `path` in the file manager with the file
