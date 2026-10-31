@@ -10,10 +10,12 @@ on:
   workflow_call:
 permissions:
   contents: read
-# A newer push to the same branch or pull request makes the running one stale.
+# A newer push to a pull request makes the running one stale. A commit on main
+# (and a tag, through the release workflow) has its own group and is never
+# cancelled, so every one of them gets a verdict even when pushes come fast.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
     runs-on: ubuntu-24.04

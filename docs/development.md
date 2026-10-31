@@ -177,7 +177,7 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pull requests and pushes to `main` (and by hand, and when the release workflow calls it), once per change: a newer push to the same branch cancels the running one. Every job has a timeout, and every third-party action is pinned to a commit SHA with its version in a comment; Dependabot (`.github/dependabot.yml`) proposes the updates, for the actions and for both Cargo workspaces. There are three jobs:
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main` (and by hand, and when the release workflow calls it), once per change: a newer push to a pull request cancels the running one, while every commit on `main` and every tag keeps its own run, so each gets a verdict. Every job has a timeout, and every third-party action is pinned to a commit SHA with its version in a comment; Dependabot (`.github/dependabot.yml`) proposes the updates, for the actions and for both Cargo workspaces. There are three jobs:
 
 - **check** (Ubuntu 24.04): the quick checks first (`cargo fmt --all --check`, `cargo deny`, the isolation script and its own tests, the asset, version and workspace-dependency scripts, no tracked bytecode, doc links, the notices and the packaging tests), then `cargo clippy`, the engine build and the full test suite. It builds and tests against the pinned BtbN FFmpeg that the AppImage ships, not Ubuntu's. cargo-deny and cargo-about are installed prebuilt, the build is cached with `Swatinem/rust-cache`, and every cargo command is `--locked`.
 - **uidrive-tools** (Ubuntu 24.04): `bench-unit.sh`, and the bench crate's `cargo fmt`, `clippy` and tests, including its live headless-cage test.
