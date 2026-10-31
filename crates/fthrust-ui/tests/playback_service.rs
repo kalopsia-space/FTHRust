@@ -535,7 +535,7 @@ fn pause_stops_audio_and_shows_the_paused_frame() {
 fn pausing_on_the_current_picture_does_not_seek_and_playing_continues_from_it() {
     let d = tempfile::tempdir().unwrap();
     let clip = d.path().join("clip.mp4");
-    if support::write_test_clip(&clip, 4, true).is_none() {
+    if support::write_test_clip(&clip, 6, true).is_none() {
         return;
     }
     let clock = Clock::new();
@@ -545,9 +545,23 @@ fn pausing_on_the_current_picture_does_not_seek_and_playing_continues_from_it() 
         &clock,
         Box::new(NullOutput::new(clock.func())),
     );
-    svc.play();
-    let before: Vec<u64> = clock.run(&mut svc, 500);
-    let shown = *before.last().expect("frames while playing");
+    // The picture on screen has to be the frame at the paused position (the
+    // worker keeping up with the clock); on a machine too busy for that the
+    // service rightly seeks, so look again.
+    let mut shown = None;
+    for _ in 0..6 {
+        svc.play();
+        let taken = clock.run(&mut svc, 400);
+        let pos = svc.position_ms();
+        match taken.last() {
+            Some(&p) if p <= pos + 16 && pos <= p + 84 => {
+                shown = Some(p);
+                break;
+            }
+            _ => svc.pause(),
+        }
+    }
+    let shown = shown.expect("the worker kept up with the clock in one of six tries");
     let seeks = svc.video_seeks();
     svc.pause();
     // Time passes with the UI still asking for frames: the picture holds.
