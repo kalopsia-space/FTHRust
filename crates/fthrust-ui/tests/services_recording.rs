@@ -103,6 +103,12 @@ fn start_with_different_profile_prepares_then_starts() {
     assert_eq!(s.status.text, "PREPARING RECORDING QUALITY");
     let reqs = services.drain_requests_for_tests();
     assert!(reqs.iter().any(|r| matches!(r, fthrust_ui::services::Request::RestartForRecording(cfg) if cfg.capture.fps == 120)), "{reqs:?}");
+    // The restart takes the engine down first, as a real one does: that is
+    // expected while preparing, not a failure (audit 2026-10-31).
+    services.inject(Event::EngineConnected(false));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Preparing);
+    assert!(errors(&s).is_empty(), "{:?}", errors(&s));
     // The restart comes up with the recording profile active → the start is submitted.
     services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
     connected(&mut services, &mut s);
@@ -434,4 +440,110 @@ fn low_disk_space_stops_the_recording() {
     );
     let e = s.error_bar.current().unwrap();
     assert_eq!(e.title, "RECORDING STOPPED — LOW DISK SPACE");
+}
+
+/// Audit 2026-10-31: a finished-recording check that never answers ends
+/// in a failure after 30 s instead of "Finalizing…" for good.
+#[test]
+fn a_stuck_finalize_check_times_out() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    services.set_recording_check_for_tests(|_| {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        Ok(())
+    });
+    connected(&mut services, &mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StartRecording { path, request_id } =
+        services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id,
+        path: path.clone(),
+    }));
+    services.tick(&mut s);
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StopRecording { request_id } = services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStopped {
+        request_id,
+        path,
+        bytes: 1,
+    }));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Finalizing);
+    services.advance_clock_for_tests(31.0);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);
+}
+
+/// Preparing gives up if the engine never comes back with the profile.
+#[test]
+fn preparing_times_out() {
+    use fthrust_ui::services::recording::PREPARE_TIMEOUT_S;
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    connected(&mut services, &mut s);
+    s.set_setting("recording_framerate", serde_json::json!(120));
+    s.record_requested = true;
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Preparing);
+    services.inject(Event::EngineConnected(false));
+    services.advance_clock_for_tests(PREPARE_TIMEOUT_S + 1.0);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);
+}
+
+/// Audit 2026-10-31 review: a tick that changes what the window shows
+/// repaints, even with no event (the elapsed time stopped updating once
+/// health arrived quietly).
+#[test]
+fn a_ticking_recording_repaints_its_label() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    // Runs frames until egui has nothing left to repaint.
+    let settle = |ctx: &egui::Context| {
+        for _ in 0..20 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+            out.textures_delta.clear();
+            if !ctx.has_requested_repaint() {
+                return;
+            }
+        }
+        panic!("egui never settled");
+    };
+    let mut services = Services::start_for_tests(&ctx);
+    connected(&mut services, &mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StartRecording { path, request_id } =
+        services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id,
+        path,
+    }));
+    services.tick(&mut s);
+    services.tick(&mut s);
+    settle(&ctx);
+    services.tick(&mut s);
+    assert!(!ctx.has_requested_repaint(), "nothing changed: no repaint");
+    services.advance_clock_for_tests(1.0);
+    services.tick(&mut s);
+    assert_eq!(s.record_label, "Stop  00:00:01");
+    assert!(ctx.has_requested_repaint(), "the new time is painted");
 }

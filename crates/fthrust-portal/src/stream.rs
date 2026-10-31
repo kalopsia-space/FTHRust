@@ -25,14 +25,18 @@ pub enum CopyError {
     ShortBuffer(usize, usize),
 }
 
-/// Copies `height` rows out of a PipeWire buffer into a packed BGRA frame,
-/// swapping R and B for RGB-order layouts and dropping row padding.
+/// Copies `height` rows out of a PipeWire buffer into a packed frame,
+/// dropping row padding, and returns the byte order of the copy. BGRA and
+/// BGRx rows are copied as they are (the encoder never reads the fourth
+/// byte, so BGRx padding stays as delivered: a per-pixel pass at 1440p60
+/// costs more than the encode); RGB-order layouts are swapped per pixel
+/// into BGRA.
 pub fn copy_rows(
     src: &[u8],
     layout: &FrameLayout,
     timestamp_ns: i64,
     out: &mut BgraFrame,
-) -> Result<(), CopyError> {
+) -> Result<PixelLayout, CopyError> {
     let (w, h) = (layout.width as usize, layout.height as usize);
     let row = w * 4;
     let needed = if h == 0 {
@@ -48,29 +52,35 @@ pub fn copy_rows(
     }
     out.data.clear();
     out.data.reserve(row * h);
-    let swap = matches!(layout.layout, PixelLayout::Rgba | PixelLayout::Rgbx);
-    let opaque = matches!(layout.layout, PixelLayout::Rgbx | PixelLayout::Bgrx);
-    for y in 0..h {
-        let line = &src[y * layout.stride..y * layout.stride + row];
-        if !swap && !opaque {
-            out.data.extend_from_slice(line);
-            continue;
+    let copied = match layout.layout {
+        PixelLayout::Rgba | PixelLayout::Rgbx => {
+            let opaque = layout.layout == PixelLayout::Rgbx;
+            for y in 0..h {
+                let line = &src[y * layout.stride..y * layout.stride + row];
+                for px in line.as_chunks::<4>().0 {
+                    out.data.extend_from_slice(&[
+                        px[2],
+                        px[1],
+                        px[0],
+                        if opaque { 255 } else { px[3] },
+                    ]);
+                }
+            }
+            PixelLayout::Bgra
         }
-        for px in line.as_chunks::<4>().0 {
-            let (b, g, r) = if swap {
-                (px[2], px[1], px[0])
-            } else {
-                (px[0], px[1], px[2])
-            };
-            out.data
-                .extend_from_slice(&[b, g, r, if opaque { 255 } else { px[3] }]);
+        other => {
+            for y in 0..h {
+                out.data
+                    .extend_from_slice(&src[y * layout.stride..y * layout.stride + row]);
+            }
+            other
         }
-    }
+    };
     out.width = layout.width;
     out.height = layout.height;
     out.stride = row;
     out.timestamp_ns = timestamp_ns;
-    Ok(())
+    Ok(copied)
 }
 
 /// A header pts is trusted only when it is within one second of now.
@@ -97,7 +107,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use fthrust_wayland::backend::{CaptureFailure, monotonic_ns};
+use fthrust_wayland::backend::{CaptureFailure, monotonic_ns, repeat_deadline};
 use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform};
 use pipewire as pw;
 use pw::spa::param::video::VideoFormat;
@@ -121,20 +131,91 @@ pub enum StreamError {
     Cancelled,
 }
 
+impl StreamError {
+    /// Whether the stream connected but never settled a format, which is
+    /// what a stale restored session gives. A PipeWire error (a broken
+    /// connection, a stream error) says nothing about the restore token.
+    pub fn negotiation_timed_out(&self) -> bool {
+        matches!(self, StreamError::FormatTimeout)
+    }
+}
+
+/// A copied frame and the byte order of its pixels.
+struct Delivered {
+    frame: BgraFrame,
+    layout: PixelLayout,
+}
+
 #[derive(Default)]
 struct Shared {
     layout: Option<FrameLayout>,
-    pending: Option<BgraFrame>,
+    /// The newest frame, not yet taken by the capture side.
+    pending: Option<Delivered>,
+    /// A frame buffer to copy the next frame into.
     spare: Option<BgraFrame>,
     error: Option<String>,
     resolution_changed: bool,
     dmabuf_only: bool,
     frames: u64,
+    /// Frames copied into a newly allocated buffer (tests read it).
+    allocations: u64,
 }
 
 struct Slot {
     shared: Mutex<Shared>,
     cv: Condvar,
+}
+
+impl Slot {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The PipeWire side: copies `src` (rows `stride` apart when the chunk
+    /// says so) into a recycled buffer and publishes it as the newest frame.
+    /// The copy runs with the lock released, so the capture side never
+    /// waits for it. The buffer is the spare one or, when the source runs
+    /// faster than capture, the frame nobody took yet: the new one replaces
+    /// it anyway, so a fast source allocates nothing per frame.
+    fn deliver(&self, src: &[u8], stride: Option<usize>, pts_ns: i64) {
+        let (layout, mut frame) = {
+            let mut shared = self.lock();
+            let Some(mut layout) = shared.layout else {
+                return;
+            };
+            if let Some(stride) = stride {
+                layout.stride = stride;
+            }
+            let recycled = shared
+                .spare
+                .take()
+                .or_else(|| shared.pending.take().map(|d| d.frame));
+            let frame = recycled.unwrap_or_else(|| {
+                shared.allocations += 1;
+                BgraFrame::default()
+            });
+            (layout, frame)
+        };
+        let copied = copy_rows(src, &layout, pts_ns, &mut frame);
+        let mut shared = self.lock();
+        match copied {
+            Ok(layout) => {
+                let older = shared.pending.replace(Delivered { frame, layout });
+                if let Some(older) = older
+                    && shared.spare.is_none()
+                {
+                    shared.spare = Some(older.frame);
+                }
+                shared.frames += 1;
+                self.cv.notify_all();
+            }
+            Err(_) => {
+                if shared.spare.is_none() {
+                    shared.spare = Some(frame);
+                }
+            }
+        }
+    }
 }
 
 fn pixel_layout(format: VideoFormat) -> Option<PixelLayout> {
@@ -183,8 +264,10 @@ pub struct PipeWireVideoStream {
     cancel: Arc<AtomicBool>,
     closed: Option<tokio::sync::watch::Receiver<bool>>,
     frame_period: Duration,
-    last: Option<BgraFrame>,
+    last: Option<Delivered>,
     last_delivery: Option<Instant>,
+    /// Whether the last frame returned was fresh rather than a repeat.
+    last_fresh: bool,
     last_timestamp_ns: i64,
     native: (u32, u32),
 }
@@ -233,6 +316,7 @@ impl PipeWireVideoStream {
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1))),
             last: None,
             last_delivery: None,
+            last_fresh: false,
             last_timestamp_ns: 0,
             native: (0, 0),
         };
@@ -265,9 +349,9 @@ impl PipeWireVideoStream {
         self.native
     }
 
-    /// Captures the newest frame: waits up to one frame period after the
-    /// last delivery (5 s for the first frame), repeating the last frame on
-    /// a static screen.
+    /// Captures the newest frame, repeating the last one on a static screen
+    /// (see [`repeat_deadline`] for when a repeat is due; the first frame
+    /// may take [`FIRST_FRAME_DEADLINE`]).
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(CaptureFailure::Cancelled);
@@ -279,14 +363,13 @@ impl PipeWireVideoStream {
                 "the portal session was closed".into(),
             ));
         }
+        let now = Instant::now();
         let deadline = match (self.last_delivery, &self.last) {
-            (Some(last), Some(_)) => {
-                (last + self.frame_period).max(Instant::now() + Duration::from_millis(1))
-            }
-            _ => Instant::now() + FIRST_FRAME_DEADLINE,
+            (Some(last), Some(_)) => repeat_deadline(now, last, self.last_fresh, self.frame_period),
+            _ => now + FIRST_FRAME_DEADLINE,
         };
         let taken = {
-            let mut shared = self.slot.shared.lock().unwrap_or_else(|p| p.into_inner());
+            let mut shared = self.slot.lock();
             loop {
                 if let Some(e) = &shared.error {
                     return Err(CaptureFailure::Failed(e.clone()));
@@ -299,11 +382,15 @@ impl PipeWireVideoStream {
                 if shared.resolution_changed {
                     return Err(CaptureFailure::Failed("stream resolution changed".into()));
                 }
-                if let Some(frame) = shared.pending.take() {
-                    if let Some(old) = self.last.take() {
-                        shared.spare = Some(old);
+                if let Some(delivered) = shared.pending.take() {
+                    // The previous frame becomes the next copy's buffer,
+                    // unless one is already waiting.
+                    if let Some(old) = self.last.take()
+                        && shared.spare.is_none()
+                    {
+                        shared.spare = Some(old.frame);
                     }
-                    break Some(frame);
+                    break Some(delivered);
                 }
                 let now = Instant::now();
                 if now >= deadline {
@@ -321,9 +408,13 @@ impl PipeWireVideoStream {
                 shared = guard;
             }
         };
-        match &taken {
-            Some(_) => {
-                self.last = taken.clone();
+        let fresh = taken.is_some();
+        self.last_fresh = fresh;
+        match taken {
+            Some(delivered) => {
+                // Moved, not copied: the frame PipeWire filled is the one
+                // the encoder reads.
+                self.last = Some(delivered);
                 self.last_delivery = Some(Instant::now());
             }
             None if self.last.is_some() => {
@@ -331,21 +422,21 @@ impl PipeWireVideoStream {
             }
             None => return Err(CaptureFailure::Timeout),
         }
-        let fresh = taken.is_some();
         let last = self.last.as_mut().expect("set above");
         let ts = next_timestamp(
             self.last_timestamp_ns,
-            fresh.then_some(last.timestamp_ns),
+            fresh.then_some(last.frame.timestamp_ns),
             monotonic_ns(),
         );
         self.last_timestamp_ns = ts;
-        last.timestamp_ns = ts;
+        last.frame.timestamp_ns = ts;
+        let frame = &last.frame;
         Ok(FrameView {
-            data: &last.data,
-            stride: last.stride,
-            width: last.width,
-            height: last.height,
-            layout: PixelLayout::Bgra,
+            data: &frame.data,
+            stride: frame.stride,
+            width: frame.width,
+            height: frame.height,
+            layout: last.layout,
             y_invert: false,
             transform: OutputTransform::Normal,
             timestamp_ns: ts,
@@ -356,11 +447,7 @@ impl PipeWireVideoStream {
 
     /// Frames delivered by PipeWire so far.
     pub fn frames_received(&self) -> u64 {
-        self.slot
-            .shared
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .frames
+        self.slot.lock().frames
     }
 }
 
@@ -481,12 +568,8 @@ fn run_loop(
                 let Some(data) = datas.first_mut() else {
                     return;
                 };
-                let mut shared = slot.shared.lock().unwrap_or_else(|p| p.into_inner());
-                let Some(mut layout) = shared.layout else {
-                    return;
-                };
                 if data.type_() == pw::spa::buffer::DataType::DmaBuf {
-                    shared.dmabuf_only = true;
+                    slot.lock().dmabuf_only = true;
                     slot.cv.notify_all();
                     return;
                 }
@@ -496,9 +579,6 @@ fn run_loop(
                     chunk.offset() as usize,
                     chunk.stride(),
                 );
-                if stride > 0 {
-                    layout.stride = stride as usize;
-                }
                 if size == 0 {
                     return;
                 }
@@ -507,21 +587,12 @@ fn run_loop(
                 if offset >= end {
                     return;
                 }
-                let src = &bytes[offset..end];
-                let now = monotonic_ns();
-                let pts = choose_pts(header_pts.filter(|p| *p > 0), now);
-                let mut frame = shared
-                    .spare
-                    .take()
-                    .or_else(|| shared.pending.take())
-                    .unwrap_or_default();
-                if copy_rows(src, &layout, pts, &mut frame).is_ok() {
-                    shared.pending = Some(frame);
-                    shared.frames += 1;
-                    slot.cv.notify_all();
-                } else {
-                    shared.spare = Some(frame);
-                }
+                let pts = choose_pts(header_pts.filter(|p| *p > 0), monotonic_ns());
+                slot.deliver(
+                    &bytes[offset..end],
+                    (stride > 0).then_some(stride as usize),
+                    pts,
+                );
             }
         })
         .register();
@@ -612,4 +683,123 @@ fn run_loop(
         shared.error = Some("the PipeWire loop stopped".into());
     }
     slot.cv.notify_all();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receiver(fps: u32) -> PipeWireVideoStream {
+        PipeWireVideoStream {
+            slot: Arc::new(Slot {
+                shared: Mutex::new(Shared::default()),
+                cv: Condvar::new(),
+            }),
+            quit: None,
+            thread: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            closed: None,
+            frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps)),
+            last: None,
+            last_delivery: None,
+            last_fresh: false,
+            last_timestamp_ns: 0,
+            native: (0, 0),
+        }
+    }
+
+    fn negotiated(stream: &PipeWireVideoStream, pixels: PixelLayout) {
+        stream.slot.lock().layout = Some(FrameLayout {
+            width: 64,
+            height: 36,
+            stride: 64 * 4,
+            layout: pixels,
+        });
+    }
+
+    /// Delivers a grey frame as the PipeWire thread does; returns the
+    /// address of the buffer it was copied into.
+    fn deliver(stream: &PipeWireVideoStream, grey: u8) -> *const u8 {
+        stream
+            .slot
+            .deliver(&vec![grey; 64 * 36 * 4], None, monotonic_ns());
+        stream
+            .slot
+            .lock()
+            .pending
+            .as_ref()
+            .expect("delivered")
+            .frame
+            .data
+            .as_ptr()
+    }
+
+    #[test]
+    fn a_fresh_frame_is_handed_over_without_a_copy() {
+        let mut stream = receiver(60);
+        negotiated(&stream, PixelLayout::Bgrx);
+        for grey in [10, 20, 30] {
+            let delivered = deliver(&stream, grey);
+            let view = stream.capture().unwrap();
+            assert!(!view.repeated);
+            assert_eq!(view.data[0], grey);
+            assert_eq!(view.layout, PixelLayout::Bgrx);
+            assert_eq!(
+                view.data.as_ptr(),
+                delivered,
+                "the frame PipeWire filled is the one returned"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_frame_a_little_late_is_not_beaten_by_a_repeat() {
+        // 4 fps, a 250 ms period: the next frame comes 1.1 periods after
+        // the last one, as a source at about the capture rate does now and
+        // then. It must arrive as itself, not after a repeat.
+        let mut stream = receiver(4);
+        negotiated(&stream, PixelLayout::Bgra);
+        deliver(&stream, 1);
+        stream.capture().unwrap();
+        let slot = stream.slot.clone();
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(275));
+            slot.deliver(&vec![2u8; 64 * 36 * 4], None, monotonic_ns());
+        });
+        let view = stream.capture().unwrap();
+        assert!(!view.repeated, "a repeat came first");
+        assert_eq!(view.data[0], 2);
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn a_source_faster_than_capture_allocates_nothing_per_frame() {
+        // A 120 Hz source captured at 60 fps: two deliveries per capture.
+        let mut stream = receiver(60);
+        negotiated(&stream, PixelLayout::Bgrx);
+        for i in 0..40u8 {
+            deliver(&stream, i);
+            deliver(&stream, i.wrapping_add(100));
+            let view = stream.capture().unwrap();
+            assert!(!view.repeated);
+            assert_eq!(view.data[0], i.wrapping_add(100), "the newest frame");
+        }
+        let allocations = stream.slot.lock().allocations;
+        assert!(
+            allocations <= 3,
+            "{allocations} buffers allocated for 80 frames"
+        );
+    }
+
+    #[test]
+    fn the_released_frame_is_the_next_copy_buffer() {
+        let mut stream = receiver(60);
+        negotiated(&stream, PixelLayout::Bgra);
+        deliver(&stream, 1);
+        stream.capture().unwrap();
+        let first = stream.last.as_ref().unwrap().frame.data.as_ptr();
+        deliver(&stream, 2);
+        stream.capture().unwrap();
+        assert_eq!(deliver(&stream, 3), first, "no allocation per frame");
+    }
 }

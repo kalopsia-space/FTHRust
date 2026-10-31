@@ -15,8 +15,16 @@ struct Source {
     config: RecorderConfig,
 }
 
+fn track(title: &str) -> RecorderAudio {
+    RecorderAudio {
+        sample_rate: 48_000,
+        channels: 2,
+        title: title.into(),
+    }
+}
+
 /// Encodes `seconds` of synthetic 160×90 video (keyframe every 2 s).
-fn encode(seconds: u32, audio: Option<RecorderAudio>) -> Option<Source> {
+fn encode(seconds: u32, audio: Vec<RecorderAudio>) -> Option<Source> {
     support::skip_unless_encoder(&["libopenh264", "libx264"])?;
     let cfg = EncoderConfig {
         src_width: 160,
@@ -102,7 +110,9 @@ fn probe(path: &Path) -> Probe {
 
 #[test]
 fn fragments_survive_abrupt_drop() {
-    let Some(src) = encode(5, None) else { return };
+    let Some(src) = encode(5, Vec::new()) else {
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rec.mp4");
     let mut rec = Recorder::start(&out, &src.config).unwrap();
@@ -127,11 +137,7 @@ fn fragments_survive_abrupt_drop() {
 
 #[test]
 fn finish_writes_trailer_and_duration() {
-    let audio = RecorderAudio {
-        sample_rate: 48_000,
-        channels: 2,
-    };
-    let Some(src) = encode(5, Some(audio)) else {
+    let Some(src) = encode(5, vec![track("Default Mix")]) else {
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -148,7 +154,7 @@ fn finish_writes_trailer_and_duration() {
         rec.write_video(p).unwrap();
         // Feed one frame's worth of audio after each video packet.
         let next = (audio_cursor + 2 * 1600).min(tone.len());
-        rec.write_audio(&tone[audio_cursor..next]).unwrap();
+        rec.write_audio(0, &tone[audio_cursor..next]).unwrap();
         audio_cursor = next;
     }
     let bytes = rec.finish().unwrap();
@@ -168,7 +174,9 @@ fn finish_writes_trailer_and_duration() {
 
 #[test]
 fn skips_until_first_keyframe_and_rebases_pts() {
-    let Some(src) = encode(5, None) else { return };
+    let Some(src) = encode(5, Vec::new()) else {
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rec.mp4");
     let mut rec = Recorder::start(&out, &src.config).unwrap();
@@ -189,17 +197,13 @@ fn skips_until_first_keyframe_and_rebases_pts() {
 
 #[test]
 fn audio_before_video_is_ignored_and_empty_extradata_rejected() {
-    let audio = RecorderAudio {
-        sample_rate: 48_000,
-        channels: 2,
-    };
-    let Some(src) = encode(3, Some(audio)) else {
+    let Some(src) = encode(3, vec![track("Default Mix")]) else {
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rec.mp4");
     let mut rec = Recorder::start(&out, &src.config).unwrap();
-    rec.write_audio(&vec![0.0f32; 9600]).unwrap();
+    rec.write_audio(0, &vec![0.0f32; 9600]).unwrap();
     for p in &src.packets {
         rec.write_video(p).unwrap();
     }
@@ -215,7 +219,9 @@ fn audio_before_video_is_ignored_and_empty_extradata_rejected() {
 
 #[test]
 fn start_refuses_existing_file() {
-    let Some(src) = encode(1, None) else { return };
+    let Some(src) = encode(1, Vec::new()) else {
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("precious.mp4");
     std::fs::write(&out, b"someone else's recording").unwrap();
@@ -225,5 +231,164 @@ fn start_refuses_existing_file() {
         std::fs::read(&out).unwrap(),
         b"someone else's recording",
         "untouched"
+    );
+}
+
+#[test]
+fn a_failed_start_leaves_no_file() {
+    // The name is claimed before the muxer opens; when a later step failed,
+    // an empty FTHR_recording_*.mp4 stayed behind in the user's folder.
+    let Some(src) = encode(1, Vec::new()) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("FTHR_recording_test.mp4");
+    let bad = RecorderConfig {
+        audio: vec![RecorderAudio {
+            sample_rate: 0,
+            ..track("Default Mix")
+        }],
+        ..src.config.clone()
+    };
+    assert!(Recorder::start(&out, &bad).is_err());
+    assert!(!out.exists(), "the claimed file was removed");
+    assert!(
+        Recorder::start(&out, &src.config).is_ok(),
+        "the name is free again"
+    );
+}
+
+#[test]
+fn decode_timestamps_are_written_as_given() {
+    // The recorder wrote dts = pts. Give the packets a reordered pts pattern
+    // with a monotonic dts, as an encoder with B-frames would: dts = pts
+    // made the muxer reject them, and a correct stream must keep both.
+    let Some(src) = encode(2, Vec::new()) else {
+        return;
+    };
+    let mut packets = src.packets.clone();
+    // Decode order I P B P B ... with one frame of reorder delay: dts
+    // counts packets, the keyframe presents at 1, each P two ahead of its
+    // dts and each B at its dts.
+    for (i, p) in packets.iter_mut().enumerate() {
+        let i = i as i64;
+        p.dts = i;
+        p.pts = if i == 0 {
+            1
+        } else if i % 2 == 1 {
+            i + 2
+        } else {
+            i
+        };
+        p.keyframe = i == 0;
+    }
+    let last = packets.len() - 1;
+    if last % 2 == 1 {
+        // An odd last packet would present after a missing frame.
+        packets.pop();
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("bframes.mp4");
+    let mut rec = Recorder::start(&out, &src.config).unwrap();
+    for p in &packets {
+        rec.write_video(p).unwrap();
+    }
+    rec.finish().unwrap();
+    let mut ictx = ffmpeg_next::format::input(&out).unwrap();
+    let video = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .unwrap();
+    let (index, tb) = (video.index(), video.time_base());
+    let ticks = |t: i64| t * i64::from(tb.denominator()) / (i64::from(tb.numerator()) * 30);
+    let mut read = Vec::new();
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == index {
+            read.push((packet.pts().unwrap(), packet.dts().unwrap()));
+        }
+    }
+    assert_eq!(read.len(), packets.len());
+    let first_dts = read[0].1;
+    for (got, want) in read.iter().zip(&packets) {
+        assert_eq!(
+            (got.0 - first_dts, got.1 - first_dts),
+            (ticks(want.pts), ticks(want.dts)),
+            "pts/dts as written"
+        );
+    }
+}
+
+#[test]
+fn tracks_are_written_with_their_titles() {
+    let Some(src) = encode(3, vec![track("Default Mix"), track("Microphone")]) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("two.mp4");
+    let mut rec = Recorder::start(&out, &src.config).unwrap();
+    assert_eq!(rec.audio_tracks(), 2);
+    let second = vec![0.25f32; 2 * 1600];
+    for p in &src.packets {
+        rec.write_video(p).unwrap();
+        rec.write_audio(0, &second).unwrap();
+        rec.write_audio(1, &second).unwrap();
+    }
+    assert!(rec.write_audio(2, &second).is_err(), "no third track");
+    rec.finish().unwrap();
+    let descriptors = fthrust_media::combined_audio::descriptors_from_file(&out).unwrap();
+    // The fragmented MP4 carries the title as the handler name.
+    let titles: Vec<&str> = descriptors
+        .iter()
+        .map(|d| d.handler_name.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(titles, ["Default Mix", "Microphone"]);
+}
+
+#[test]
+fn the_first_audio_sample_plays_after_the_encoder_priming() {
+    // The fragmented MP4 cannot carry an edit list, so the AAC priming plays
+    // at the start of every track: a sample handed to the encoder first
+    // plays `audio_priming_frames()` into the recording. The engine starts
+    // each track's audio that long after the first keyframe.
+    let Some(src) = encode(3, vec![track("Default Mix")]) else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("onset.mp4");
+    let mut rec = Recorder::start(&out, &src.config).unwrap();
+    let priming = rec.audio_priming_frames() as usize;
+    assert!(priming > 0, "the AAC encoder primes");
+    // Half a second of silence, then a loud tone.
+    let onset = 24_000usize;
+    let pcm: Vec<f32> = (0..3 * 48_000usize)
+        .flat_map(|i| {
+            let v = if i < onset {
+                0.0
+            } else {
+                (i as f32 * 1000.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.8
+            };
+            [v, v]
+        })
+        .collect();
+    let per_packet = pcm.len() / src.packets.len() / 2 * 2;
+    for (i, p) in src.packets.iter().enumerate() {
+        rec.write_video(p).unwrap();
+        let from = (i * per_packet).min(pcm.len());
+        let to = ((i + 1) * per_packet).min(pcm.len());
+        rec.write_audio(0, &pcm[from..to]).unwrap();
+    }
+    rec.finish().unwrap();
+    let decoded = fthrust_media::audio_decode::decode_to_pcm(&out).unwrap();
+    let heard = decoded
+        .samples
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .position(|f| f[0].abs() > 0.2)
+        .expect("the tone is in the recording");
+    let expected = onset + priming;
+    assert!(
+        heard.abs_diff(expected) <= 256,
+        "the tone starts at sample {heard}, expected about {expected} (onset {onset} + priming {priming})"
     );
 }

@@ -15,10 +15,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::export_presets::ExportPreset;
-use fthrust_core::upload::history::History;
+use fthrust_core::upload::history::{Entry, History};
 use fthrust_core::upload::settings::Provider;
 use fthrust_core::upload::{CATBOX_LIMIT_BYTES, validate};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::services::CardKind;
 use crate::shell::error_bar::{Action, Level};
@@ -37,6 +37,8 @@ pub const UPLOADING: &str = "Uploading…";
 pub const COMPRESS_TAG: &str = "upload-compress:";
 /// Error-bar action prefix for `RETRY NOW`.
 pub const RETRY_ACTION: &str = "upload-retry:";
+/// Error-bar action prefix for `UPLOAD AGAIN` (a clip uploaded without a link).
+pub const AGAIN_ACTION: &str = "upload-again:";
 /// Error-bar action that opens the upload settings.
 pub const OPEN_SETTINGS_ACTION: &str = "open-upload-settings";
 
@@ -70,6 +72,12 @@ pub struct Reply {
     pub message: String,
     /// The upload settings are wrong (URL, token); retrying cannot help.
     pub settings_problem: bool,
+    /// What the user should know about an upload that worked: no link came
+    /// back, the clip could not be deleted, the history was not saved.
+    pub warning: Option<String>,
+    /// The history entry of the upload, as the uploader made it. The history
+    /// file is where the app learns it; this is for when that write failed.
+    pub upload_info: Option<Map<String, Value>>,
 }
 
 impl Reply {
@@ -79,6 +87,8 @@ impl Reply {
             ok: false,
             message: message.into(),
             settings_problem: false,
+            warning: None,
+            upload_info: None,
         }
     }
 }
@@ -192,6 +202,16 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
                 .unwrap_or("")
                 .to_owned(),
             settings_problem: m.get("settings_problem").and_then(Value::as_bool) == Some(true),
+            warning: m
+                .get("warning")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|w| !w.is_empty())
+                .map(str::to_owned),
+            upload_info: match m.get("upload_info") {
+                Some(Value::Object(info)) if !info.is_empty() => Some(info.clone()),
+                _ => None,
+            },
         },
         _ => Reply::fail("Uploader returned an invalid response."),
     }
@@ -202,18 +222,23 @@ pub fn uploader_enabled(state: &AppState) -> bool {
     state.uploader_settings.enabled()
 }
 
-fn approved_roots(state: &AppState) -> Vec<PathBuf> {
-    let root = state
+/// The clips folder: the only place an upload may delete a clip from.
+fn clips_root(state: &AppState) -> PathBuf {
+    state
         .settings
         .clips_directory()
-        .unwrap_or_else(|_| state.library.clips_root.clone());
-    validate::allowed_roots(&root, &state.settings)
+        .unwrap_or_else(|_| state.library.clips_root.clone())
+}
+
+fn approved_roots(state: &AppState) -> Vec<PathBuf> {
+    validate::allowed_roots(&clips_root(state), &state.settings)
 }
 
 enum Job {
     Upload {
         path: PathBuf,
         roots: Vec<PathBuf>,
+        clips_root: PathBuf,
     },
     Compressed {
         path: PathBuf,
@@ -224,8 +249,26 @@ enum Job {
     },
 }
 
+/// Who asked for an upload, which decides what a clip that is uploaded
+/// already gets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    /// The immediate and interval modes: skipped, silently.
+    Auto,
+    /// The user (share button, menu, editor, RETRY NOW): skipped too, but a
+    /// clip with no link to copy is explained, with the way out.
+    User,
+    /// The user, after that explanation: uploaded again.
+    Again,
+}
+
 struct Done {
     path: PathBuf,
+    /// The uploaded file's key in the history (its canonical path), taken
+    /// before the upload: auto-delete removes the file, and a path that is
+    /// gone cannot be resolved (behind a symlink it would come out spelled
+    /// differently from the uploader's key).
+    key: PathBuf,
     reply: Reply,
     /// The uploaded compressed copy: path, size, plan summary.
     compressed: Option<(PathBuf, u64, String)>,
@@ -281,15 +324,19 @@ impl UploadService {
                     }
                     let done =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.run(&job)))
-                            .unwrap_or_else(|_| Done {
-                                path: match &job {
+                            .unwrap_or_else(|_| {
+                                let path = match &job {
                                     Job::Upload { path, .. } | Job::Compressed { path, .. } => {
                                         path.clone()
                                     }
-                                },
-                                reply: Reply::fail("The upload stopped unexpectedly."),
-                                compressed: None,
-                                compression_failed: false,
+                                };
+                                Done {
+                                    key: path.clone(),
+                                    path,
+                                    reply: Reply::fail("The upload stopped unexpectedly."),
+                                    compressed: None,
+                                    compression_failed: false,
+                                }
                             });
                     if out.send(done).is_err() {
                         break;
@@ -343,18 +390,20 @@ impl UploadService {
         !self.in_flight.is_empty() || !self.waiting.is_empty() || self.scan.is_some()
     }
 
-    /// `enqueue_upload`: queues a finished video once; silently ignored
-    /// while uploads are off.
+    /// `enqueue_upload`, for a request from the user (share button, menu,
+    /// editor): queues a finished video once; silently ignored while uploads
+    /// are off, and for a clip that is uploaded already, unless that clip has
+    /// no link to copy: then the bar says so and offers to upload it again.
     pub fn enqueue(&mut self, state: &mut AppState, path: PathBuf) {
-        self.queue(state, path, false);
+        self.queue(state, path, false, Ask::User);
     }
 
     /// `enqueue_compressed_upload`: compress a copy, then upload it.
     pub fn enqueue_compressed(&mut self, state: &mut AppState, path: PathBuf) {
-        self.queue(state, path, true);
+        self.queue(state, path, true, Ask::Auto);
     }
 
-    fn queue(&mut self, state: &mut AppState, path: PathBuf, compress: bool) {
+    fn queue(&mut self, state: &mut AppState, path: PathBuf, compress: bool, ask: Ask) {
         if !uploader_enabled(state) {
             return;
         }
@@ -363,7 +412,14 @@ impl UploadService {
             return;
         }
         let path = library_path(state, path);
-        if self.is_busy(&path) || state.upload_history.is_uploaded(&resolved(&path)) {
+        if self.is_busy(&path) {
+            return;
+        }
+        let key = resolved(&path);
+        if ask != Ask::Again && state.upload_history.is_uploaded(&key) {
+            if ask == Ask::User && state.upload_history.link(&key).is_none() {
+                explain_no_link(state, &path);
+            }
             return;
         }
         state.upload_status.insert(path.clone(), UPLOADING.into());
@@ -374,6 +430,10 @@ impl UploadService {
     pub fn error_action(&mut self, state: &mut AppState, id: &str) -> bool {
         if let Some(p) = id.strip_prefix(RETRY_ACTION) {
             self.enqueue(state, PathBuf::from(p));
+            return true;
+        }
+        if let Some(p) = id.strip_prefix(AGAIN_ACTION) {
+            self.queue(state, PathBuf::from(p), false, Ask::Again);
             return true;
         }
         if id == OPEN_SETTINGS_ACTION {
@@ -407,7 +467,7 @@ impl UploadService {
         for clip in std::mem::take(&mut state.saved_clips) {
             if uploader_enabled(state) && state.uploader_settings.str("upload_mode") == "immediate"
             {
-                self.enqueue(state, clip);
+                self.queue(state, clip, false, Ask::Auto);
             }
         }
         self.interval(state, now);
@@ -449,7 +509,7 @@ impl UploadService {
         {
             self.scan = None;
             for p in found {
-                self.enqueue(state, p);
+                self.queue(state, p, false, Ask::Auto);
             }
         }
         let s = &state.uploader_settings;
@@ -530,14 +590,12 @@ impl UploadService {
                 continue;
             }
             let roots = approved_roots(state);
+            let clips_root = clips_root(state);
             let job = if oversized {
                 Job::Compressed {
                     path: path.clone(),
                     roots,
-                    clips_root: state
-                        .settings
-                        .clips_directory()
-                        .unwrap_or_else(|_| state.library.clips_root.clone()),
+                    clips_root,
                     provider,
                     limit: self.limit,
                 }
@@ -545,6 +603,7 @@ impl UploadService {
                 Job::Upload {
                     path: path.clone(),
                     roots,
+                    clips_root,
                 }
             };
             self.in_flight.insert(path.clone());
@@ -603,16 +662,45 @@ impl UploadService {
             return;
         }
         let compressed = done.compressed.is_some();
-        if let Some((copy, size, _)) = &done.compressed {
-            let (original, copy) = (resolved(&done.path), resolved(copy));
+        // The uploader records the upload in the history itself. When it
+        // could not (it says so in its warning), its reply still carries the
+        // entry: save it from here, and failing that keep it for this
+        // session (below), so the card still offers the link and the clip is
+        // not uploaded again.
+        let unsaved = if done.reply.warning.is_some() {
+            unsaved_entry(&state.paths, &done.key, done.reply.upload_info.as_ref())
+        } else {
+            None
+        };
+        if let Some((_, size, _)) = &done.compressed {
+            let original = resolved(&done.path);
             if let Err(e) = History::update(&state.paths, |h| {
-                h.alias_compressed(&original, &copy, *size)
+                h.alias_compressed(&original, &done.key, *size)
             }) {
                 tracing::warn!(error = %e, "upload history alias not saved");
             }
         }
         self.history_mtime = None;
         self.reload_history(state);
+        if let Some(entry) = unsaved {
+            state.upload_history.record(&done.key, entry);
+            if let Some((_, size, _)) = &done.compressed {
+                let original = resolved(&done.path);
+                state
+                    .upload_history
+                    .alias_compressed(&original, &done.key, *size);
+            }
+        }
+        if let Some(warning) = &done.reply.warning {
+            state.error_bar.push_error(
+                "UPLOAD WARNING",
+                warning,
+                Level::Warning,
+                Vec::new(),
+                Some(format!("upload-warning:{}", done.path.display())),
+                false,
+            );
+        }
         let (text, kind) = if compressed {
             ("UPLOADED COMPRESSED COPY", "COMPRESSED COPY")
         } else {
@@ -692,6 +780,47 @@ fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
         .unwrap_or(path)
 }
 
+/// The entry the uploader made for `uploaded`, if the history file lacks it
+/// after the uploader's own write (it failed) and ours (`None`: the file has
+/// it, or the reply had none).
+fn unsaved_entry(
+    paths: &fthrust_core::FthrPaths,
+    uploaded: &Path,
+    info: Option<&Map<String, Value>>,
+) -> Option<Entry> {
+    let entry = Entry(info?.clone());
+    if History::load(paths).get(uploaded).is_some() {
+        return None;
+    }
+    match History::update(paths, |h| h.record(uploaded, entry.clone())) {
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "upload history entry not saved");
+            Some(entry)
+        }
+    }
+}
+
+/// The user asked to upload a clip that is uploaded already but has no link
+/// (its server sent none back, so the card offers "Upload clip" and nothing
+/// would happen): say so, and offer to upload it again.
+fn explain_no_link(state: &mut AppState, path: &Path) {
+    let name = file_name(path);
+    state.error_bar.push_error(
+        "ALREADY UPLOADED",
+        &format!(
+            "{name} was uploaded, but its server sent no link back, so there is nothing to copy. Upload it again to try for one."
+        ),
+        Level::Warning,
+        vec![Action {
+            label: "UPLOAD AGAIN".into(),
+            id: format!("{AGAIN_ACTION}{}", path.display()),
+        }],
+        Some(format!("{AGAIN_ACTION}{}", path.display())),
+        true,
+    );
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -742,17 +871,20 @@ struct Worker {
 }
 
 impl Worker {
-    fn upload(&self, path: &Path, roots: &[PathBuf]) -> Reply {
+    fn upload(&self, path: &Path, roots: &[PathBuf], clips_root: &Path) -> Reply {
         let Some(exe) = &self.exe else {
             return Reply::fail(MISSING);
         };
         if !path.is_file() {
             return Reply::fail("File no longer exists (deleted before upload)");
         }
+        // `clips_root` is the only folder the uploader may delete from after
+        // an upload; imported folders are in `roots` but never deleted from.
         let request = json!({
             "action": "upload",
             "path": path,
             "allowed_roots": roots,
+            "clips_root": clips_root,
         });
         let timeout = self
             .timeouts
@@ -768,12 +900,21 @@ impl Worker {
 
     fn run(&self, job: &Job) -> Done {
         match job {
-            Job::Upload { path, roots } => Done {
-                path: path.clone(),
-                reply: self.upload(path, roots),
-                compressed: None,
-                compression_failed: false,
-            },
+            Job::Upload {
+                path,
+                roots,
+                clips_root,
+            } => {
+                // The key before the upload: auto-delete may remove the file.
+                let key = resolved(path);
+                Done {
+                    path: path.clone(),
+                    key,
+                    reply: self.upload(path, roots, clips_root),
+                    compressed: None,
+                    compression_failed: false,
+                }
+            }
             Job::Compressed {
                 path,
                 roots,
@@ -783,15 +924,18 @@ impl Worker {
             } => match compress(path, clips_root, *provider, *limit, &self.cancel) {
                 Err((message, failed)) => Done {
                     path: path.clone(),
+                    key: path.clone(),
                     reply: Reply::fail(message),
                     compressed: None,
                     compression_failed: failed,
                 },
                 Ok((copy, size, summary)) => {
-                    let reply = self.upload(&copy, roots);
+                    let key = resolved(&copy);
+                    let reply = self.upload(&copy, roots, clips_root);
                     let ok = reply.ok;
                     Done {
                         path: path.clone(),
+                        key,
                         reply,
                         compressed: ok.then_some((copy, size, summary)),
                         compression_failed: false,

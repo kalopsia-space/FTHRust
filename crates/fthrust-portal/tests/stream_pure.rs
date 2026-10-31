@@ -1,4 +1,21 @@
-use fthrust_portal::stream::{FrameLayout, choose_pts, copy_rows, monotonic, next_timestamp};
+use fthrust_portal::stream::{
+    FrameLayout, StreamError, choose_pts, copy_rows, monotonic, next_timestamp,
+};
+
+#[test]
+fn only_a_format_timeout_means_a_stale_restored_session() {
+    // A stream that never settles a format is what a stale restore token
+    // gives; a PipeWire error from a broken connection says nothing about
+    // the token and must not cost it (nor bring up the picker).
+    assert!(StreamError::FormatTimeout.negotiation_timed_out());
+    for e in [
+        StreamError::PipeWire("PipeWire stream error: connection lost".into()),
+        StreamError::PipeWire("connect_fd: Broken pipe".into()),
+        StreamError::Cancelled,
+    ] {
+        assert!(!e.negotiation_timed_out(), "{e}");
+    }
+}
 use fthrust_wayland::frame::{BgraFrame, PixelLayout};
 
 #[test]
@@ -14,7 +31,10 @@ fn copy_rows_swaps_rgb_and_drops_padding() {
         layout: PixelLayout::Rgbx,
     };
     let mut out = BgraFrame::default();
-    copy_rows(&src, &layout, 5, &mut out).unwrap();
+    assert_eq!(
+        copy_rows(&src, &layout, 5, &mut out).unwrap(),
+        PixelLayout::Bgra
+    );
     assert_eq!(
         (out.width, out.height, out.stride, out.timestamp_ns),
         (1, 2, 4, 5)
@@ -24,12 +44,36 @@ fn copy_rows_swaps_rgb_and_drops_padding() {
         layout: PixelLayout::Bgra,
         ..layout
     };
-    copy_rows(&src, &layout, 6, &mut out).unwrap();
+    assert_eq!(
+        copy_rows(&src, &layout, 6, &mut out).unwrap(),
+        PixelLayout::Bgra
+    );
     assert_eq!(out.data, [10, 20, 30, 0, 40, 50, 60, 0]);
     assert!(
         copy_rows(&src[..9], &layout, 7, &mut out).is_err(),
         "short buffer"
     );
+}
+
+#[test]
+fn bgrx_rows_are_copied_as_they_are() {
+    // The padding byte is left as delivered: the encoder never reads it,
+    // and a per-pixel pass over every frame costs more than the encode.
+    let src = [
+        10u8, 20, 30, 7, 99, 99, 99, 99, 40, 50, 60, 9, 99, 99, 99, 99,
+    ];
+    let layout = FrameLayout {
+        width: 1,
+        height: 2,
+        stride: 8,
+        layout: PixelLayout::Bgrx,
+    };
+    let mut out = BgraFrame::default();
+    assert_eq!(
+        copy_rows(&src, &layout, 5, &mut out).unwrap(),
+        PixelLayout::Bgrx
+    );
+    assert_eq!(out.data, [10, 20, 30, 7, 40, 50, 60, 9]);
 }
 
 #[test]

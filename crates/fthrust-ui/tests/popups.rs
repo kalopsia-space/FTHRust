@@ -296,6 +296,67 @@ fn hotkey_popup_markers_match_qt_and_rows_follow_custom_lengths() {
     assert!(labels.windows(2).all(|w| w[0] < w[1]), "{labels:?}");
 }
 
+/// Records `key` pressed with `modifiers` into the first row's keyboard
+/// button of the Hotkeys popup and returns what the binding became.
+fn record_chord(modifiers: egui::Modifiers, key: egui::Key) -> String {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(550.0, 600.0), 1.0, &tokens, |ui| {
+        let t = s.tokens.clone();
+        popup::draw_frame(ui, &t, "hotkeys", Pos2::ZERO, 550.0, |ui| {
+            hotkeys::content(ui, &mut s)
+        });
+    });
+    let f9 = Pos2::new(211.0, 115.0);
+    h.drag_at(f9);
+    h.step();
+    h.drop_at(f9);
+    h.run_steps(2);
+    h.key_press_modifiers(modifiers, key);
+    h.run_steps(2);
+    drop(h);
+    s.hotkeys.get("save_clip").unwrap_or("").to_owned()
+}
+
+#[test]
+fn hotkey_recording_stores_shifted_punctuation_as_the_key_it_sits_on() {
+    use egui::{Key, Modifiers};
+    // A compositor binds the key as typed with no modifier held, so with
+    // Shift held the shifted symbols egui reports are recorded as their keys.
+    for (modifiers, key, expected) in [
+        (
+            Modifiers::CTRL | Modifiers::SHIFT,
+            Key::Exclamationmark,
+            "Ctrl+Shift+1",
+        ),
+        (Modifiers::SHIFT, Key::Questionmark, "Shift+Slash"),
+        (Modifiers::SHIFT, Key::Colon, "Shift+Semicolon"),
+        (
+            Modifiers::CTRL | Modifiers::SHIFT,
+            Key::Pipe,
+            "Ctrl+Shift+Backslash",
+        ),
+        (Modifiers::SHIFT, Key::OpenCurlyBracket, "Shift+Openbracket"),
+        (
+            Modifiers::SHIFT,
+            Key::CloseCurlyBracket,
+            "Shift+Closebracket",
+        ),
+        (Modifiers::SHIFT, Key::Plus, "Shift+Equals"),
+        // Without Shift, and for letters and other keys, the logical key stays.
+        (Modifiers::CTRL, Key::Questionmark, "Ctrl+Questionmark"),
+        (Modifiers::SHIFT, Key::S, "Shift+S"),
+        (Modifiers::SHIFT, Key::Num1, "Shift+1"),
+        (
+            Modifiers::CTRL | Modifiers::SHIFT,
+            Key::F10,
+            "Ctrl+Shift+F10",
+        ),
+    ] {
+        assert_eq!(record_chord(modifiers, key), expected, "{key:?}");
+    }
+}
+
 #[test]
 fn hotkey_recording_commits_a_chord_and_clear_unsets() {
     let (_tmp, mut s) = state(serde_json::json!({}));
@@ -341,5 +402,30 @@ fn hotkey_recording_commits_a_chord_and_clear_unsets() {
     assert!(
         hotkeys::setup_instructions("gnome", "fthrust", "/s")
             .contains("bash -c '\"fthrust\" --hotkey save_clip'")
+    );
+}
+
+/// Audit 2026-10-31 tier 1 #4: a clip length that changes the replay buffer
+/// asks for Apply; one that doesn't (a custom length already covers it)
+/// does not.
+#[test]
+fn clip_length_change_asks_for_a_restart_when_the_buffer_changes() {
+    use fthrust_ui::popups::capture_settings::set_clip_length;
+    let d = tempfile::tempdir().unwrap();
+    let mut s = fthrust_ui::state::AppState::for_tests(
+        d.path(),
+        serde_json::json!({"clip_length": 30, "custom_clip_lengths": [90]}),
+    );
+    set_clip_length(&mut s, 60);
+    assert_eq!(s.settings.get_i64("clip_length"), Some(60));
+    assert!(
+        !s.restart_pending,
+        "the 90 s custom length already sizes the buffer"
+    );
+    set_clip_length(&mut s, 120);
+    assert_eq!(s.settings.get_i64("clip_length"), Some(120));
+    assert!(
+        s.restart_pending,
+        "a bigger buffer needs the engine restarted"
     );
 }

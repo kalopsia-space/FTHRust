@@ -13,6 +13,7 @@ use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 /// Segment size used by the engine.
 pub const DEFAULT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
@@ -152,6 +153,8 @@ pub struct SegmentStore {
     current: Option<(Arc<Segment>, u64)>,
     /// The segment closed before the current one, for page-cache release.
     previous: Option<Weak<Segment>>,
+    /// Added before every write (tests stand in a slow disk with it).
+    write_delay: Duration,
 }
 
 impl SegmentStore {
@@ -171,7 +174,16 @@ impl SegmentStore {
             next_index: 0,
             current: None,
             previous: None,
+            write_delay: Duration::ZERO,
         })
+    }
+
+    /// Makes every write take at least `delay` longer, like a busy disk
+    /// (tests).
+    #[doc(hidden)]
+    pub fn with_write_delay(mut self, delay: Duration) -> Self {
+        self.write_delay = delay;
+        self
     }
 
     /// The directory segments are written into.
@@ -181,6 +193,9 @@ impl SegmentStore {
 
     /// Appends `data` and returns where it went.
     pub fn store(&mut self, data: &[u8]) -> io::Result<DiskRef> {
+        if !self.write_delay.is_zero() {
+            std::thread::sleep(self.write_delay);
+        }
         let len = u32::try_from(data.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "payload too large"))?;
         let full = self.current.as_ref().is_none_or(|(_, written)| {
@@ -226,8 +241,9 @@ impl SegmentStore {
     }
 }
 
+/// Starts writeback of `file`'s dirty pages without waiting for it.
 #[allow(unsafe_code)]
-fn start_writeback(file: &File) {
+pub(crate) fn start_writeback(file: &File) {
     // SAFETY: a valid open fd; the call only schedules writeback.
     unsafe {
         libc::sync_file_range(file.as_raw_fd(), 0, 0, libc::SYNC_FILE_RANGE_WRITE);

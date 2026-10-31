@@ -63,7 +63,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | 003 | ENGINE NOT FOUND | `fthrust-engine` is missing from next to the app. Re-download the AppImage. |
 | 004 | ENGINE NOT RESPONDING | The engine stopped answering. FTHRust offers **RESTART ENGINE**. |
 | 005 | ENGINE COULD NOT START | Often no usable encoder. See [above](#no-hardware-encoder-or-engine-could-not-start). |
-| 006 | ENGINE STOPPED | The engine exited unexpectedly. Clips can't be saved until it's restarted. |
+| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. |
 | 007 | MANUAL RECORDING FAILED | A recording stopped with an error, for example when writing fell more than 8 seconds behind capture. |
 | 008 | RECORDING COULD NOT START | Often too little disk space (512 MB is needed). |
 | 009 | RECORDING COULD NOT STOP | The recording didn't finish cleanly. |
@@ -89,29 +89,37 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **DESKTOP AUDIO UNAVAILABLE** | PipeWire couldn't be reached. Clips are saved without desktop audio. |
 | **MIC NOT FOUND** | The chosen microphone is gone. Pick another in **OPEN AUDIO SETTINGS**. |
 | **CLIP SAVED WITHOUT AUDIO** | The clip is fine, but an audio source wasn't capturing at the time. |
-| **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | The engine noticed frozen or missing frames and is fixing it. |
+| **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | New frames stopped arriving, or capture failed and the engine is restarting it. |
+| **CAPTURE DEGRADED — DARK / UNIFORM** | The picture has been black or one flat colour for 12 seconds. Expected in a dark scene or on a loading screen; the engine restarts capture once in case the feed is broken (not on the portal). |
 | **SETTINGS APPLY TIMED OUT** | Capture didn't come back within 30 seconds of a settings change. Press **RESTART ENGINE**. |
 | **GAME CROP ADJUSTED** | The engine had to change a game's crop to make it fit the captured frame. **EDIT GAME CROP** lets you set it yourself. |
 | **DESKTOP KEPT ITS SHORTCUT** | Your desktop bound a different key than you asked for. |
 | **STOP RECORDING FIRST**, **WAIT FOR CLIP SAVE** | That action has to wait for the recording or save in progress. |
 | **CAMERA UNAVAILABLE**, **CAMERA OVERLAY FAILED** | The webcam overlay couldn't be used. Clips save without it. |
 | **LIMITED FEATURE SUPPORT** | Your desktop doesn't share its window list, so game detection and focus pause are off. Capture and hotkeys are unaffected. See [Desktop support](install.md#desktop-support). |
+| **STARTUP PROBLEM** | FTHRust couldn't read or write one of its own files while starting (`settings.json`, `theme.json`, the theme folders), for example on a full or read-only disk, and opened anyway with defaults. The message names the file, and shows even if you turned error notifications off. A file that couldn't be read is left as it is, so that session's changes aren't saved; a damaged one is kept as `<name>.corrupt`. The same notice appears if FTHRust was killed in the middle of a theme import and couldn't undo it: it names the `.import-…` folder under `~/.fthr/theme/` that keeps your previous icons, sounds and fonts, and tries again at the next start. |
 
 ## Logs
 
-- **The app** logs to the terminal. Start it from a terminal to see what it's doing, and add `RUST_LOG=debug` for more detail:
+- **The app** logs to `~/.fthr/logs/fthr.log`, rotated at 2 MB with two older copies kept, and to the terminal if you started it from one. It records FTHRust's own messages at info level and warnings from everything else; add `RUST_LOG=debug` for more detail:
 
   ```sh
   RUST_LOG=debug ./FTHRust-*-x86_64.AppImage
   ```
 
+  Passwords, tokens, cookies and similar are replaced with `<redacted>` before a line is written.
+
+- **Crashes**: a panic is written, with its backtrace, to `~/.fthr/logs/fthr-crash.log`.
+
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
 - **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through; the log filter above must allow that level too, for example `FTHRUST_LOG=debug`.
+
+If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that.
 
 ## Diagnostic reports
 
 **Settings → General → Troubleshooting → Export diagnostic report** builds a ZIP in `~/.fthr/diagnostics/` and shows it in a dialog that you can drag straight into a bug report.
 
-The report holds a summary of your system and FTHRust's recent activity, with paths and secrets (tokens, passwords, auth headers) redacted. It **never** includes clips, screenshots, audio, credentials or a listing of your files, and it's never uploaded anywhere by FTHRust. Open the ZIP and read it before sending if you like; it's all plain text.
+The report holds a summary of your system, FTHRust's recent activity (`events.jsonl`, one JSON record per line) and the last megabyte of each log (`ui.log` from `fthr.log`, `engine.log` from the engine's log), with paths and secrets (tokens, passwords, cookies, auth headers) redacted. It **never** includes clips, screenshots, audio, credentials or a listing of your files, and it's never uploaded anywhere by FTHRust. Open the ZIP and read it before sending if you like; it's all plain text.
 
-While FTHRust is in alpha, please also attach `~/.fthr/logs/engine.log` (and the terminal output if you have it). The report doesn't include full logs yet.
+If a problem started earlier than the last megabyte of a log reaches, attach the whole `~/.fthr/logs/fthr.log` or `engine.log` as well (and the terminal output if you have it).

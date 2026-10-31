@@ -13,15 +13,16 @@ use fthrust_ipc::{
 };
 use fthrust_media::encoder::{Conversion, Encoder, EncoderConfig};
 use fthrust_media::ring::{EncodedPacket, EncodedRing};
+use fthrust_wayland::backend::monotonic_ns;
 use fthrust_wayland::frame::{BgraFrame, FrameSource, OutputTransform, normalize};
 
 use crate::audio::{AudioConfig, AudioProvider, AudioTarget};
 use crate::backend::{BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind};
 use crate::policy::{
-    CaptureRecoveryPolicy, EncodeFailurePolicy, next_encode_deadline, recovery_order,
-    wait_for_recovery_backoff,
+    CaptureRecoveryPolicy, EncodeFailurePolicy, capture_pacing_wait, next_encode_deadline,
+    recovery_order, wait_for_recovery_backoff,
 };
-use crate::watchdog::ContentWatchdog;
+use crate::watchdog::{ContentMetrics, ContentWatchdog};
 use crate::zero_copy::{self, ZeroCopy, zero_copy_plan};
 
 /// Capture could not start.
@@ -143,6 +144,7 @@ struct Inner {
     record_overflow: AtomicBool,
     normalized_frames: AtomicU64,
     encoder_conversions: AtomicU64,
+    zero_copy: AtomicBool,
 }
 
 impl Inner {
@@ -199,6 +201,7 @@ impl CaptureEngine {
             record_overflow: AtomicBool::new(false),
             normalized_frames: AtomicU64::new(0),
             encoder_conversions: AtomicU64::new(0),
+            zero_copy: AtomicBool::new(false),
         });
         Self {
             config,
@@ -322,8 +325,19 @@ impl CaptureEngine {
         );
     }
 
-    /// Current status (audio and save fields are filled by the daemon).
+    /// Current status (save fields are filled by the daemon).
     pub fn status(&self) -> StatusSnapshot {
+        // The audio sources are read before the status lock is taken: their
+        // locks are shared with the capture callback and window extraction,
+        // and the capture thread needs the status lock for every frame.
+        let audio = if self.started {
+            self.audio.status()
+        } else {
+            AudioStatus {
+                system: SourceStatus::Disabled,
+                microphone: SourceStatus::Disabled,
+            }
+        };
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -345,14 +359,7 @@ impl CaptureEngine {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: if self.started {
-                self.audio.status()
-            } else {
-                AudioStatus {
-                    system: SourceStatus::Disabled,
-                    microphone: SourceStatus::Disabled,
-                }
-            },
+            audio,
             last_save: None,
         }
     }
@@ -382,6 +389,13 @@ impl CaptureEngine {
     #[doc(hidden)]
     pub fn encoder_conversions(&self) -> u64 {
         self.inner.encoder_conversions.load(Ordering::Relaxed)
+    }
+
+    /// Whether the compositor renders into the encoder's surfaces right
+    /// now (tests).
+    #[doc(hidden)]
+    pub fn zero_copy_in_use(&self) -> bool {
+        self.inner.zero_copy.load(Ordering::Relaxed)
     }
 
     /// The encoded ring.
@@ -486,6 +500,8 @@ pub struct EngineHandle {
 impl EngineHandle {
     /// Current capture status (no save fields).
     pub fn status(&self) -> StatusSnapshot {
+        // Read outside the status lock, as in `CaptureEngine::status`.
+        let audio = self.inner.audio.status();
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -507,7 +523,7 @@ impl EngineHandle {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: self.inner.audio.status(),
+            audio,
             last_save: None,
         }
     }
@@ -549,10 +565,11 @@ impl EngineHandle {
             .clone()
     }
 
-    /// Installs or removes the packet tap.
+    /// Installs or removes the packet tap. Installing one also asks the
+    /// encoder for a keyframe, so a recording starts at once.
     pub fn set_packet_tap(&self, tap: Option<Sender<EncodedPacket>>) {
-        if tap.is_some() {
-            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        let installing = tap.is_some();
+        if installing {
             self.inner.record_overflow.store(false, Ordering::SeqCst);
         }
         *self
@@ -560,6 +577,12 @@ impl EngineHandle {
             .packet_tap
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = tap;
+        // Only once the tap is in place: requested before it, the capture
+        // thread could encode that keyframe and find no tap yet, and the
+        // recording waited for the next scheduled keyframe (up to 2 s).
+        if installing {
+            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Whether the packet tap overflowed since it was installed (cleared on
@@ -697,6 +720,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // The zero-copy fallback line is logged once per capture start.
     let mut zero_copy_logged = false;
     let mut surface_pixels = Vec::new();
+    // Lives across generations, so a black screen is followed through the
+    // recovery it asked for (one per run of suspect content).
+    let mut watchdog = ContentWatchdog::new(fps);
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -705,6 +731,12 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         for kind in &order {
             if !inner.running.load(Ordering::Relaxed) {
                 break 'generations;
+            }
+            if *kind == BackendKind::PortalScreenCast && failures.iter().any(is_transient) {
+                // A Wayland backend is only waiting out a compositor that
+                // is not answering or an absent output: the portal's
+                // dialog would come up for nothing.
+                break;
             }
             match inner
                 .backends
@@ -739,12 +771,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             // answering, the selected output is absent) is waited out
             // without consuming the budget; only genuine errors everywhere
             // count toward it.
-            let transient = failures.iter().any(|f| {
-                matches!(
-                    f.kind,
-                    FailureKind::CompositorUnreachable | FailureKind::OutputAbsent
-                )
-            });
+            let transient = failures.iter().any(is_transient);
             let reason = failures
                 .iter()
                 .map(|f| f.reason.as_str())
@@ -898,7 +925,6 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         let mut next_encode_ns = 0i64;
         let mut produced: u64 = 0;
         let mut encode_failures = EncodeFailurePolicy::new(fps);
-        let mut watchdog = ContentWatchdog::new(fps);
         // Whether the latest fresh (non-repeated) view is what the encoder
         // last took, so a repeat may re-send it.
         let mut last_fresh_encoded = false;
@@ -954,11 +980,58 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     );
                 }
             }
+            if zero_copy_active && !backend.uses_dmabuf() {
+                // The backend went back to shm on its own (the compositor
+                // filled none of the surfaces): free them, keep capturing.
+                zero_copy_active = false;
+                surface_proven = false;
+                enc.release_dmabuf_targets();
+                log_zero_copy_off(
+                    &mut zero_copy_logged,
+                    "the compositor filled none of the dmabuf capture buffers",
+                );
+            }
+            inner.zero_copy.store(zero_copy_active, Ordering::Relaxed);
+            if let Some(wait) = capture_pacing_wait(next_encode_ns, monotonic_ns()) {
+                std::thread::sleep(wait);
+            }
             let view = match backend.capture() {
                 Ok(v) => v,
                 Err(CaptureError::Cancelled) => break GenerationEnd::Stop,
                 Err(CaptureError::DmabufInvalidated) => {
                     dmabuf_invalidated = true;
+                    continue;
+                }
+                Err(CaptureError::Unchanged) => {
+                    // The compositor holds the request on a static screen and
+                    // the backend's buffers changed since its last frame (a
+                    // mode switch): re-send what the encoder last took, so
+                    // the stream keeps its rate instead of timing out.
+                    let ts = monotonic_ns();
+                    if ts < next_encode_ns {
+                        continue;
+                    }
+                    next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
+                    watchdog.tick();
+                    packets.clear();
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
+                    match enc.encode_repeat(ts, &mut packets) {
+                        Ok(true) => {
+                            encode_failures.on_encode_result(true);
+                            produced += 1;
+                            ever_produced = true;
+                            publish(&inner, &mut packets, fps);
+                        }
+                        // Nothing encoded yet: wait for the screen to change.
+                        Ok(false) => {}
+                        Err(e) => {
+                            if encode_failures.on_encode_result(false) {
+                                break GenerationEnd::EncoderFailed(e.to_string());
+                            }
+                        }
+                    }
                     continue;
                 }
                 Err(CaptureError::Disconnected) => {
@@ -984,30 +1057,26 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 continue;
             }
             next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
-            let update_content = |m: crate::watchdog::ContentMetrics| {
-                inner.update(|s| {
-                    s.content_sample_sequence = m.sequence;
-                    s.content_suspicious_streak = m.streak;
-                    s.content_luma_mean = m.luma_mean;
-                    s.content_luma_variance = m.luma_variance;
-                    if m.suspect {
-                        s.health_flags |= flags::CONTENT_SUSPECT;
-                    } else {
-                        s.health_flags &= !flags::CONTENT_SUSPECT;
-                    }
-                });
-            };
+            // The watchdog's sample of this frame, published and acted on
+            // once the frame is encoded.
+            let mut sampled = None;
+            let mut update_content = |m: ContentMetrics| sampled = Some(m);
             let encoded = if let FrameSource::Dmabuf(index) = view.source {
-                let (w, h) = (view.width as usize, view.height as usize);
                 let upright = view.transform == OutputTransform::Normal && !view.y_invert;
                 let is_repeat = view.repeated;
                 packets.clear();
                 let result = if !upright {
                     Err("the output is rotated or flipped".to_string())
                 } else {
+                    // Only the 16x9 sample pixels are read from the
+                    // surface, never the whole frame.
+                    let (columns, rows) = (ContentWatchdog::COLUMNS, ContentWatchdog::ROWS);
                     if watchdog.tick()
-                        && let Ok(stride) = enc.download_surface(index, &mut surface_pixels)
-                        && let Some(m) = watchdog.sample_raw(&surface_pixels, w, h, stride)
+                        && enc
+                            .sample_surface(index, columns, rows, &mut surface_pixels)
+                            .is_ok()
+                        && let Some(m) =
+                            watchdog.sample_raw(&surface_pixels, columns, rows, columns * 4)
                     {
                         update_content(m);
                     }
@@ -1141,28 +1210,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     encode_failures.on_encode_result(true);
                     produced += 1;
                     ever_produced = true;
-                    let ring = inner.ring.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                    let tap = inner
-                        .packet_tap
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .clone();
-                    for p in packets.drain(..) {
-                        if let Some(tap) = &tap
-                            && tap.try_send(p.clone()).is_err()
-                        {
-                            inner.record_overflow.store(true, Ordering::SeqCst);
-                        }
-                        ring.push(p);
-                    }
-                    let mut s = inner.status.lock().unwrap_or_else(|p| p.into_inner());
-                    s.frames_captured += 1;
-                    if s.frames_captured.is_multiple_of(u64::from(fps.max(1)))
-                        || s.frames_captured == 1
-                    {
-                        drop(s);
-                        inner.notify(EngineNotice::StatusChanged);
-                    }
+                    publish(&inner, &mut packets, fps);
                 }
                 Err(e) => {
                     if encode_failures.on_encode_result(false) {
@@ -1170,10 +1218,27 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     }
                 }
             }
+            if let Some(m) = sampled {
+                publish_content(&inner, m);
+                // On the portal a restart is a new ScreenCast session, whose
+                // picker could come up over the game (and dismissing it ends
+                // capture): there the content is only flagged.
+                if m.recover && kind != BackendKind::PortalScreenCast {
+                    tracing::warn!(
+                        samples = m.streak,
+                        "{CONTENT_RECOVERY_REASON}; restarting capture"
+                    );
+                    break GenerationEnd::BackendFailed {
+                        transient: false,
+                        reason: CONTENT_RECOVERY_REASON.into(),
+                    };
+                }
+            }
         };
 
         // Generation end.
         drop(backend);
+        inner.zero_copy.store(false, Ordering::Relaxed);
         match end {
             GenerationEnd::Stop => break 'generations,
             GenerationEnd::EncoderFailed(reason) => {
@@ -1227,6 +1292,58 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     }
     drop(s);
     inner.notify(EngineNotice::StatusChanged);
+}
+
+/// Why the watchdog restarts capture.
+const CONTENT_RECOVERY_REASON: &str = "the captured picture stayed black or one flat colour";
+
+/// Publishes one watchdog sample; `CONTENT_SUSPECT` follows it.
+fn publish_content(inner: &Inner, m: ContentMetrics) {
+    inner.update(|s| {
+        s.content_sample_sequence = m.sequence;
+        s.content_suspicious_streak = m.streak;
+        s.content_luma_mean = m.luma_mean;
+        s.content_luma_variance = m.luma_variance;
+        if m.suspect {
+            s.health_flags |= flags::CONTENT_SUSPECT;
+        } else {
+            s.health_flags &= !flags::CONTENT_SUSPECT;
+        }
+    });
+}
+
+/// The compositor is not answering or the selected output is absent: waited
+/// out, never counted against the retry budget.
+fn is_transient(f: &BackendFailure) -> bool {
+    matches!(
+        f.kind,
+        FailureKind::CompositorUnreachable | FailureKind::OutputAbsent
+    )
+}
+
+/// Hands one encoded frame's packets to the ring and the recording tap and
+/// counts the frame.
+fn publish(inner: &Inner, packets: &mut Vec<EncodedPacket>, fps: u32) {
+    let ring = inner.ring.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let tap = inner
+        .packet_tap
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    for p in packets.drain(..) {
+        if let Some(tap) = &tap
+            && tap.try_send(p.clone()).is_err()
+        {
+            inner.record_overflow.store(true, Ordering::SeqCst);
+        }
+        ring.push(p);
+    }
+    let mut s = inner.status.lock().unwrap_or_else(|p| p.into_inner());
+    s.frames_captured += 1;
+    if s.frames_captured.is_multiple_of(u64::from(fps.max(1))) || s.frames_captured == 1 {
+        drop(s);
+        inner.notify(EngineNotice::StatusChanged);
+    }
 }
 
 fn terminal_failure(inner: &Inner, reason: &str) {
@@ -1366,5 +1483,61 @@ const ZERO_COPY_SURFACES: usize = 4;
 fn log_zero_copy_off(logged: &mut bool, reason: &str) {
     if !std::mem::replace(logged, true) {
         tracing::info!(reason, "zero-copy capture unavailable; copying frames");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_recording_keyframe_is_requested_only_once_the_tap_is_in_place() {
+        // The capture thread consumes the keyframe request at its next frame
+        // and reads the tap after encoding it. Requested before the tap was
+        // installed, the keyframe could reach the ring but not the recorder,
+        // which then waited for the next scheduled keyframe (up to 2 s).
+        let script = Arc::new(Mutex::new(crate::backend::SyntheticScript::new(64, 64)));
+        let deps = EngineDeps {
+            backends: Arc::new(crate::backend::SyntheticFactory {
+                script,
+                candidates: vec![BackendKind::WlrScreencopy],
+            }),
+            audio: Arc::new(crate::audio::SyntheticAudio::new()),
+            backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+        };
+        let config = EngineConfig {
+            capture: fthrust_core::capture_config::CaptureConfig::default(),
+            max_buffer_mb: 0,
+            backend_override: None,
+        };
+        let engine = CaptureEngine::new(config, deps);
+        let handle = engine.handle();
+        for round in 0..2000 {
+            handle.set_packet_tap(None);
+            handle.inner.keyframe_request.store(false, Ordering::SeqCst);
+            let (tx, _rx) = crossbeam_channel::bounded(1);
+            let inner = handle.inner.clone();
+            let ready = Arc::new(std::sync::Barrier::new(2));
+            let watcher = {
+                let ready = ready.clone();
+                std::thread::spawn(move || {
+                    ready.wait();
+                    while !inner.keyframe_request.load(Ordering::SeqCst) {
+                        std::hint::spin_loop();
+                    }
+                    inner
+                        .packet_tap
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_some()
+                })
+            };
+            ready.wait();
+            handle.set_packet_tap(Some(tx));
+            assert!(
+                watcher.join().unwrap(),
+                "round {round}: the keyframe was requested before the tap was installed"
+            );
+        }
     }
 }

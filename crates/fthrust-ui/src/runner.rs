@@ -27,6 +27,8 @@ pub enum Wake {
     Repaint(Duration),
     /// A service thread queued an event: tick now.
     Tick,
+    /// SIGTERM, SIGINT or SIGHUP: shut down as if the window were closed.
+    Quit,
 }
 
 /// Services tick at least this often even with no events.
@@ -67,10 +69,13 @@ pub fn run(
     instance: Option<Instance>,
     viewport: ViewportBuilder,
 ) -> Result<(), String> {
+    // Fidelity markers are only read by the bench's state dump.
+    crate::fidelity::set_recording(crate::ui_dump::requested());
     let event_loop = EventLoop::<Wake>::with_user_event()
         .build()
         .map_err(|e| e.to_string())?;
     let proxy: EventLoopProxy<Wake> = event_loop.create_proxy();
+    quit_signals::install(proxy.clone());
     let ctx = new_context();
     {
         let proxy = proxy.clone();
@@ -93,10 +98,104 @@ pub fn run(
         next_heartbeat: Instant::now() + HEARTBEAT,
         error: None,
     };
-    event_loop.run_app(&mut runner).map_err(|e| e.to_string())?;
+    let ran = event_loop.run_app(&mut runner).map_err(|e| e.to_string());
+    // The window is gone by now (see `exiting`), so the bounded shutdown
+    // waits (exports, a recording, a save in flight) don't leave a frozen
+    // window on screen.
+    if let Some(mut app) = runner.app.take() {
+        app.on_exit();
+    }
+    ran?;
     match runner.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+/// SIGTERM (a logout, `systemctl stop`), SIGINT and SIGHUP end the event
+/// loop like closing the window, so the usual shutdown runs: pending
+/// settings are written, a save in flight finishes, the session is closed
+/// cleanly. They used to kill the app on the spot. A second signal exits at
+/// once, in case the shutdown itself is stuck.
+mod quit_signals {
+    use winit::event_loop::EventLoopProxy;
+
+    use super::Wake;
+
+    /// Listens on a thread of its own (tokio's handlers are reset in child
+    /// processes, so the engine and helpers keep the default actions).
+    pub fn install(proxy: EventLoopProxy<Wake>) {
+        let spawned = std::thread::Builder::new()
+            .name("fthrust-quit-signal".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "quit signals not handled");
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    use tokio::signal::unix::{SignalKind, signal};
+                    let (Ok(mut term), Ok(mut int)) = (
+                        signal(SignalKind::terminate()),
+                        signal(SignalKind::interrupt()),
+                    ) else {
+                        tracing::warn!("quit signals not handled");
+                        return;
+                    };
+                    // Started with `nohup`: a hangup stays ignored.
+                    let mut hup = if inherited_ignore(1) {
+                        None
+                    } else {
+                        signal(SignalKind::hangup()).ok()
+                    };
+                    let mut asked = false;
+                    loop {
+                        tokio::select! {
+                            Some(()) = term.recv() => {}
+                            Some(()) = int.recv() => {}
+                            Some(()) = async {
+                                match hup.as_mut() {
+                                    Some(h) => h.recv().await,
+                                    None => std::future::pending().await,
+                                }
+                            } => {}
+                            else => return,
+                        }
+                        if asked {
+                            tracing::warn!("second quit signal; exiting now");
+                            std::process::exit(1);
+                        }
+                        asked = true;
+                        // At once: a probe killed by the same signal must
+                        // not be cached as a dead encoder.
+                        crate::services::set_quitting();
+                        let _ = proxy.send_event(Wake::Quit);
+                    }
+                });
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "quit signal thread not started");
+        }
+    }
+
+    /// Whether the process inherited "ignore" for signal `signo` (the
+    /// `SigIgn` mask in `/proc/self/status`).
+    pub fn inherited_ignore(signo: u32) -> bool {
+        std::fs::read_to_string("/proc/self/status").is_ok_and(|s| ignored_in(&s, signo))
+    }
+
+    /// Whether a `/proc/<pid>/status` text lists `signo` as ignored.
+    pub fn ignored_in(status: &str, signo: u32) -> bool {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("SigIgn:"))
+            .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+            .is_some_and(|mask| (1..=64).contains(&signo) && mask & (1 << (signo - 1)) != 0)
     }
 }
 
@@ -287,9 +386,13 @@ impl ApplicationHandler<Wake> for Runner {
         self.schedule(el);
     }
 
-    fn user_event(&mut self, _el: &ActiveEventLoop, event: Wake) {
+    fn user_event(&mut self, el: &ActiveEventLoop, event: Wake) {
         match event {
             Wake::Tick => self.tick(),
+            Wake::Quit => {
+                tracing::info!("quit signal received");
+                el.exit();
+            }
             Wake::Repaint(delay) => {
                 // Service threads wake us through egui's repaint request: tick
                 // now, paint when the compositor lets us.
@@ -319,6 +422,7 @@ impl ApplicationHandler<Wake> for Runner {
         match event {
             WindowEvent::CloseRequested => {
                 tracing::info!("window close requested by the compositor");
+                crate::services::set_quitting();
                 el.exit();
             }
             WindowEvent::Resized(size) => {
@@ -341,9 +445,8 @@ impl ApplicationHandler<Wake> for Runner {
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
-        if let Some(mut app) = self.app.take() {
-            app.on_exit();
-        }
+        // Close the window first; [`run`] shuts the app down once the event
+        // loop has returned.
         if let Some(mut p) = self.painter.take() {
             p.destroy();
         }
@@ -357,6 +460,15 @@ mod tests {
     use super::*;
     use egui_wgpu::WgpuSetup;
     use egui_wgpu::wgpu::Backends;
+
+    #[test]
+    fn an_inherited_hangup_ignore_is_seen() {
+        let status = "Name:\tfthrust\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001001\n";
+        assert!(quit_signals::ignored_in(status, 1), "SIGHUP");
+        assert!(!quit_signals::ignored_in(status, 2), "SIGINT");
+        assert!(quit_signals::ignored_in(status, 13), "SIGPIPE");
+        assert!(!quit_signals::ignored_in("Name:\tx\n", 1));
+    }
 
     #[test]
     fn vulkan_only_unless_the_variable_says_otherwise() {

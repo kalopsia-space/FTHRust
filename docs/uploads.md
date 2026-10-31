@@ -68,9 +68,9 @@ Upload to any server you can reach over SFTP, such as a seedbox, a NAS or a web 
 | **Host key (optional)** | Paste the server's `SHA256:…` fingerprint to pin it. |
 | **Public folder URL** | If that folder is also served over HTTPS, enter its URL and tick **Generate public HTTPS sharing links for SFTP uploads** to get web links. |
 
-**Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. Only password logins are supported for now.
+**Your password is never sent to a server FTHRust can't verify.** The server's key must match your pinned fingerprint, your `~/.ssh/known_hosts`, or a key FTHRust has verified before. Otherwise the connection stops before logging in and tells you how to trust the host. When a server has several host keys and you haven't pinned one, FTHRust asks for the type you already have on record for it (ECDSA, RSA or Ed25519), as `ssh` does, so an old `known_hosts` entry of any of them is enough. A pinned fingerprint decides on its own: `known_hosts` is not consulted for it and does not change which key is asked for. Only password logins are supported for now.
 
-Files are uploaded as `fthr-<random>.mp4` under a temporary name, renamed when complete, and size-checked. **Forget saved password for this host and user** removes the password from the keyring.
+Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters and digits>.part`), renamed when complete, and size-checked. A failed upload removes what it left on the server. If an upload is cut off with no chance to do that (the app stops a stuck uploader after 10 minutes), the next upload of the same clip removes the leftover `.part` file (and writes under another name if the server won't let it go). **Forget saved password for this host and user** removes the password from the keyring.
 
 **VaultScope** in the provider list is SFTP with VaultScope's settings filled in. **Paste VaultScope login** fills the fields from the login details VaultScope gives you.
 
@@ -82,7 +82,9 @@ Files are uploaded as `fthr-<random>.mp4` under a temporary name, renamed when c
 - **Upload immediately after capture**: every saved clip is uploaded.
 - **Upload on an interval**: new clips are collected and sent every few minutes, hours or days. Files changed in the last 30 seconds are left for the next round.
 
-**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link. If no link comes back, your clip is kept.
+**Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link FTHRust can use: an `http://` or `https://` address, or an SFTP location. If no link comes back, or the reply is something else (a word such as `queued`, a `file:` address, several lines of text), your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead.
+
+Auto-delete only ever removes clips inside your clips folder. Clips in folders you've imported are uploaded like any other (interval uploads include them) but are never deleted, even with the box ticked, so a whole imported library can't disappear by accident.
 
 ## Getting the link
 
@@ -92,6 +94,8 @@ When an upload finishes, a capture card shows **UPLOADED ORIGINAL** (or **UPLOAD
 - right-click it and choose **Open uploaded link**.
 
 The link isn't copied to your clipboard automatically.
+
+If a server takes a clip but doesn't send a link back, the clip still gets the **Uploaded** badge, and the bar says there is no link to copy. Pressing **Upload clip** on such a clip says so again and offers **UPLOAD AGAIN**, which sends it once more; the immediate and interval modes never do. When the clip can't be deleted after an upload, or the upload couldn't be saved to the history, the bar says that too.
 
 ## What's stored where
 
@@ -103,6 +107,8 @@ The link isn't copied to your clipboard automatically.
 | Upload history and links | `~/.fthr/uploader/upload_history.json` |
 | SFTP host keys you've trusted | `~/.fthr/uploader/known_hosts` |
 
+The `uploader` folder is private to you (`0700`) and the files in it are `0600`, since the settings hold the Catbox user hash and the Your server header in plain text. Older profiles are tightened the next time the app starts. If a file there can't be read, the app leaves it alone instead of replacing it with an empty one, and a file that isn't valid JSON is copied to `<name>.corrupt` before anything is written over it.
+
 The uploader only reads clips inside your clips folder and folders you've imported. It refuses any other path it's given.
 
 ## When an upload fails
@@ -110,6 +116,8 @@ The uploader only reads clips inside your clips folder and folders you've import
 A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too.
 
 Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
+
+An HTTP upload is never cut off for taking long: only for going quiet. It fails when no data goes out for 2 minutes, or when the server hasn't answered 2 minutes after the whole clip was sent, and that counts as a network error. The upload as a whole still has to finish within 10 minutes, after which the app stops it.
 
 [Troubleshooting](troubleshooting.md) lists every upload error code.
 
@@ -131,7 +139,7 @@ one file field named "clip", with the clip's file name and content type
 
 - A URL without a scheme gets `https://`. Only `http` and `https` are allowed.
 - Redirects are **not** followed. A 3xx response is reported as an error; point the URL at the final address.
-- Any 2xx response is a success. If the body is JSON with a `url` (or `raw_url`) field, or is plain text starting with `http://` or `https://`, that's the link. Otherwise the upload counts as done without a link, and auto-delete is skipped.
+- Any 2xx response is a success. If the body is JSON with a `url` (or `raw_url`) field, or is plain text starting with `http://` or `https://`, that's the link, provided it is a single-line `http://` or `https://` address. Otherwise (no link, or something else such as `queued`) the upload counts as done without a link, the bar says so, and auto-delete is skipped.
 - On an error, an `error`, `message` or `detail` field in a JSON body (or a short plain-text body) is shown to the user, up to 400 characters. HTML error pages are not shown.
 
 **Test connection** sends `HEAD <Server URL>` with the same `Authorization` header. A 2xx answer, or a 405 from a server that doesn't support `HEAD`, counts as reachable.

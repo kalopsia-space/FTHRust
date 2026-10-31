@@ -24,6 +24,15 @@ pub enum CoreError {
         /// Path the corrupt file was renamed to.
         quarantined: PathBuf,
     },
+    /// A file was left as it is because replacing it would destroy data:
+    /// it could not be read, or could not be set aside first.
+    #[error("{path} was left as it is: {reason}")]
+    Protected {
+        /// File that was not replaced.
+        path: PathBuf,
+        /// Why replacing it was refused.
+        reason: String,
+    },
     /// The private runtime directory is missing or unsafe to use.
     #[error("unsafe runtime directory: {0}")]
     RuntimeDir(String),

@@ -149,7 +149,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         Vec2::new(widths[0], 43.0),
     )));
     if buttons::secondary(&mut ex, &t, "Export theme", "QPushButton[Export theme]").clicked() {
-        state.theme_export_requested = true;
+        state.browse_requested = Some(BrowseKind::ThemeExport);
     }
     x += widths[0] + 12.0;
     let mut im = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
@@ -260,7 +260,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                 };
                 let mut open = state.customize_open[i];
                 // The header needs the icon cache while the body needs the whole state.
-                let mut icons = std::mem::take(&mut state.icons);
+                let mut icons = state.icons.lend();
                 accordion::section(
                     &mut c,
                     &t,
@@ -278,10 +278,9 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                         _ => sounds(ui, state),
                     },
                 );
-                // Bodies may have replaced textures (Apply); keep the newer cache.
-                if state.icons.is_empty() {
-                    state.icons = icons;
-                }
+                // Keep what the body drew; a body that cleared the cache
+                // (Apply) made the lent one stale.
+                state.icons.give_back(icons);
                 state.customize_open[i] = open;
                 space(&mut c, 12.0);
             }
@@ -846,7 +845,7 @@ fn icon_colors(ui: &mut Ui, state: &mut AppState) {
         "globalTintSwatch",
     ) {
         state.theme.data.icon_tints.insert("_global".into(), h);
-        save_theme(state);
+        state.save_theme_soon();
     }
     let rw = (galley(ui, "Reset all", size::LABEL, Weight::W600, Color32::WHITE)
         .size()
@@ -913,7 +912,7 @@ fn icon_colors(ui: &mut Ui, state: &mut AppState) {
             &format!("tintSwatch[{logical}]"),
         ) {
             state.theme.data.icon_tints.insert(logical.to_string(), h);
-            save_theme(state);
+            state.save_theme_soon();
         }
         let mut r = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
             Pos2::new(top.x + w - rw, top.y + 9.0),
@@ -1063,7 +1062,7 @@ fn capture_card(ui: &mut Ui, state: &mut AppState) {
     let top = ui.cursor().min;
     if let Some((token, hex)) = swatch_grid(ui, state, &items, 4, top.x) {
         state.theme.data.capture_card.insert(token, hex);
-        save_theme(state);
+        state.save_theme_soon();
     }
     space(ui, 12.0);
     let top = ui.cursor().min;
@@ -1183,7 +1182,7 @@ fn sounds(ui: &mut Ui, state: &mut AppState) {
         .changed()
         {
             state.settings.set(&setting_key, json!(v as i64));
-            let _ = state.settings.save();
+            state.save_settings_soon();
         }
         let text = format!("{}%", v as i64);
         let g = galley(

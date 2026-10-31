@@ -80,13 +80,25 @@ impl PipeWireAudio {
             .unwrap_or_else(|p| p.into_inner())
             .blocks
     }
-}
 
-impl AudioProvider for PipeWireAudio {
-    fn start(&self, cfg: &AudioConfig) -> Vec<(String, String)> {
-        if cfg.system.is_none() && cfg.microphone.is_none() {
-            return Vec::new();
-        }
+    /// A provider holding history for the sources `cfg` enables but never
+    /// connecting to PipeWire; [`PipeWireAudio::push_block`] feeds it
+    /// (tests).
+    #[doc(hidden)]
+    pub fn detached(cfg: &AudioConfig) -> Self {
+        let this = Self::new();
+        this.prepare(cfg);
+        this
+    }
+
+    /// Delivers a block exactly as the capture callback does (tests).
+    #[doc(hidden)]
+    pub fn push_block(&self, kind: AudioSourceKind, block: AudioBlock) {
+        deliver_block(&self.shared, kind, block);
+    }
+
+    /// Gives each enabled source an empty ring, the others none.
+    fn prepare(&self, cfg: &AudioConfig) {
         for (kind, target) in [
             (AudioSourceKind::System, &cfg.system),
             (AudioSourceKind::Microphone, &cfg.microphone),
@@ -104,6 +116,29 @@ impl AudioProvider for PipeWireAudio {
                 s.status = SourceStatus::Disabled;
             }
         }
+    }
+}
+
+/// Appends a captured block to `kind`'s ring. The source lock is held only
+/// for the push; window extraction takes it just as briefly, so a long save
+/// never keeps the real-time callback waiting.
+fn deliver_block(shared: &Shared, kind: AudioSourceKind, block: AudioBlock) {
+    let mut s = shared
+        .source(kind)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some(ring) = s.ring.as_mut() {
+        ring.push(block);
+    }
+    s.blocks += 1;
+}
+
+impl AudioProvider for PipeWireAudio {
+    fn start(&self, cfg: &AudioConfig) -> Vec<(String, String)> {
+        if cfg.system.is_none() && cfg.microphone.is_none() {
+            return Vec::new();
+        }
+        self.prepare(cfg);
         crate::devices::init_pipewire();
         let (quit_tx, quit_rx) = pw::channel::channel::<LoopMessage>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -144,12 +179,28 @@ impl AudioProvider for PipeWireAudio {
     }
 
     fn window(&self, kind: AudioSourceKind, end_ns: i64, duration_ms: u32) -> Option<Vec<f32>> {
-        let s = self
+        // Only the shared blocks are taken under the source lock; the samples
+        // are copied once it is released. Copying them under it (about 46 MB
+        // for a 120 s clip) held up the real-time capture callback.
+        let blocks = self
             .shared
             .source(kind)
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        s.ring.as_ref().map(|r| r.window(end_ns, duration_ms))
+            .unwrap_or_else(|p| p.into_inner())
+            .ring
+            .as_ref()
+            .map(|r| r.window_blocks(end_ns, duration_ms))?;
+        Some(blocks.pcm())
+    }
+
+    fn captured_until(&self, kind: AudioSourceKind) -> Option<i64> {
+        self.shared
+            .source(kind)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .ring
+            .as_ref()?
+            .captured_until()
     }
 
     fn status(&self) -> AudioStatus {
@@ -385,14 +436,7 @@ fn run_loop(
                         let delivery_end = monotonic_ns();
                         let start_ns =
                             chunk_start_ns(delivery_end, latency_us, frames, SAMPLE_RATE);
-                        let mut s = shared
-                            .source(kind)
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner());
-                        if let Some(ring) = s.ring.as_mut() {
-                            ring.push(AudioBlock { start_ns, samples });
-                        }
-                        s.blocks += 1;
+                        deliver_block(&shared, kind, AudioBlock { start_ns, samples });
                     }
                 }
             })

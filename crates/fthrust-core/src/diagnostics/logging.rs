@@ -8,15 +8,19 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
-use time::OffsetDateTime;
 use time::macros::format_description;
+use time::{OffsetDateTime, UtcOffset};
 use tracing::Subscriber;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use super::redact::redact;
 use crate::error::{CoreError, Result};
@@ -25,10 +29,89 @@ use crate::paths::FthrPaths;
 const DATE_FORMAT: &[time::format_description::FormatItem<'static>] =
     format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
 
-fn local_now_text() -> String {
-    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    now.format(DATE_FORMAT)
+/// The local UTC offset, read once and then fixed for the run: every line of
+/// the log, the start banner included, is stamped with the same offset, so a
+/// change of offset in a long session (daylight saving time) is not followed.
+/// Unreadable gives UTC.
+fn local_offset() -> UtcOffset {
+    static OFFSET: OnceLock<UtcOffset> = OnceLock::new();
+    *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
+}
+
+/// Reads the local UTC offset the log's timestamps use. `main` calls it as its
+/// first statement, while the process has a single thread. That is a
+/// precaution, not a fix for wrong times: the locked `time` (0.3.55) reads the
+/// offset just as well with other threads running, and only its explicit
+/// `refresh_tz` looks at the thread count. The first read makes the C library
+/// load the `TZ` variable and the zone files, which is only free of races
+/// while no other thread touches the environment, and one thread is the sure
+/// way to have that; a `time` that refused to read the offset once threads
+/// exist would also leave the log in UTC without it. Without this call the
+/// first log line reads the offset.
+pub fn init_local_offset() {
+    let _ = local_offset();
+}
+
+/// Log files are private to the user (paths, window titles and game names end
+/// up in them): a file the log creates is `0600`. The mode only applies to a
+/// file that does not exist yet; one that is already there keeps its own.
+fn private_log() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.create(true).mode(0o600);
+    options
+}
+
+/// `at` as `YYYY-MM-DD HH:MM:SS` in `offset`.
+fn timestamp_text(at: OffsetDateTime, offset: UtcOffset) -> String {
+    at.to_offset(offset)
+        .format(DATE_FORMAT)
         .unwrap_or_else(|_| "0000-00-00 00:00:00".into())
+}
+
+fn local_now_text() -> String {
+    timestamp_text(OffsetDateTime::now_utc(), local_offset())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::{datetime, offset};
+
+    #[test]
+    fn timestamps_are_written_in_the_offset_they_are_given() {
+        let at = datetime!(2026-07-01 23:30:05 UTC);
+        assert_eq!(timestamp_text(at, offset!(UTC)), "2026-07-01 23:30:05");
+        // British summer time: the log's date changes with the hour.
+        assert_eq!(timestamp_text(at, offset!(+1)), "2026-07-02 00:30:05");
+        assert_eq!(timestamp_text(at, offset!(-5:30)), "2026-07-01 18:00:05");
+    }
+
+    #[test]
+    fn the_offset_is_fixed_once_and_stays_fixed() {
+        init_local_offset();
+        let first = local_offset();
+        init_local_offset();
+        assert_eq!(local_offset(), first);
+    }
+}
+
+/// What the app logs without `RUST_LOG`: info for FTHRust's own crates (every
+/// target starting with `fthrust`, the binary included) and warnings from
+/// everything else.
+pub const DEFAULT_LOG_FILTER: &str = "warn,fthrust=info";
+
+/// The filter for `rust_log` (the value of `RUST_LOG`), or
+/// [`DEFAULT_LOG_FILTER`] when it is unset or not a valid filter.
+pub fn env_filter_from(rust_log: Option<&str>) -> EnvFilter {
+    rust_log
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| EnvFilter::try_new(s).ok())
+        .unwrap_or_else(|| EnvFilter::new(DEFAULT_LOG_FILTER))
+}
+
+/// [`env_filter_from`] the process's `RUST_LOG`.
+pub fn default_env_filter() -> EnvFilter {
+    env_filter_from(std::env::var("RUST_LOG").ok().as_deref())
 }
 
 /// Size-rotating log file that redacts each line and mirrors it to stderr.
@@ -54,7 +137,7 @@ impl RotatingWriter {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let file = private_log().append(true).open(path)?;
         let len = file.metadata()?.len();
         Ok(Self {
             path: path.to_path_buf(),
@@ -101,11 +184,7 @@ impl RotatingWriter {
             }
             fs::rename(&self.path, self.backup_path(1))?;
         }
-        self.file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self.path)?;
+        self.file = private_log().truncate(true).write(true).open(&self.path)?;
         self.len = 0;
         Ok(())
     }
@@ -233,13 +312,32 @@ impl Logger {
         })
     }
 
-    /// A `tracing` subscriber that writes every event through this log.
-    pub fn subscriber(&self) -> impl Subscriber + Send + Sync + 'static {
-        tracing_subscriber::fmt()
+    /// The layer that formats every event into this log. No terminal escape
+    /// codes: the file (and the stderr mirror of it) is plain text.
+    fn fmt_layer<S>(&self) -> impl tracing_subscriber::Layer<S> + Send + Sync + 'static
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        tracing_subscriber::fmt::layer()
             .event_format(FthrFormat)
             .with_writer(self.writer.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .finish()
+            .with_ansi(false)
+    }
+
+    /// A `tracing` subscriber that writes every event through this log.
+    pub fn subscriber(&self) -> impl Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry().with(self.fmt_layer())
+    }
+
+    /// Like [`subscriber`](Self::subscriber), but only the events `filter`
+    /// lets through (see [`default_env_filter`]).
+    pub fn subscriber_with_filter(
+        &self,
+        filter: EnvFilter,
+    ) -> impl Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(self.fmt_layer())
     }
 
     /// Flushes buffered output.
@@ -266,11 +364,19 @@ impl Drop for LogGuard {
     }
 }
 
-/// Opens the application log and installs it as the global `tracing`
-/// subscriber. Fails if a global subscriber is already installed.
+/// Opens the application log (`logs/fthr.log`, also mirrored to stderr) and
+/// installs it as the global `tracing` subscriber, filtered by `RUST_LOG` or
+/// else [`DEFAULT_LOG_FILTER`]. Records from the `log` crate (wgpu, winit...)
+/// are forwarded too. Fails if a global subscriber is already installed.
+///
+/// The log's timestamps are in local time, with the UTC offset read once
+/// ([`init_local_offset`], which `main` calls first thing; without that call,
+/// the first line reads it).
 pub fn init_logging(paths: &FthrPaths, app_version: &str) -> Result<LogGuard> {
     let logger = Logger::open(paths, app_version)?;
-    tracing::subscriber::set_global_default(logger.subscriber())
+    logger
+        .subscriber_with_filter(default_env_filter())
+        .try_init()
         .map_err(|e| CoreError::Invalid(format!("global logger already installed: {e}")))?;
     Ok(LogGuard { logger })
 }
@@ -302,7 +408,7 @@ fn install_panic_hook() {
                 .map(|l| format!("{}:{}", l.file(), l.line()))
                 .unwrap_or_else(|| "<unknown>".into());
             let backtrace = std::backtrace::Backtrace::force_capture();
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(mut file) = private_log().append(true).open(&path) {
                 let _ = writeln!(
                     file,
                     "panic: {} (thread {}) at {}\n{}",
@@ -333,7 +439,7 @@ pub fn init_crash_log(paths: &FthrPaths) -> Result<()> {
         old.push(".old");
         fs::rename(&path, PathBuf::from(old))?;
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = private_log().append(true).open(&path)?;
     writeln!(
         file,
         "===== started {} pid {} =====",

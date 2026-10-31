@@ -5,6 +5,7 @@
 
 pub mod browse;
 pub mod camera;
+pub mod devices;
 pub mod diagnostics;
 pub mod engine;
 pub mod export;
@@ -145,6 +146,15 @@ pub enum Event {
     Toplevels(Vec<fthrust_wayland::toplevels::Toplevel>),
     /// Whether the toplevel protocol is available.
     GameDetectionAvailability(bool),
+    /// The encoders that passed the one-frame test (cached or probed).
+    EncoderCapabilities(Vec<fthrust_media::capabilities::EncoderCapability>),
+    /// The audio devices the engine lists.
+    AudioDevices {
+        /// Playback sinks `(label, id)`.
+        playback: Result<devices::DeviceList, String>,
+        /// Microphones `(name, id)`.
+        microphones: Result<devices::DeviceList, String>,
+    },
 }
 
 impl PartialEq for ScanEvent {
@@ -186,16 +196,12 @@ pub enum Request {
     RefreshAudioDevices,
     /// Refresh cameras.
     RefreshCameras,
-    /// Export the theme ZIP.
-    ExportTheme,
     /// Preview a sound.
     PreviewSound(String),
     /// Toggle manual recording.
     ToggleRecording,
     /// Upload a clip.
     Upload(PathBuf),
-    /// Open a clip in the editor.
-    OpenClip(PathBuf),
     /// Open a screenshot.
     OpenScreenshot(PathBuf),
     /// Show a file in the file manager.
@@ -208,9 +214,38 @@ pub enum Request {
     PauseCapture,
     /// Resume capture (focus regained).
     ResumeCapture,
-    /// Stop everything.
-    Shutdown,
 }
+
+/// Waits up to `timeout` for a pending connection on `listener`, asleep in
+/// poll(2): the accept loops used to spin on a non-blocking accept every
+/// 15-25 ms for as long as the app ran.
+pub fn wait_for_connection(
+    listener: &std::os::unix::net::UnixListener,
+    timeout: std::time::Duration,
+) -> bool {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd;
+    let ms = u16::try_from(timeout.as_millis().max(1)).unwrap_or(u16::MAX);
+    let mut fds = [PollFd::new(listener.as_fd(), PollFlags::POLLIN)];
+    matches!(poll(&mut fds, PollTimeout::from(ms)), Ok(n) if n > 0)
+}
+
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The app has started to quit.
+pub fn quitting() -> bool {
+    QUITTING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Marks the app as quitting (the first quit signal or the window closing,
+/// before the shutdown steps run).
+pub fn set_quitting() {
+    QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How long an accept loop sleeps between stop checks; stopping also
+/// connects to the socket to wake it at once.
+pub const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The app id registered with the desktop portals.
 pub const APP_ID: &str = "space.kalopsia.fthrust";
@@ -233,13 +268,29 @@ impl Outbox {
         }
     }
 
-    /// Sends an event, wakes the event loop and requests a repaint.
-    pub fn send(&self, event: Event) {
-        let _ = self.tx.send(event);
+    /// Wakes the event loop and requests a repaint, with no event.
+    pub fn wake(&self) {
         if let Some(w) = &self.waker {
             w();
         }
         self.ctx.request_repaint();
+    }
+
+    /// Sends an event, wakes the event loop and requests a repaint.
+    pub fn send(&self, event: Event) {
+        self.send_quiet(event);
+        self.ctx.request_repaint();
+    }
+
+    /// Sends an event and wakes the event loop, which ticks the services
+    /// without painting. For frequent events that change nothing on screen
+    /// by themselves (health, save progress, window lists); whatever they
+    /// do change asks for its own repaint.
+    pub fn send_quiet(&self, event: Event) {
+        let _ = self.tx.send(event);
+        if let Some(w) = &self.waker {
+            w();
+        }
     }
 }
 
@@ -274,6 +325,8 @@ pub struct Services {
     upload: upload::UploadService,
     camera: camera::CameraService,
     mic_level: Option<mic_level::MicLevel>,
+    /// A mic meter being opened off the UI thread.
+    mic_level_pending: Option<std::sync::mpsc::Receiver<Result<mic_level::MicLevel, String>>>,
     mic_level_retry: f64,
     mic_generation: u64,
     gary: Option<crate::overlay::gary::GaryOverlay>,
@@ -348,6 +401,7 @@ impl Services {
             upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
+            mic_level_pending: None,
             mic_level_retry: 0.0,
             mic_generation: 0,
             gary: None,
@@ -387,7 +441,57 @@ impl Services {
         player.preload_async(&state.theme);
         services.sounds = Some(player);
         services.last_tokens = Some(state.tokens.clone());
+        services.detect_encoders(state, false);
+        services.list_audio_devices();
         services
+    }
+
+    /// Loads (or, with `force`, re-runs) the encoder test off the UI
+    /// thread; the result arrives as [`Event::EncoderCapabilities`].
+    fn detect_encoders(&self, state: &AppState, force: bool) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        if RUNNING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let cache = state.paths.encoder_capabilities_file();
+        let outbox = self.outbox.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fthrust-encoder-probe".into())
+            .spawn(move || {
+                let found = devices::encoder_capabilities(&cache, force);
+                RUNNING.store(false, Ordering::Release);
+                outbox.send(Event::EncoderCapabilities(found));
+            });
+        if let Err(e) = spawned {
+            RUNNING.store(false, Ordering::Release);
+            tracing::warn!(error = %e, "encoder probe thread not started");
+        }
+    }
+
+    /// Asks the engine binary for the playback sinks and microphones; the
+    /// result arrives as [`Event::AudioDevices`].
+    fn list_audio_devices(&self) {
+        let Some(handle) = self.runtime() else {
+            return;
+        };
+        let outbox = self.outbox.clone();
+        handle.spawn(async move {
+            let (playback, microphones) = match engine::discover_engine(None) {
+                Some(exe) => (
+                    devices::list(&exe, "--list-playback-devices").await,
+                    devices::list(&exe, "--list-microphones").await,
+                ),
+                None => {
+                    let missing = Err("fthrust-engine not found".to_owned());
+                    (missing.clone(), missing)
+                }
+            };
+            outbox.send(Event::AudioDevices {
+                playback,
+                microphones,
+            });
+        });
     }
 
     /// Cards and cues queued by the pages and the other services.
@@ -428,13 +532,53 @@ impl Services {
     }
 
     /// Starts the toplevel reader (availability is reported as an event).
+    /// The compositor connection is made on the reader's thread: its two
+    /// roundtrips blocked the UI thread for up to 5 s at startup.
     fn start_game_detection(&mut self) {
         let outbox = self.outbox.clone();
-        match fthrust_wayland::toplevels::ToplevelWatcher::connect() {
-            Ok(w) => self.detector = Some(game::GameDetector::start(Box::new(w), outbox)),
-            Err(e) => {
-                tracing::info!(error = %e, "toplevel list unavailable");
-                outbox.send(Event::GameDetectionAvailability(false));
+        self.detector = Some(game::GameDetector::start_with(
+            || {
+                fthrust_wayland::toplevels::ToplevelWatcher::connect()
+                    .map(|w| Box::new(w) as Box<dyn game::Toplevels>)
+                    .map_err(|e| e.to_string())
+            },
+            outbox,
+        ));
+    }
+
+    /// A new toplevel snapshot: game detection and the focus pause.
+    fn on_toplevels(
+        &mut self,
+        state: &mut AppState,
+        snapshot: Vec<fthrust_wayland::toplevels::Toplevel>,
+        now: f64,
+    ) {
+        self.sync_focus_target(state);
+        let was_paused = self.focus.paused();
+        let change = self.focus.observe(&snapshot);
+        let actions = self.game.on_snapshot(state, snapshot, now);
+        self.run_game_actions(state, actions);
+        // Switching sources changes the focus target.
+        self.sync_focus_target(state);
+        match change {
+            Some(focus::FocusChange::Lost) => {
+                self.dispatch(Request::PauseCapture, state);
+                state.status = StatusText {
+                    text: status::FOCUS_PAUSED.into(),
+                    style: StatusStyle::Warning,
+                };
+            }
+            Some(focus::FocusChange::Regained) => {
+                self.dispatch(Request::ResumeCapture, state);
+                state.status = StatusText {
+                    text: "STARTING CAPTURE".into(),
+                    style: StatusStyle::Idle,
+                };
+            }
+            None => {
+                if was_paused && !self.focus.paused() {
+                    self.dispatch(Request::ResumeCapture, state);
+                }
             }
         }
     }
@@ -572,6 +716,7 @@ impl Services {
             upload: upload::UploadService::new(),
             camera: camera::CameraService::new(),
             mic_level: None,
+            mic_level_pending: None,
             mic_level_retry: 0.0,
             mic_generation: 0,
             gary: None,
@@ -609,6 +754,14 @@ impl Services {
     /// Screenshot requests queued behind the running one.
     pub fn screenshot_pending(&self) -> u8 {
         self.screenshot.pending()
+    }
+
+    /// Stands in the finished-recording check (tests).
+    pub fn set_recording_check_for_tests(
+        &mut self,
+        check: fn(&std::path::Path) -> Result<(), String>,
+    ) {
+        self.recording.set_finalize_check(check);
     }
 
     /// The recording state.
@@ -669,14 +822,15 @@ impl Services {
                 recording::RecAction::RestoreClipProfile => {
                     if self.test_requests.is_some() {
                         self.dispatch(Request::RestartEngine, state);
-                    } else if let Some(d) = &self.engine
-                        && let Ok(config) = engine::engine_config(state)
-                    {
-                        d.request(engine::Input::Restart {
-                            config,
-                            allow_recording_prepare: false,
-                            explicit: false,
-                        });
+                    } else if let Some(d) = &self.engine {
+                        match engine::engine_config(state) {
+                            Ok(config) => d.request(engine::Input::Restart {
+                                config,
+                                allow_recording_prepare: false,
+                                explicit: false,
+                            }),
+                            Err(e) => self.report_config_error(&e),
+                        }
                     }
                 }
                 recording::RecAction::RefreshLibrary => state.scan_clips_requested = true,
@@ -880,10 +1034,32 @@ impl Services {
             env,
             state.paths.engine_log(),
         );
-        if let Ok(config) = engine::engine_config(state) {
-            driver.request(engine::Input::Start(config));
+        match engine::engine_config(state) {
+            Ok(config) => driver.request(engine::Input::Start(config)),
+            Err(e) => self.report_config_error(&e),
         }
         self.engine = Some(driver);
+    }
+
+    /// Settings the engine can't be started with: say so (these errors were
+    /// dropped in most places, leaving "STARTING CAPTURE" up forever).
+    fn report_config_error(&self, detail: &str) {
+        tracing::warn!(detail, "capture settings rejected");
+        self.outbox.send(Event::Status {
+            text: "CAPTURE FAILED".into(),
+            style: StatusStyle::Warning,
+        });
+        self.outbox.send(Event::ErrorBar {
+            title: "SETTINGS APPLY FAILED".into(),
+            detail: detail.to_owned(),
+            level: Level::Error,
+            actions: vec![Action {
+                label: "OPEN SETTINGS".into(),
+                id: "open-settings".into(),
+            }],
+            key: Some("engine-config".into()),
+            dismiss_on_action: true,
+        });
     }
 
     /// Starts the engine found next to the executable (or `$FTHRUST_ENGINE`).
@@ -926,6 +1102,8 @@ impl Services {
 
     /// Keeps the instance lock and activation listener alive.
     pub fn attach_instance(&mut self, instance: instance::Instance) {
+        let outbox = self.outbox.clone();
+        instance.set_waker(std::sync::Arc::new(move || outbox.wake()));
         self.instance = Some(instance);
     }
 
@@ -952,8 +1130,19 @@ impl Services {
     }
 
     /// Applies pending events to the state, then turns request flags into
-    /// requests.
+    /// requests. Repaints when anything the window shows changed: frequent
+    /// events arrive quietly and timers run on heartbeat ticks (the
+    /// recording's elapsed time, statuses that expire), so neither paints
+    /// by itself.
     pub fn tick(&mut self, state: &mut AppState) {
+        let before = Shown::of(state);
+        self.tick_inner(state);
+        if Shown::of(state) != before {
+            self.outbox.ctx.request_repaint();
+        }
+    }
+
+    fn tick_inner(&mut self, state: &mut AppState) {
         {
             let now = self.now();
             if self.test_commands.is_none() {
@@ -1010,7 +1199,6 @@ impl Services {
                     self.run_save_actions(state, actions);
                     let actions = self.recording.on_engine_event(&ipc, now);
                     self.run_rec_actions(state, actions);
-                    state.pending_engine_events.push(ipc);
                 }
                 Event::ActiveConfig(c) => self.active_config = c,
                 Event::PortalShortcutsBound(bound) => {
@@ -1036,36 +1224,7 @@ impl Services {
                         );
                     }
                 }
-                Event::Toplevels(snapshot) => {
-                    self.sync_focus_target(state);
-                    let was_paused = self.focus.paused();
-                    let change = self.focus.observe(&snapshot);
-                    let actions = self.game.on_snapshot(state, snapshot, now);
-                    self.run_game_actions(state, actions);
-                    // Switching sources changes the focus target.
-                    self.sync_focus_target(state);
-                    match change {
-                        Some(focus::FocusChange::Lost) => {
-                            self.dispatch(Request::PauseCapture, state);
-                            state.status = StatusText {
-                                text: status::FOCUS_PAUSED.into(),
-                                style: StatusStyle::Warning,
-                            };
-                        }
-                        Some(focus::FocusChange::Regained) => {
-                            self.dispatch(Request::ResumeCapture, state);
-                            state.status = StatusText {
-                                text: "STARTING CAPTURE".into(),
-                                style: StatusStyle::Idle,
-                            };
-                        }
-                        None => {
-                            if was_paused && !self.focus.paused() {
-                                self.dispatch(Request::ResumeCapture, state);
-                            }
-                        }
-                    }
-                }
+                Event::Toplevels(snapshot) => self.on_toplevels(state, snapshot, now),
                 Event::GameDetectionAvailability(available) => {
                     state.game_detection_available = available;
                     if !available {
@@ -1243,14 +1402,7 @@ impl Services {
                             allow_recording_prepare: false,
                             explicit: false,
                         }),
-                        Err(e) => state.error_bar.push(
-                            "SETTINGS APPLY FAILED",
-                            &e,
-                            Level::Error,
-                            vec![],
-                            None,
-                            true,
-                        ),
+                        Err(e) => self.report_config_error(&e),
                     }
                 }
             }
@@ -1258,14 +1410,15 @@ impl Services {
             Request::Upload(path) => self.upload.enqueue(state, path),
             Request::ErrorAction(id) => match id.as_str() {
                 "restart" | "restart-capture" => {
-                    if let Some(d) = &self.engine
-                        && let Ok(config) = engine::engine_config(state)
-                    {
-                        d.request(engine::Input::Restart {
-                            config,
-                            allow_recording_prepare: false,
-                            explicit: true,
-                        });
+                    if let Some(d) = &self.engine {
+                        match engine::engine_config(state) {
+                            Ok(config) => d.request(engine::Input::Restart {
+                                config,
+                                allow_recording_prepare: false,
+                                explicit: true,
+                            }),
+                            Err(e) => self.report_config_error(&e),
+                        }
                     }
                 }
                 "open-folder" => {
@@ -1332,7 +1485,21 @@ impl Services {
                 ),
             },
             Request::RefreshCameras => self.camera.refresh(),
-            other => tracing::debug!(?other, "request without a consumer yet"),
+            Request::RedetectEncoders => self.detect_encoders(state, true),
+            Request::RefreshAudioDevices => self.list_audio_devices(),
+            Request::OpenScreenshot(path) => crate::shell::open_url(&path.display().to_string()),
+            Request::ShowInFileManager(path) => match self.runtime() {
+                Some(handle) => {
+                    handle.spawn(async move { devices::reveal(&path).await });
+                }
+                None => {
+                    let folder = path.parent().unwrap_or(&path).to_path_buf();
+                    crate::shell::open_url(&folder.display().to_string());
+                }
+            },
+            // Only recorded (tests): the recording service restarts the
+            // engine through the supervisor directly.
+            Request::RestartForRecording(_) => {}
         }
     }
 
@@ -1362,14 +1529,41 @@ impl Services {
             if let Some(m) = &self.mic_level {
                 m.set_gain(gain);
             }
-            if restart && now >= self.mic_level_retry {
-                self.mic_level = None;
-                match mic_level::MicLevel::start(target, gain) {
-                    Ok(m) => {
+            // Opening the stream can take seconds when PipeWire is slow, so
+            // it happens on a thread (it used to block the UI thread).
+            if let Some(rx) = &self.mic_level_pending {
+                match rx.try_recv() {
+                    Ok(Ok(m)) => {
+                        self.mic_level_pending = None;
                         self.mic_level = Some(m);
                         // Gary must pick up the new stream's meter.
                         self.mic_generation += 1;
                     }
+                    Ok(Err(e)) => {
+                        self.mic_level_pending = None;
+                        tracing::warn!(error = %e, "mic level unavailable");
+                        self.mic_level_retry = now + 5.0;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        self.outbox
+                            .ctx
+                            .request_repaint_after(std::time::Duration::from_millis(100));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.mic_level_pending = None;
+                        self.mic_level_retry = now + 5.0;
+                    }
+                }
+            } else if restart && now >= self.mic_level_retry {
+                self.mic_level = None;
+                let (tx, rx) = std::sync::mpsc::channel();
+                let spawned = std::thread::Builder::new()
+                    .name("fthrust-mic-start".into())
+                    .spawn(move || {
+                        let _ = tx.send(mic_level::MicLevel::start(target, gain));
+                    });
+                match spawned {
+                    Ok(_) => self.mic_level_pending = Some(rx),
                     Err(e) => {
                         tracing::warn!(error = %e, "mic level unavailable");
                         self.mic_level_retry = now + 5.0;
@@ -1378,6 +1572,7 @@ impl Services {
             }
         } else {
             self.mic_level = None;
+            self.mic_level_pending = None;
         }
         state.mic_level = self.mic_level.as_ref().map(|m| m.read());
         if audio_page && self.mic_level.is_some() {
@@ -1433,6 +1628,12 @@ impl Services {
     /// bound) and a running manual recording is stopped and finalised
     /// (bounded) before anything else goes away.
     pub fn prepare_exit(&mut self, state: &mut AppState) {
+        // From here on nothing restarts the engine, and a probe that ends
+        // (killed by the same logout) isn't cached as "doesn't work".
+        set_quitting();
+        if let Some(d) = &self.engine {
+            d.request(engine::Input::Quitting);
+        }
         // `_perform_full_shutdown`: close the share windows (cancelling
         // their exports), then cancel queued exports with a bounded wait.
         crate::editor::share::close_all(state);
@@ -1503,6 +1704,49 @@ impl Services {
     }
 }
 
+/// What the window shows that the services change (see [`Services::tick`]).
+#[derive(PartialEq)]
+struct Shown {
+    status: StatusText,
+    record: (String, bool, bool),
+    engine: (bool, Option<String>),
+    errors: Vec<(String, String)>,
+    cards: usize,
+    windows: Vec<String>,
+    detection: bool,
+    devices: (usize, usize, Option<usize>),
+    cameras: Vec<String>,
+}
+
+impl Shown {
+    fn of(state: &AppState) -> Self {
+        Shown {
+            status: state.status.clone(),
+            record: (
+                state.record_label.clone(),
+                state.record_enabled,
+                state.record_active,
+            ),
+            engine: (state.engine_connected, state.active_encoder.clone()),
+            errors: state
+                .error_bar
+                .entries()
+                .iter()
+                .map(|e| (e.title.clone(), e.detail.clone()))
+                .collect(),
+            cards: state.pending_cards.len(),
+            windows: state.running_windows.clone(),
+            detection: state.game_detection_available,
+            devices: (
+                state.audio_devices.len(),
+                state.mic_devices.len(),
+                state.encoder_capabilities.as_ref().map(Vec::len),
+            ),
+            cameras: state.camera_devices.clone(),
+        }
+    }
+}
+
 fn imported_roots(state: &AppState) -> Vec<PathBuf> {
     state
         .settings
@@ -1564,6 +1808,20 @@ fn apply_event(state: &mut AppState, ev: Event) {
             state.error_bar.remove_by_key(&key);
         }
         Event::EncoderActive(codec) => state.active_encoder = Some(codec),
+        Event::EncoderCapabilities(found) => state.encoder_capabilities = Some(found),
+        Event::AudioDevices {
+            playback,
+            microphones,
+        } => {
+            match playback {
+                Ok(list) => state.audio_devices = list,
+                Err(e) => tracing::warn!(error = %e, "playback devices not listed"),
+            }
+            match microphones {
+                Ok(list) => state.mic_devices = list,
+                Err(e) => tracing::warn!(error = %e, "microphones not listed"),
+            }
+        }
         Event::Health(_)
         | Event::Hotkey(_)
         | Event::Engine(_)
@@ -1631,9 +1889,6 @@ fn collect_requests(state: &mut AppState) -> Vec<Request> {
     }
     if std::mem::take(&mut state.refresh_cameras_requested) {
         out.push(Request::RefreshCameras);
-    }
-    if std::mem::take(&mut state.theme_export_requested) {
-        out.push(Request::ExportTheme);
     }
     if let Some(key) = state.sound_preview_requested.take() {
         out.push(Request::PreviewSound(key));

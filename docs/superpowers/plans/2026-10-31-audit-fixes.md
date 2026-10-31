@@ -6,7 +6,7 @@ Spec: `docs/superpowers/specs/2026-10-22-fthrust-design.md`. The Qt reference sc
 
 ## Global constraints
 
-1. The machine is shared with a running game. Build and test at low priority: prefix every cargo command with `nice -n 19 ionice -c 3` and set `CARGO_BUILD_JOBS=3`.
+1. The machine is shared with a running game. Build and test at low priority: prefix every cargo command with `nice -n 19 ionice -c 3` and set `CARGO_BUILD_JOBS=2`.
 2. Run tests with `env -u WAYLAND_DISPLAY` (some live Wayland tests otherwise capture the desktop session).
 3. Never start the app, the engine or the uploader against the desktop session. UI checks go through the headless bench only: `tools/uidrive/bench.sh` (see `tools/uidrive/README.md`).
 4. Every fix gets a regression test that fails before and passes after, unless the path needs hardware the tests can't have (VA-API, NVENC, layer-shell, a portal). Then unit-test the logic you can isolate and say in the report what stays unverified.

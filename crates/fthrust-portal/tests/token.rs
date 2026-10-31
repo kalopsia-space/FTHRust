@@ -1,8 +1,25 @@
 use std::os::unix::fs::PermissionsExt;
 
 use fthrust_core::FthrPaths;
-use fthrust_portal::screencast::should_retry_startup;
+use fthrust_portal::screencast::{persist_token, should_retry_startup};
 use fthrust_portal::token::{TokenError, load, path, save};
+
+#[test]
+fn the_token_start_returns_replaces_the_presented_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = tmp.path().join("tok");
+    save(&p, "old").unwrap();
+    persist_token(&p, Some("old"), Some("new"));
+    assert_eq!(load(&p).unwrap().as_deref(), Some("new"));
+    persist_token(&p, Some("new"), Some("new"));
+    assert_eq!(load(&p).unwrap().as_deref(), Some("new"));
+    persist_token(&p, None, Some("fresh"));
+    assert_eq!(load(&p).unwrap().as_deref(), Some("fresh"));
+    // A portal that returns none does not persist sessions: the used one
+    // must not linger.
+    persist_token(&p, Some("fresh"), None);
+    assert_eq!(load(&p).unwrap(), None);
+}
 
 #[test]
 fn token_file_roundtrip_permissions_and_deletion() {

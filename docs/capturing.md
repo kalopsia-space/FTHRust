@@ -40,7 +40,7 @@ The buffer always holds the longest length you've set up, plus two seconds of he
 
 The buffer is encoded video, so its size is roughly *bitrate × length*. At the defaults (25 Mbps for 30 s) that's about 100 MB. Long lengths at high bitrates add up fast: 5 minutes at 50 Mbps is close to 2 GB. The rest of the app is small next to that: at 1080p180 and 50 Mbps with 45-second clips, the capture engine uses about 9% of one CPU core and roughly 250–450 MB depending on how busy the picture is (most of it the buffer), or about 60 MB with the buffer on disk; the window is about 185 MB. FTHRust never lets the buffer go past half your RAM, and the popup reminds you that *longer clips can use a lot of memory, especially at high quality*.
 
-**Replay buffer on disk.** In the capture settings popup, *Replay buffer* can be set to **Disk**. The engine then writes the buffer's video into `~/.cache/fthrust/replay/<pid>/` (or `$XDG_CACHE_HOME`), readable only by you, and keeps only a small index in RAM. At 50 Mbps that's about 22 GB of writes per hour of capture, which a modern SSD shrugs off. The folder is deleted when the engine exits, and any left behind by a crash are removed at the next start. If the folder can't be written, the buffer quietly stays in memory. The default is **Memory**.
+**Replay buffer on disk.** In the capture settings popup, *Replay buffer* can be set to **Disk**. The engine then writes the buffer's video into `~/.cache/fthrust/replay/<pid>/` (or `$XDG_CACHE_HOME`), readable only by you, and keeps only a small index in RAM. The writes happen beside capture, so a busy disk never holds up the frames. At 50 Mbps that's about 22 GB of writes per hour of capture, which a modern SSD shrugs off. The folder is deleted when the engine exits, and any left behind by a crash are removed at the next start. If the folder can't be written, the buffer quietly stays in memory. The default is **Memory**.
 
 ### When a save is refused
 
@@ -55,6 +55,7 @@ You'll get a capture card instead of a clip if:
 **Record** in the toolbar (or the *Start recording* / *Stop recording* hotkeys, unbound by default) captures until you stop it. Recordings have their own quality settings on the **Recording** tab of the capture popup, so you can keep a light replay buffer and record at full quality, or the other way round.
 
 - Recordings are saved as `FTHR_recording_YYYY-MM-DD_HH-MM-SS.mp4` in `~/Videos/FTHR Clips/Recordings`. You can change the folder in **Settings → Clip → Folders**.
+- A recording gets the same audio tracks as a clip: **Default Mix**, and **Microphone** when you've chosen an input device. The audio stays in sync however long you record, and stopping keeps everything up to the moment you pressed stop.
 - A recording needs 512 MB free to start, and stops itself cleanly if free space drops below 256 MB.
 - If the recording quality differs from the replay quality, capture restarts once at the recording settings, and again when you stop. The replay buffer starts empty after each restart.
 
@@ -77,13 +78,17 @@ You'll get a capture card instead of a clip if:
 
 Change them in the **Hotkeys** popup in the toolbar. Hotkeys are global: they work while your game has focus.
 
+A desktop binds a key as it is typed with nothing held, so when you hold Shift the popup records a shifted symbol as the key it sits on (on a US layout): Shift+1, not Shift+!, and likewise `/` for `?`, `;` for `:`, `\` for `|`, `[` and `]` for `{` and `}`, `=` for `+`. Letters and every other key are recorded as you type them. A hotkey saved with Shift and one of those symbols themselves (Shift+!, as the Qt app wrote it, or an earlier build's Shift+Exclamationmark) is handed to the desktop as the key it sits on (Shift+1), so it works without being recorded again. A carried-over hotkey with any other shifted symbol (Shift+@, say) is passed on as it is; record it again in the popup.
+
 Wayland doesn't let apps read the keyboard while another window has focus, so FTHRust asks your desktop to deliver the keys for it. How depends on your desktop:
 
 ### Hyprland: automatic
 
 FTHRust writes your bindings to `~/.config/hypr/fthr-hotkeys.conf`, adds a single `source = ~/.config/hypr/fthr-hotkeys.conf` line to `hyprland.conf` the first time, and runs `hyprctl reload`. Change a key in the popup and the file is rewritten. It never creates `hyprland.conf` for you, and never adds the `source` line twice.
 
-On Lua configs (a `custom/keybinds.lua` or `hyprland.lua` exists), it maintains a fenced block in `custom/keybinds.lua` instead, between `-- FTHR Clips hotkeys begin (managed)` and `-- FTHR Clips hotkeys end (managed)`. Edit outside those markers as you please. If the block looks broken, FTHRust leaves the file alone rather than guess.
+On Lua configs (a `custom/keybinds.lua` or `hyprland.lua` exists), it maintains a fenced block in `custom/keybinds.lua` instead, between `-- FTHR Clips hotkeys begin (managed)` and `-- FTHR Clips hotkeys end (managed)`. Edit outside those markers as you please. Each change is written to a temporary file and renamed into place (a symlinked file stays a symlink; where a rename is refused, as for a bind-mounted file, it is rewritten in place), and the contents before the change are kept next to it as `keybinds.lua.fthr-bak` (your own `.bak` copies are never touched). If the block looks broken, or the file can't be read or isn't valid UTF-8, FTHRust leaves the file alone rather than guess.
+
+Keys are written the way Hyprland spells them (`PageUp` becomes `Prior`, `Equals` becomes `equal`, `Backtick` becomes `grave`), and a key with no such name, such as `Fn`, is left out of the file instead of being written as a bind Hyprland would reject. The portal shortcuts use the same names.
 
 ### KDE, GNOME and others: the shortcuts portal
 
@@ -114,9 +119,9 @@ The action names are `save_clip`, `save_screenshot`, `start_recording`, `stop_re
 
 The monitor list defaults to **First Screen (Default)**. Pick a specific output if you game on a second monitor.
 
-Behind the scenes the engine tries three ways of capturing, in order: `ext-image-copy-capture`, `wlr-screencopy`, then the desktop's ScreenCast portal. The first two need no permission dialog. The portal asks once, remembers your answer, and is never re-opened on its own while recovering from an error, so a dialog never pops up mid-game. The cursor is included in all three.
+Behind the scenes the engine tries three ways of capturing, in order: `ext-image-copy-capture`, `wlr-screencopy`, then the desktop's ScreenCast portal. The first two need no permission dialog. When one of them is only waiting for the compositor to answer, or for your monitor to come back, the engine waits instead of falling back to the portal. The portal asks once, remembers your answer, and is never re-opened on its own while recovering from an error, so a dialog never pops up mid-game. The cursor is included in all three.
 
-If capture stalls (a frozen or blank feed), the engine notices, recovers, and shows **RECOVERING CAPTURE** while it does.
+If capture stalls, the engine notices, recovers, and shows **RECOVERING CAPTURE** while it does. If the picture stays black or one flat colour for 12 seconds, it restarts capture once in case the feed itself is broken (never through the portal, where a restart could bring its dialog back); if the screen really is that dark, it shows **CAPTURE DEGRADED — DARK / UNIFORM** until the picture changes, without restarting again.
 
 ## Game detection
 
@@ -143,7 +148,7 @@ Audio settings live in **Settings → Audio**.
 
 - **Desktop audio** is on by default (*Enable audio capture*). FTHRust records what your speakers or headphones play by tapping your default output's monitor. Pick a specific device under **Playback device to capture**; if it's missing when capture starts, the default output is used instead.
 - **Microphone** is off until you choose an **Input device**. **Live level** shows a meter so you can check it's picking you up.
-- Each clip gets up to two AAC tracks: **Default Mix** (desktop) and **Microphone**. Most players and editors let you mute or mix them separately.
+- Each clip and recording gets up to two AAC tracks: **Default Mix** (desktop) and **Microphone**. Most players and editors let you mute or mix them separately.
 
 If PipeWire can't be reached, capture carries on silently and the bar at the bottom shows **DESKTOP AUDIO UNAVAILABLE** with a shortcut to the audio settings.
 
@@ -196,7 +201,7 @@ Everything lives under your clips folder, `~/Videos/FTHR Clips` by default (chan
 └── Shared/         size-targeted files made by Share
 ```
 
-Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` and are never shown in the library. If a finished clip can't be renamed into place (a folder on an unusual network or FUSE filesystem), it is kept under its `.partial` name and **CLIP SAVE FAILED** says where.
+Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` (exports and screenshots use a hidden `.<name>.partial.<code>` file) and are never shown in the library. If a crash leaves any of them behind, the next start removes the ones more than a day old from the clips and recordings folders, along with leftover `.fthr-finalize-*` folders. A finished clip or recording is never touched, not even one a crash cut short. If a finished clip can't be renamed into place (a folder on an unusual network or FUSE filesystem), it is kept under its `.partial` name and **CLIP SAVE FAILED** says where; move or rename it yourself, since the startup clean-up removes it once it is a day old.
 
 ## What's not there yet
 

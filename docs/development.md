@@ -67,7 +67,7 @@ Handy variables while developing:
 
 | Variable | Effect |
 |---|---|
-| `RUST_LOG=debug` | App log detail (to stderr). |
+| `RUST_LOG=debug` | App log detail (to stderr and `~/.fthr/logs/fthr.log`). Without it: info for `fthrust*` targets, warn for the rest. |
 | `FTHRUST_LOG=debug` | Engine log detail (to `~/.fthr/logs/engine.log`). |
 | `FTHR_CAPTURE_BACKEND=ext\|wlr\|portal\|synthetic` | Forces a capture backend. `synthetic` draws a test pattern and needs no compositor support. |
 | `FTHRUST_SYNTHETIC_BACKEND=1`, `FTHRUST_SYNTHETIC_SIZE=1920x1080` | Turns on the synthetic backend and sets its frame size. |
@@ -156,7 +156,7 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 
 | Script | Does |
 |---|---|
-| `tools/check-upload-isolation.sh` | Fails if `reqwest`, `russh`, `russh-sftp` or `keyring` end up in the app's or engine's dependency tree. Network and keyring code belongs in `fthrust-uploader` only. |
+| `tools/check-upload-isolation.sh` | Fails if an HTTP, TLS, SSH or keyring crate (`reqwest`, `hyper`, `h2`, `rustls`, `russh`, `keyring` and their families) ends up in the dependency tree of any crate but `fthrust-uploader`, and also when `cargo tree` fails or the tree doesn't list the app's crates: a check that couldn't run is not a pass. Network and keyring code belongs in `fthrust-uploader` only. `tools/test-check-upload-isolation.sh` tests the check. |
 | `tools/check-assets.sh` | Checks bundled assets against their manifests (and against the original app's copies, if `reference/` exists). |
 | `tools/check-version.sh` | The workspace version is the only version: every crate inherits it, a release tag must equal `v<version>`, and built binaries must report it. |
 | `tools/gen-notices.sh [--check]` | Regenerates `THIRD_PARTY_NOTICES.md` with cargo-about, or checks it's current. |

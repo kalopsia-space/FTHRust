@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use egui::Ui;
+use fthrust_core::FthrPaths;
 use fthrust_core::diagnostics::session::DiagnosticsSession;
 
 use crate::fonts::Weight;
@@ -12,18 +13,25 @@ use crate::widgets::buttons;
 use crate::widgets::section;
 
 /// Writes the report ZIP into the profile's diagnostics directory.
+///
+/// The live session writes it. Without one (diagnostics could not start at
+/// launch, say on a full disk, or in tests) a session is started just for the
+/// report and closed straight after, so it leaves no `active-session.json`
+/// behind for the next launch to take for a crash; when even that cannot
+/// start, the error is the result.
 pub fn export(state: &mut AppState) -> Result<PathBuf, String> {
-    // The live session when the app runs; a fresh one in tests.
-    let fresh;
-    let session: &DiagnosticsSession = match &state.diagnostics {
-        Some(s) => s,
-        None => {
-            fresh = DiagnosticsSession::start(&state.paths, crate::VERSION)
-                .map_err(|e| e.to_string())?;
-            &fresh
-        }
-    };
-    let dir = state.paths.diagnostics_dir();
+    if let Some(session) = &state.diagnostics {
+        return export_with(session, &state.paths);
+    }
+    let session =
+        DiagnosticsSession::start(&state.paths, crate::VERSION).map_err(|e| e.to_string())?;
+    let result = export_with(&session, &state.paths);
+    session.close(true);
+    result
+}
+
+fn export_with(session: &DiagnosticsSession, paths: &FthrPaths) -> Result<PathBuf, String> {
+    let dir = paths.diagnostics_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let stamp = time::OffsetDateTime::now_utc()
         .format(time::macros::format_description!(
@@ -32,7 +40,7 @@ pub fn export(state: &mut AppState) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())?;
     let dest = dir.join(format!("fthr-diagnostics-{stamp}.zip"));
     session
-        .export_zip(&dest, &state.paths.app_log())
+        .export_zip(&dest, &paths.app_log())
         .map_err(|e| e.to_string())
 }
 

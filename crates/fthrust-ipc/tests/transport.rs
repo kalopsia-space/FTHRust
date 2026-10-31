@@ -119,3 +119,19 @@ async fn client_drop_flips_closed_and_socket_mode_is_0600() {
     .expect("closed flips")
     .unwrap();
 }
+
+/// Audit 2026-10-31: an engine shutting down only removes its own socket
+/// file, never a newer engine's that took the same path.
+#[tokio::test]
+async fn drop_leaves_a_newer_socket_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("engine.sock");
+    let old = EngineServer::bind(&path).await.unwrap();
+    // The old socket file is unlinked from under it and a new engine binds.
+    std::fs::remove_file(&path).unwrap();
+    let new = EngineServer::bind(&path).await.unwrap();
+    drop(old);
+    assert!(path.exists(), "the newer engine's socket survives");
+    drop(new);
+    assert!(!path.exists(), "and its own drop removes it");
+}

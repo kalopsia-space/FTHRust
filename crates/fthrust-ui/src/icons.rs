@@ -224,6 +224,11 @@ struct Key {
 pub struct IconCache {
     textures: HashMap<Key, TextureHandle>,
     last_tint: HashMap<Icon, Option<Color32>>,
+    /// The bundled assets directory, looked up once (it stats and
+    /// canonicalises the executable path).
+    assets: std::cell::OnceCell<PathBuf>,
+    /// [`clear`](Self::clear) ran (a theme change).
+    cleared: bool,
 }
 
 impl IconCache {
@@ -244,7 +249,8 @@ impl IconCache {
             (None, None) => Some(tokens.icon_tint_global),
             _ => None,
         };
-        let source = custom.unwrap_or_else(|| icon.bundled_path(&crate::assets_dir()));
+        let source =
+            custom.unwrap_or_else(|| icon.bundled_path(self.assets.get_or_init(crate::assets_dir)));
         let size = size_px.round().max(1.0) as u32;
         let key = Key {
             icon,
@@ -336,5 +342,37 @@ impl IconCache {
     pub fn clear(&mut self) {
         self.textures.clear();
         self.last_tint.clear();
+        self.cleared = true;
+    }
+
+    /// Lends the cache out, leaving a stand-in that shares its assets path
+    /// (an empty stand-in looked the path up again on every loan).
+    pub fn lend(&mut self) -> IconCache {
+        let stand_in = IconCache {
+            assets: self.assets.clone(),
+            ..IconCache::default()
+        };
+        std::mem::replace(self, stand_in)
+    }
+
+    /// Puts `lent` back into this slot, which stood in for it while it was
+    /// lent out (a header drew with `lent` while the body drew through the
+    /// slot). Textures the stand-in made are kept: the callers used to keep
+    /// one cache or the other, so every icon was rasterised and uploaded
+    /// again each frame. If the stand-in was cleared (a theme change),
+    /// `lent` is stale and only the stand-in's textures stay.
+    pub fn give_back(&mut self, mut lent: IconCache) {
+        if std::mem::take(&mut self.cleared) {
+            return;
+        }
+        lent.textures.extend(self.textures.drain());
+        lent.last_tint.extend(self.last_tint.drain());
+        lent.cleared = false;
+        *self = lent;
+    }
+
+    /// How many textures are cached (tests).
+    pub fn len(&self) -> usize {
+        self.textures.len()
     }
 }

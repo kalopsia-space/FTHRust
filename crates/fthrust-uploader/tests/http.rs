@@ -10,7 +10,7 @@ use std::time::Duration;
 use fthrust_core::FthrPaths;
 use fthrust_core::upload::history::History;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_uploader::{Env, handle};
+use fthrust_uploader::{Env, Response, handle};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Default)]
@@ -133,13 +133,20 @@ impl Home {
         env
     }
 
-    async fn upload(&self, env: &Env) -> (bool, String, Value) {
+    /// The whole reply to an upload request for the clip.
+    async fn respond(&self, env: &Env) -> Response {
+        let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
             "path": self.clip,
-            "allowed_roots": [self.dir.path().join("clips")],
+            "allowed_roots": [clips],
+            "clips_root": clips,
         });
-        let r = handle(env, &req).await;
+        handle(env, &req).await
+    }
+
+    async fn upload(&self, env: &Env) -> (bool, String, Value) {
+        let r = self.respond(env).await;
         let info = r.upload_info.map(Value::Object).unwrap_or(Value::Null);
         (r.ok, r.message, info)
     }
@@ -609,6 +616,40 @@ async fn retry_transient_only() {
     assert!(msg.starts_with("Could not reach your server: "), "{msg}");
 }
 
+/// A header or an address that can never be sent is the settings' fault,
+/// found on the first attempt: not a network error to wait out and repeat.
+#[tokio::test]
+async fn a_request_that_cannot_be_built_is_not_retried() {
+    let bad_url = "The server URL is not a valid address. Check the server URL.";
+    let bad_header =
+        "The Auth header has characters that can't be sent. Enter it again in the upload settings.";
+    for (url, auth, message) in [
+        (Some("http://exa mple.invalid/up"), "", bad_url),
+        (None, "Bearer a\u{1}b", bad_header),
+    ] {
+        let srv = server(vec![]);
+        let h = home(json!({
+            "upload_provider": "custom",
+            "upload_server_url": url.unwrap_or(&srv.url),
+            "upload_auth_header": auth,
+        }));
+        let mut env = h.env("x");
+        env.retry_delays = vec![Duration::from_secs(1); 3];
+        let started = std::time::Instant::now();
+        let r = h.respond(&env).await;
+        assert_eq!((r.ok, r.message.as_str()), (false, message));
+        assert!(r.settings_problem, "{message}");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{message}: retried ({:?})",
+            started.elapsed()
+        );
+        assert!(srv.seen().is_empty());
+        // The connection test says the same, at once.
+        assert_eq!(h.test(&env).await, (false, message.to_owned()), "{message}");
+    }
+}
+
 #[tokio::test]
 async fn retry_never_past_deadline() {
     let srv = server(vec![(503, "busy"), (200, "https://cdn.example/ok")]);
@@ -661,6 +702,221 @@ async fn auto_delete_failure_still_succeeds() {
         msg.starts_with("Uploaded, but local delete failed: "),
         "{msg}"
     );
+}
+
+/// Whatever an upload that worked leaves the user to know travels as the
+/// reply's `warning` (the app shows it); a clean success has none.
+#[tokio::test]
+async fn an_upload_that_worked_with_a_caveat_says_so() {
+    // No link: there is nothing for the card to copy.
+    for auto_delete in [false, true] {
+        let srv = server(vec![(200, "stored!")]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url,
+            "upload_auto_delete": auto_delete
+        }));
+        let r = h.respond(&h.env("x")).await;
+        assert!(r.ok);
+        assert_eq!(r.message, NO_LINK);
+        let kept = if auto_delete {
+            " The clip was kept."
+        } else {
+            ""
+        };
+        assert_eq!(
+            r.warning.as_deref(),
+            Some(format!("{NO_LINK}{kept}").as_str())
+        );
+        assert!(
+            r.to_line()
+                .contains(r#""warning":"Uploaded, but your server"#)
+        );
+    }
+    // A clean success has no warning, and no key in the line.
+    let srv = server(vec![(200, "https://cdn.example/fine")]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    let r = h.respond(&h.env("x")).await;
+    assert_eq!(r.warning, None);
+    assert!(!r.to_line().contains("warning"), "{}", r.to_line());
+    // The clip could not be deleted.
+    if nix_is_root() {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let srv = server(vec![(200, "https://cdn.example/a")]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    let folder = h.dir.path().join("clips");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = h.respond(&h.env("x")).await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(r.ok);
+    assert!(
+        r.message.starts_with("Uploaded, but local delete failed: "),
+        "{}",
+        r.message
+    );
+    assert_eq!(r.warning.as_deref(), Some(r.message.as_str()));
+}
+
+/// Auto-delete only ever removes files in the clips folder. Imported folders
+/// (and links into them) upload like everything else but are never deleted:
+/// interval mode plus auto-delete would otherwise empty a whole imported
+/// library.
+#[tokio::test]
+async fn auto_delete_stays_inside_the_clips_folder() {
+    let srv = server(vec![(200, "https://cdn.example/ok"); 5]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    let clips = h.dir.path().join("clips");
+    let imports = h.dir.path().join("imports");
+    std::fs::create_dir_all(&imports).unwrap();
+    let make = |dir: &Path, name: &str| {
+        let p = dir.join(name);
+        std::fs::write(&p, b"VIDEO-BYTES").unwrap();
+        p.canonicalize().unwrap()
+    };
+    let ours = make(&clips, "ours.mp4");
+    let theirs = make(&imports, "theirs.mp4");
+    let real = make(&imports, "real.mp4");
+    let link = clips.join("link.mp4");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let env = h.env("x");
+    let ask = |path: PathBuf, clips_root: Option<&PathBuf>| {
+        let mut req = json!({
+            "action": "upload", "path": path, "allowed_roots": [clips, imports],
+        });
+        if let Some(root) = clips_root {
+            req["clips_root"] = json!(root);
+        }
+        let env = &env;
+        async move { handle(env, &req).await }
+    };
+    for (path, deleted, what) in [
+        (ours.clone(), true, "a clip in the clips folder"),
+        (theirs.clone(), false, "a clip in an imported folder"),
+        (
+            link,
+            false,
+            "a link in the clips folder to an imported clip",
+        ),
+    ] {
+        let r = ask(path.clone(), Some(&clips)).await;
+        assert!(r.ok, "{what}: {}", r.message);
+        assert_eq!(r.message, "https://cdn.example/ok", "{what}");
+        assert!(r.warning.is_none(), "{what}: {:?}", r.warning);
+        let target = path.canonicalize().unwrap_or(path.clone());
+        assert_eq!(!target.exists(), deleted, "{what}");
+        assert!(
+            h.history().is_uploaded(&target) || deleted,
+            "{what}: not recorded"
+        );
+    }
+    assert!(real.exists() && theirs.exists());
+    // Without a clips folder in the request nothing is ever deleted.
+    let again = make(&clips, "again.mp4");
+    let r = ask(again.clone(), None).await;
+    assert!(r.ok, "{}", r.message);
+    assert!(
+        again.exists(),
+        "deleted without a clips folder to be inside of"
+    );
+}
+
+/// Auto-delete needs a link the card could offer: whatever else a server
+/// puts in its reply, "the server said something" is not a confirmation.
+#[tokio::test]
+async fn only_a_real_link_allows_auto_delete() {
+    for (body, what) in [
+        (r#"{"url": "queued"}"#, "a word"),
+        (r#"{"url": "file:///etc/hostname"}"#, "a file URL"),
+        (r#"{"url": "ftp://files.example/a.mp4"}"#, "an ftp URL"),
+        (
+            r#"{"url": "sftp://files.example"}"#,
+            "an sftp URL without a path",
+        ),
+        (r#"{"url": "https://cdn.example/a b"}"#, "a space"),
+        (
+            r#"{"url": "https://cdn.example/a\nhttps://cdn.example/b"}"#,
+            "two lines in JSON",
+        ),
+        (
+            "https://cdn.example/a\nand some words",
+            "plain text, two lines",
+        ),
+    ] {
+        let srv = server(vec![(200, body)]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+        }));
+        let real = h.real_clip();
+        let r = h.respond(&h.env("x")).await;
+        assert!(r.ok, "{what}: {}", r.message);
+        assert!(real.exists(), "{what}: the clip was deleted");
+        assert_eq!(r.message, NO_LINK, "{what}");
+        assert!(h.history().is_uploaded(&real), "{what}: not recorded");
+    }
+    // Real links still delete (the SFTP ones are tested with the SFTP server).
+    for url in ["https://cdn.example/a", "http://192.168.1.5:8080/f/a.mp4"] {
+        let srv = server(vec![(200, url)]);
+        let h = home(json!({
+            "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+        }));
+        let real = h.real_clip();
+        let r = h.respond(&h.env("x")).await;
+        assert_eq!((r.ok, r.message.as_str()), (true, url));
+        assert!(!real.exists(), "{url}: the clip was kept");
+    }
+}
+
+/// The upload worked but nothing records it: deleting the clip would leave
+/// a copy on the server, no local file and no link anywhere.
+#[tokio::test]
+async fn a_history_that_cannot_be_saved_keeps_the_clip_and_hands_over_the_link() {
+    let srv = server(vec![(200, "https://cdn.example/a")]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    // A folder where the history file belongs: it cannot be written.
+    std::fs::create_dir_all(h.paths.upload_history_file()).unwrap();
+    let real = h.real_clip();
+    let r = h.respond(&h.env("x")).await;
+    assert!(real.exists(), "the clip was deleted: {r:?}");
+    assert!(r.ok, "the upload itself worked: {}", r.message);
+    assert_eq!(r.message, "https://cdn.example/a");
+    let warning = r.warning.clone().expect("no warning");
+    assert!(
+        warning.starts_with(
+            "https://cdn.example/a: uploaded, but the upload history could not be saved ("
+        ),
+        "{warning}"
+    );
+    assert!(warning.ends_with("). The clip was kept."), "{warning}");
+    assert_eq!(
+        r.upload_info.as_ref().unwrap()["url"],
+        json!("https://cdn.example/a")
+    );
+    assert!(
+        r.to_line()
+            .contains(r#""warning":"https://cdn.example/a: uploaded"#)
+    );
+}
+
+/// The bar shows one line and cuts a detail at 240 characters: what has to
+/// survive that is the link, so it leads, even a long one.
+#[tokio::test]
+async fn the_link_leads_the_history_warning() {
+    let long = format!("https://cdn.example/{}", "a".repeat(150));
+    let srv = server(vec![(200, long.as_str())]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    std::fs::create_dir_all(h.paths.upload_history_file()).unwrap();
+    let r = h.respond(&h.env("x")).await;
+    assert!(r.ok, "{}", r.message);
+    let warning = r.warning.expect("no warning");
+    let shown: String = warning.chars().take(240).collect();
+    assert!(shown.starts_with(&long), "{shown}");
 }
 
 fn nix_is_root() -> bool {
@@ -798,6 +1054,55 @@ async fn url_credentials_stay_out_of_messages() {
     assert!(!msg.contains("hunter2"), "{msg}");
 }
 
+/// An upload URL often carries the secret (`?token=…`, `user:password@`):
+/// network errors may name the address, never that part of it.
+#[tokio::test]
+async fn url_secrets_stay_out_of_messages() {
+    // A server that reads each request whole and then hangs up without
+    // answering: the client's error is "connection closed before message
+    // completed", which names the URL (a reset would not).
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in listener.incoming() {
+            let Ok(s) = s else { break };
+            let mut reader = BufReader::new(s);
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let _ = reader.read_exact(&mut vec![0; length]);
+        }
+    });
+    let h = home(json!({
+        "upload_provider": "custom",
+        "upload_server_url": format!("http://alice:hunter2@127.0.0.1:{port}/up?token=SECRET#frag"),
+    }));
+    let env = h.env("x");
+    let (_, uploaded, _) = h.upload(&env).await;
+    let (_, tested) = h.test(&env).await;
+    for message in [uploaded, tested] {
+        assert!(
+            message.starts_with("Could not reach your server: "),
+            "{message}"
+        );
+        for secret in ["SECRET", "hunter2", "alice", "frag", "token"] {
+            assert!(!message.contains(secret), "{secret} leaked: {message}");
+        }
+        // The address itself is still useful to read.
+        assert!(
+            message.contains(&format!("http://127.0.0.1:{port}/up")),
+            "{message}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn settings_problems_are_flagged() {
     async fn flagged(status: u16, extra: &str, auth: &str) -> (bool, String) {
@@ -838,4 +1143,258 @@ async fn settings_problems_are_flagged() {
     });
     let r = handle(&h.env("x"), &req).await;
     assert!(!r.ok && r.settings_problem, "{}", r.message);
+}
+
+/// Uploads that are slow, or that go quiet, against servers on the tokio
+/// runtime (the stall limit is shortened through `Env::io_timeout`).
+mod stalls {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
+
+    /// How the server treats the upload.
+    #[derive(Clone, Copy)]
+    enum Mode {
+        /// Takes the body at a steady 8 MB/s, then answers.
+        Slow,
+        /// Takes a little of the body, then never reads again.
+        StopsReading,
+        /// Takes the whole body, then never answers.
+        NeverAnswers,
+        /// Answers with headers and a few bytes, then goes quiet.
+        StallsAnswering,
+    }
+
+    /// A server on a socket with a small receive buffer, so the upload feels
+    /// how fast the server reads instead of vanishing into the kernel's
+    /// buffers: tiny when the server stops reading (the upload backs up
+    /// after a few kilobytes), 64 KiB when it reads at a steady pace (a
+    /// tiny window would make the transfer itself crawl). Returns the
+    /// upload URL and a count of the connections made.
+    fn serve(mode: Mode) -> (String, Arc<AtomicUsize>) {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        let buffer = if matches!(mode, Mode::Slow) {
+            64 * 1024
+        } else {
+            4096
+        };
+        socket.set_recv_buffer_size(buffer).unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = socket.listen(8).unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let connections = Arc::new(AtomicUsize::new(0));
+        let count = connections.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let _ = respond(&mut s, mode).await;
+                });
+            }
+        });
+        (url, connections)
+    }
+
+    async fn respond(s: &mut tokio::net::TcpStream, mode: Mode) -> std::io::Result<()> {
+        let mut head = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let end = loop {
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Ok(());
+            }
+            head.extend_from_slice(&chunk[..n]);
+            if let Some(i) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let text = String::from_utf8_lossy(&head[..end]).to_lowercase();
+        let length: usize = text
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap();
+        let mut got = head.len() - end;
+        let mut buf = vec![0u8; 64 * 1024];
+        let quiet = Duration::from_secs(60);
+        while got < length {
+            if matches!(mode, Mode::StopsReading) && got > 32 * 1024 {
+                tokio::time::sleep(quiet).await;
+            }
+            let n = s.read(&mut buf).await?;
+            if n == 0 {
+                return Ok(());
+            }
+            got += n;
+            if matches!(mode, Mode::Slow) {
+                tokio::time::sleep(Duration::from_secs_f64(n as f64 / 8_000_000.0)).await;
+            }
+        }
+        match mode {
+            Mode::Slow => {
+                let body = "https://cdn.example/slow.mp4";
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                s.write_all(reply.as_bytes()).await?;
+            }
+            Mode::StallsAnswering => {
+                s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
+                    .await?;
+                tokio::time::sleep(quiet).await;
+            }
+            Mode::NeverAnswers | Mode::StopsReading => tokio::time::sleep(quiet).await,
+        }
+        Ok(())
+    }
+
+    /// What an upload came to.
+    struct Outcome {
+        ok: bool,
+        message: String,
+        took: Duration,
+        /// Connections the server saw: one per attempt.
+        connections: usize,
+    }
+
+    /// An upload of `size` bytes with the stall limit at `limit_ms` and
+    /// `retries` retries without a wait; a hang is a failure, not a stuck
+    /// test run.
+    async fn upload(
+        provider: &str,
+        mode: Mode,
+        size: usize,
+        limit_ms: u64,
+        retries: usize,
+    ) -> Outcome {
+        let (url, connections) = serve(mode);
+        let h = if provider == "catbox" {
+            home(json!({"upload_provider": "catbox"}))
+        } else {
+            home(json!({"upload_provider": "custom", "upload_server_url": url}))
+        };
+        std::fs::write(&h.clip, vec![5u8; size]).unwrap();
+        let mut env = h.env(&url);
+        env.io_timeout = Duration::from_millis(limit_ms);
+        env.retry_delays = vec![Duration::ZERO; retries];
+        let started = Instant::now();
+        let (ok, message, _) = tokio::time::timeout(Duration::from_secs(20), h.upload(&env))
+            .await
+            .expect("the upload hung");
+        Outcome {
+            ok,
+            message,
+            took: started.elapsed(),
+            connections: connections.load(Ordering::SeqCst),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_but_steady_upload_is_not_cut_off() {
+        // 24 MiB at 8 MB/s takes over 3 s, twice the stall limit; the kernel's
+        // buffers swallow the first few megabytes, so the pace only shows
+        // in the rest, and the tail takes half a second to drain.
+        let o = upload("custom", Mode::Slow, 24 << 20, 1500, 0).await;
+        assert!(o.ok, "{}", o.message);
+        assert_eq!(o.message, "https://cdn.example/slow.mp4");
+        assert!(
+            o.took > Duration::from_millis(2000),
+            "not slow enough: {:?}",
+            o.took
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_that_stops_reading_stalls_the_upload() {
+        for provider in ["custom", "catbox"] {
+            let who = if provider == "catbox" {
+                "Catbox"
+            } else {
+                "your server"
+            };
+            // More than any socket buffer holds, so the upload backs up.
+            let o = upload(provider, Mode::StopsReading, 48 << 20, 500, 0).await;
+            assert!(!o.ok);
+            assert_eq!(
+                o.message,
+                format!("The upload to {who} stalled: no data went out for 500 ms.")
+            );
+            assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_answers_is_given_up_on() {
+        let o = upload("custom", Mode::NeverAnswers, 1000, 500, 0).await;
+        assert!(!o.ok);
+        assert_eq!(
+            o.message,
+            "Your server did not answer within 500 ms of the end of the upload."
+        );
+        assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
+        let o = upload("catbox", Mode::NeverAnswers, 1000, 500, 0).await;
+        assert_eq!(
+            o.message,
+            "Catbox did not answer within 500 ms of the end of the upload."
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_stalls_is_given_up_on() {
+        let o = upload("custom", Mode::StallsAnswering, 1000, 500, 0).await;
+        assert!(!o.ok);
+        assert_eq!(
+            o.message,
+            "The answer from your server stalled: no data for 500 ms."
+        );
+        assert!(o.took < Duration::from_secs(5), "{:?}", o.took);
+    }
+
+    /// A stall is a network problem like any other: the upload is tried
+    /// again (the other tests here run without retries, and would not notice
+    /// it turning into a permanent failure).
+    #[tokio::test]
+    async fn a_stall_is_retried_like_any_network_error() {
+        for (mode, size, what) in [
+            (Mode::StopsReading, 48 << 20, "stalled while sending"),
+            (Mode::NeverAnswers, 1000, "never answered"),
+            (Mode::StallsAnswering, 1000, "stalled while answering"),
+        ] {
+            let o = upload("custom", mode, size, 300, 2).await;
+            assert!(!o.ok, "{what}");
+            assert_eq!(
+                o.connections, 3,
+                "{what}: one attempt and two retries, got {}",
+                o.message
+            );
+        }
+    }
+
+    /// Nothing goes out while the connection is still being made, and a
+    /// connection that never comes up is the connect timeout's to report,
+    /// as it always was, not a stalled upload.
+    #[tokio::test]
+    async fn a_connection_that_never_comes_up_is_a_connect_timeout() {
+        // https:// to a server that takes the TLS hello and never answers.
+        let (url, _) = serve(Mode::NeverAnswers);
+        let url = url.replacen("http://", "https://", 1);
+        let h = home(json!({"upload_provider": "custom", "upload_server_url": url}));
+        let mut env = h.env("x");
+        env.io_timeout = Duration::from_millis(500);
+        env.retry_delays = Vec::new();
+        let (ok, msg, _) = tokio::time::timeout(Duration::from_secs(20), h.upload(&env))
+            .await
+            .expect("the upload hung");
+        assert_eq!(
+            (ok, msg.as_str()),
+            (
+                false,
+                "Could not reach your server: the connection timed out."
+            )
+        );
+    }
 }

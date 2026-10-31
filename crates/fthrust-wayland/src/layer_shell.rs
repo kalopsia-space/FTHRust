@@ -252,12 +252,14 @@ impl LayerSurface {
                         | zwlr_layer_surface_v1::Anchor::Left,
                 );
                 layer_surface.set_exclusive_zone(-1);
-                // An empty input region: every click goes through.
-                let region = compositor.create_region(&qh, ());
-                surface.set_input_region(Some(&region));
-                region.destroy();
             }
         }
+        // An empty input region: every click goes through to whatever is
+        // underneath. Overlays only show things; the capture card used to
+        // eat clicks in the game's top-right corner.
+        let region = compositor.create_region(&qh, ());
+        surface.set_input_region(Some(&region));
+        region.destroy();
         layer_surface.set_margin(margins.0, margins.1, margins.2, margins.3);
         layer_surface
             .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);

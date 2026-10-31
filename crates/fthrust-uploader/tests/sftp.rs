@@ -59,10 +59,12 @@ impl Home {
     }
 
     async fn upload(&self, env: &Env) -> (bool, String) {
+        let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
             "path": self.clip,
-            "allowed_roots": [self.dir.path().join("clips")],
+            "allowed_roots": [clips],
+            "clips_root": clips,
         });
         let r = handle(env, &req).await;
         (r.ok, r.message)
@@ -139,6 +141,131 @@ async fn known_hosts_trusts_and_changed_key_refused() {
     assert_eq!(
         msg,
         "SFTP host-key mismatch. Connection stopped before sending credentials. Verify the changed key with the server operator."
+    );
+}
+
+/// A host with several key types is trusted by the one known_hosts holds:
+/// the client asks for that type first, as OpenSSH does, instead of always
+/// asking for Ed25519 and reading an ECDSA entry as an untrusted host.
+#[tokio::test]
+async fn the_key_type_in_known_hosts_is_the_one_asked_for() {
+    let server = srv::start(16).await;
+    let h = home(&server, json!({}));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    // Only the ECDSA key of this host is known (and an Ed25519 one of another).
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!(
+            "elsewhere.example {}\n{}\n",
+            server.key.public_key().to_openssh().unwrap(),
+            server.ecdsa_known_hosts_line()
+        ),
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // Nothing known but an Ed25519 entry: that is what the host presents.
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!("{}\n", server.known_hosts_line()),
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // A different ECDSA key recorded for the host is still a changed key.
+    let other = srv::start(17).await;
+    let line = other
+        .ecdsa_known_hosts_line()
+        .replace(&other.port.to_string(), &server.port.to_string());
+    std::fs::write(ssh.join("known_hosts"), format!("{line}\n")).unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(!ok);
+    assert!(msg.contains("host-key mismatch"), "{msg}");
+}
+
+/// A pinned fingerprint names one key, and known_hosts is not consulted for
+/// it. So what known_hosts holds must not decide which key type is asked for
+/// either: an old ECDSA line for a host whose pinned key is its Ed25519 one
+/// would otherwise make the server present the ECDSA key and every
+/// connection end in a "host-key mismatch".
+#[tokio::test]
+async fn a_pin_decides_alone_which_host_key_is_asked_for() {
+    let server = srv::start(22).await;
+    let h = home(&server, pinned(&server));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    // The user's file and FTHRust's own both know only the ECDSA key.
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!("{}\n", server.ecdsa_known_hosts_line()),
+    )
+    .unwrap();
+    std::fs::create_dir_all(h.paths.uploader_dir()).unwrap();
+    std::fs::write(
+        h.paths.uploader_known_hosts_file(),
+        format!("{}\n", server.ecdsa_known_hosts_line()),
+    )
+    .unwrap();
+    let env = h.env();
+    let (ok, msg) = h.test(&env, Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // Uploads go through the same connection.
+    h.save_password(&env, srv::PASSWORD).await;
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    // The pin is still what decides: another server's key is a mismatch.
+    let other = srv::start(24).await;
+    let h = home(&other, json!({"sftp_fingerprint": server.fingerprint()}));
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(!ok);
+    assert!(msg.contains("host-key mismatch"), "{msg}");
+}
+
+/// known_hosts is a text file by convention only: a comment in Latin-1 or a
+/// stray byte must not take every host's trust down with it.
+#[tokio::test]
+async fn a_known_hosts_file_that_is_not_utf8_still_works() {
+    let server = srv::start(18).await;
+    let h = home(&server, json!({}));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let mut text = b"# caf\xe9 (Latin-1)\n\xff\xfe broken.example ssh-ed25519 AAAA\n".to_vec();
+    text.extend_from_slice(format!("{}\n", server.known_hosts_line()).as_bytes());
+    std::fs::write(ssh.join("known_hosts"), text).unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+}
+
+/// Remembering a verified host rewrites FTHRust's own known_hosts; the lines
+/// it cannot read as text are not its to throw away.
+#[tokio::test]
+async fn remembering_a_host_keeps_the_lines_it_cannot_read_as_text() {
+    let server = srv::start(19).await;
+    let h = home(&server, pinned(&server));
+    std::fs::create_dir_all(h.paths.uploader_dir()).unwrap();
+    std::fs::write(
+        h.paths.uploader_known_hosts_file(),
+        b"keep.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHx\n\xff\xfe odd line\n",
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    let after = std::fs::read(h.paths.uploader_known_hosts_file()).unwrap();
+    let has = |needle: &[u8]| after.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        has(b"keep.example ssh-ed25519 "),
+        "{}",
+        String::from_utf8_lossy(&after)
+    );
+    assert!(
+        has(b"\xff\xfe odd line\n"),
+        "{}",
+        String::from_utf8_lossy(&after)
+    );
+    assert!(
+        has(format!("[127.0.0.1]:{} ssh-ed25519 ", server.port).as_bytes()),
+        "{after:?}"
     );
 }
 
@@ -286,6 +413,123 @@ async fn upload_part_rename_and_urls() {
     assert_eq!(mode & 0o777, 0o644);
 }
 
+/// Both SFTP links, the `sftp://` location and the public HTTPS one, are
+/// links the card can offer, so they confirm an upload.
+#[tokio::test]
+async fn auto_delete_follows_a_confirmed_sftp_upload() {
+    let server = srv::start(15).await;
+    for public in [false, true] {
+        let mut extra =
+            json!({"sftp_fingerprint": server.fingerprint(), "upload_auto_delete": true});
+        if public {
+            extra["sftp_public_enabled"] = json!(true);
+            extra["sftp_public_base_url"] = json!("https://videos.example/clips");
+        }
+        let h = home(&server, extra);
+        let env = h.env();
+        h.save_password(&env, srv::PASSWORD).await;
+        let clip = h.clip.canonicalize().unwrap();
+        let (ok, msg) = h.upload(&env).await;
+        assert!(ok, "{msg}");
+        let want = if public {
+            "https://videos.example/clips/fthr-"
+        } else {
+            "sftp://127.0.0.1:"
+        };
+        assert!(msg.starts_with(want), "{msg}");
+        assert!(!clip.exists(), "public={public}: the clip stayed");
+    }
+}
+
+/// A TCP relay that holds every chunk back by `delay` in each direction: the
+/// round trip of a slow link without its bandwidth limit. Returns its port.
+async fn delayed_relay(target: u16, delay: std::time::Duration) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+    use tokio::time::Instant;
+
+    async fn pump(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, delay: std::time::Duration) {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = from.read(&mut buf).await {
+                if n == 0
+                    || tx
+                        .send((Instant::now() + delay, buf[..n].to_vec()))
+                        .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        while let Some((due, data)) = rx.recv().await {
+            tokio::time::sleep_until(due).await;
+            if to.write_all(&data).await.is_err() {
+                break;
+            }
+        }
+        let _ = to.shutdown().await;
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", target)).await else {
+                continue;
+            };
+            let (client_read, client_write) = client.into_split();
+            let (server_read, server_write) = server.into_split();
+            tokio::spawn(pump(client_read, server_write, delay));
+            tokio::spawn(pump(server_read, client_write, delay));
+        }
+    });
+    port
+}
+
+/// How long an upload of `size` bytes takes through a link with a round trip
+/// of `rtt`.
+async fn timed_upload(
+    server: &TestServer,
+    size: usize,
+    rtt: std::time::Duration,
+) -> std::time::Duration {
+    let port = delayed_relay(server.port, rtt / 2).await;
+    let h = home(
+        server,
+        json!({"sftp_fingerprint": server.fingerprint(), "sftp_port": port.to_string()}),
+    );
+    std::fs::write(&h.clip, vec![7u8; size]).unwrap();
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let started = std::time::Instant::now();
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    started.elapsed()
+}
+
+/// Measures the SFTP write window: `cargo t -p fthrust-uploader --test sftp
+/// -- --ignored --nocapture throughput`.
+#[tokio::test]
+#[ignore]
+async fn throughput_over_a_slow_link() {
+    let server = srv::start(21).await;
+    let rtt = std::time::Duration::from_millis(60);
+    let size = 24 << 20;
+    // The same trip with a small file shows what connecting costs.
+    let overhead = timed_upload(&server, 1000, rtt).await;
+    let total = timed_upload(&server, size, rtt).await;
+    let transfer = total.saturating_sub(overhead);
+    println!(
+        "{} MiB over a {} ms round trip: {:.2} s ({:.1} MB/s); connecting and finishing {:.2} s",
+        size >> 20,
+        rtt.as_millis(),
+        transfer.as_secs_f64(),
+        size as f64 / 1e6 / transfer.as_secs_f64(),
+        overhead.as_secs_f64()
+    );
+}
+
 #[tokio::test]
 async fn failed_rename_cleans_part_and_keeps_clip() {
     let server = srv::start(10).await;
@@ -301,6 +545,119 @@ async fn failed_rename_cleans_part_and_keeps_clip() {
     );
     assert!(srv::names(&server.root.join("up")).is_empty());
     assert!(h.clip.exists());
+}
+
+/// Starts an upload of the clip that hangs in its first write, and kills it
+/// (drops it, as SIGKILL would) once its partial file is on the server.
+/// Returns the name of that leftover.
+async fn kill_an_upload(server: &TestServer, h: &Home, env: &Env) -> String {
+    let up = server.root.join("up");
+    let before = srv::names(&up);
+    server.knobs.stall_writes.store(true, Ordering::SeqCst);
+    let partial_appears = async {
+        while !srv::names(&up)
+            .iter()
+            .any(|n| n.ends_with(".part") && !before.contains(n))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    let killed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::select! {
+            r = h.upload(env) => panic!("the upload was meant to hang: {r:?}"),
+            () = partial_appears => {}
+        }
+    })
+    .await;
+    assert!(killed.is_ok(), "no partial file ever appeared");
+    server.knobs.stall_writes.store(false, Ordering::SeqCst);
+    srv::names(&up)
+        .into_iter()
+        .find(|n| n.ends_with(".part") && !before.contains(n))
+        .unwrap()
+}
+
+/// The app kills a stuck uploader (SIGKILL), so nothing can clean up after
+/// an upload that dies mid-transfer. The next upload of the same clip does:
+/// the partial file has a name that only depends on the clip.
+#[tokio::test]
+async fn a_killed_upload_is_cleaned_up_by_the_next_one_of_the_same_clip() {
+    let server = srv::start(20).await;
+    let h = home(&server, pinned(&server));
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let up = server.root.join("up");
+    // Somebody else's partial file stays where it is.
+    std::fs::write(up.join("fthr-someone-else.part"), b"theirs").unwrap();
+
+    kill_an_upload(&server, &h, &env).await;
+    let left = srv::names(&up);
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(
+        left.iter().any(|n| n == "fthr-someone-else.part"),
+        "{left:?}"
+    );
+
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let names = srv::names(&up);
+    assert_eq!(
+        names.len(),
+        2,
+        "the dead attempt's file is still there: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "fthr-someone-else.part"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.ends_with(".MP4") || n.ends_with(".mp4")),
+        "{names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.ends_with(".part") && n != "fthr-someone-else.part")
+    );
+}
+
+/// The partial file of a clip has a fixed name and is created exclusively,
+/// so a leftover the server will not let go (a protected folder, a read-only
+/// file) would fail every upload of that clip for good. It does not: the
+/// upload writes under a name of its own, and the leftover goes when the
+/// server lets it.
+#[tokio::test]
+async fn a_leftover_that_cannot_be_removed_does_not_block_the_clip() {
+    let server = srv::start(25).await;
+    let h = home(&server, pinned(&server));
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let up = server.root.join("up");
+    let stale = kill_an_upload(&server, &h, &env).await;
+
+    server.knobs.fail_remove.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        let (ok, msg) = h.upload(&env).await;
+        assert!(ok, "{msg}");
+    }
+    let names = srv::names(&up);
+    assert!(names.contains(&stale), "{names:?}");
+    let finished = names.iter().filter(|n| n.ends_with(".mp4")).count();
+    assert_eq!(finished, 2, "{names:?}");
+    assert_eq!(
+        names.iter().filter(|n| n.ends_with(".part")).count(),
+        1,
+        "only the leftover, no spare names: {names:?}"
+    );
+
+    server.knobs.fail_remove.store(false, Ordering::SeqCst);
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let names = srv::names(&up);
+    assert!(!names.contains(&stale), "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".part")), "{names:?}");
 }
 
 #[tokio::test]
@@ -322,6 +679,10 @@ async fn chmod_failure_fails_without_link() {
             .get(&h.clip.canonicalize().unwrap())
             .is_none()
     );
+    // The file was renamed into place before the chmod failed: a failed
+    // upload leaves nothing on the server.
+    let left = srv::names(&server.root.join("up"));
+    assert!(left.is_empty(), "the failed upload left {left:?}");
 }
 
 #[tokio::test]

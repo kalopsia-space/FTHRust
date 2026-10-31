@@ -12,7 +12,7 @@ use egui::{Color32, ColorImage, Rect, TextureHandle, Vec2};
 use fthrust_core::gary::{intensity_for_level, step_intensity};
 use fthrust_wayland::layer_shell::Placement;
 
-use super::surface::OverlaySurface;
+use super::surface::{OverlayGpu, OverlaySurface};
 use crate::services::mic_level::SharedMeter;
 
 /// The tick (`QTimer` 33 ms).
@@ -117,23 +117,34 @@ impl Drop for GaryOverlay {
 }
 
 /// Decodes a picture no larger than 2048 px on its long side.
-fn load(path: &Path) -> Option<ColorImage> {
+fn load(path: &Path) -> Option<std::sync::Arc<image::RgbaImage>> {
     let img = image::open(path).ok()?;
     let img = if img.width().max(img.height()) > 2048 {
         img.resize(2048, 2048, image::imageops::FilterType::Triangle)
     } else {
         img
     };
-    let rgba = img.to_rgba8();
-    Some(ColorImage::from_rgba_unmultiplied(
-        [rgba.width() as usize, rgba.height() as usize],
-        rgba.as_raw(),
-    ))
+    Some(std::sync::Arc::new(img.to_rgba8()))
 }
 
-struct Shown {
-    surface: OverlaySurface,
-    textures: Vec<Option<TextureHandle>>,
+/// `img` no larger than it can ever appear on a `screen`-sized surface
+/// (the largest [`picture_rect`]), as egui wants it.
+pub fn fitted(img: &image::RgbaImage, screen: Vec2) -> ColorImage {
+    let full = Vec2::new(img.width() as f32, img.height() as f32);
+    let shown = picture_rect(Rect::from_min_size(egui::Pos2::ZERO, screen), full, 1.0).size();
+    let scaled;
+    let img = if shown.x < full.x && shown.y >= 1.0 && shown.x >= 1.0 {
+        scaled = image::imageops::resize(
+            img,
+            shown.x.round() as u32,
+            shown.y.round() as u32,
+            image::imageops::FilterType::Triangle,
+        );
+        &scaled
+    } else {
+        img
+    };
+    ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw())
 }
 
 fn random_roll() -> u32 {
@@ -143,14 +154,28 @@ fn random_roll() -> u32 {
     (h.finish() % 1_000_003) as u32
 }
 
+fn fresh_ctx() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(1.0);
+    ctx
+}
+
 fn run(rx: Receiver<Cmd>, assets: PathBuf) {
     let mut settings: Option<GarySettings> = None;
     let mut state = GaryState::default();
     // [picture, cat]
-    let mut images: [Option<ColorImage>; 2] = [None, None];
+    let mut images: [Option<std::sync::Arc<image::RgbaImage>>; 2] = [None, None];
     let cat = load(&assets.join("gatze.png"));
     let mut image_path: Option<PathBuf> = None;
-    let mut shown: Option<Shown> = None;
+    // One egui Context and one GPU for the thread's lifetime (each
+    // appearance used to build a Vulkan device and a renderer); the
+    // textures are made once per picture and output size (the picture was
+    // deep-copied, up to 16.8 MB, on every 33 ms tick).
+    let mut ctx = fresh_ctx();
+    let mut gpu = OverlayGpu::new();
+    let mut textures: [Option<TextureHandle>; 2] = [None, None];
+    let mut textures_for: Option<(u32, u32)> = None;
+    let mut shown: Option<OverlaySurface> = None;
     let started = Instant::now();
     loop {
         match rx.recv_timeout(TICK) {
@@ -164,12 +189,19 @@ fn run(rx: Receiver<Cmd>, assets: PathBuf) {
                         .or_else(|| load(&assets.join("gary.png")));
                     images[1] = cat.clone();
                     image_path = wanted;
+                    textures = [None, None];
                     shown = None;
                 }
                 settings = Some(*s);
             }
             Ok(Cmd::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
+        }
+        if gpu.device_lost() {
+            shown = None;
+            textures = [None, None];
+            gpu.reset();
+            ctx = fresh_ctx();
         }
         let Some(s) = &settings else { continue };
         let level = s
@@ -189,19 +221,13 @@ fn run(rx: Receiver<Cmd>, assets: PathBuf) {
             continue;
         }
         if shown.is_none() {
-            let ctx = egui::Context::default();
             match OverlaySurface::new_placed(
+                &mut gpu,
                 s.output.as_deref(),
                 Placement::Fullscreen,
                 "fthrust-gary",
-                ctx,
             ) {
-                Ok(surface) => {
-                    shown = Some(Shown {
-                        surface,
-                        textures: vec![None, None],
-                    })
-                }
+                Ok(surface) => shown = Some(surface),
                 Err(e) => {
                     // No layer-shell: Gary stays off (spec).
                     tracing::warn!(error = %e, "Gary overlay unavailable");
@@ -210,21 +236,29 @@ fn run(rx: Receiver<Cmd>, assets: PathBuf) {
                 }
             }
         }
-        let Some(sh) = shown.as_mut() else { continue };
-        if !sh.surface.pump() {
+        let Some(surface) = shown.as_mut() else {
+            continue;
+        };
+        if !surface.pump(&gpu) {
             shown = None;
             continue;
         }
+        if textures_for != Some(surface.size()) {
+            textures = [None, None];
+            textures_for = Some(surface.size());
+        }
         let which = usize::from(state.cat() && images[1].is_some());
-        let Some(img) = images[which].clone() else {
+        let Some(img) = images[which].as_ref() else {
             continue;
         };
-        let slot = &mut sh.textures[which];
+        let screen = Vec2::new(surface.size().0 as f32, surface.size().1 as f32);
+        let tex = textures[which]
+            .get_or_insert_with(|| {
+                ctx.load_texture("gary", fitted(img, screen), egui::TextureOptions::LINEAR)
+            })
+            .clone();
         let t = started.elapsed().as_secs_f64();
-        let result = sh.surface.render(t, |ctx, painter, rect| {
-            let tex = slot.get_or_insert_with(|| {
-                ctx.load_texture("gary", img.clone(), egui::TextureOptions::LINEAR)
-            });
+        let result = surface.render(&mut gpu, &ctx, t, |_, painter, rect| {
             let r = picture_rect(rect, tex.size_vec2(), intensity);
             painter.image(
                 tex.id(),
@@ -236,6 +270,9 @@ fn run(rx: Receiver<Cmd>, assets: PathBuf) {
         if let Err(e) = result {
             tracing::warn!(error = %e, "Gary frame failed");
             shown = None;
+            textures = [None, None];
+            gpu.reset();
+            ctx = fresh_ctx();
         }
     }
 }

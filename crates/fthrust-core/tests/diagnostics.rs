@@ -132,7 +132,11 @@ fn session_dir_name_and_marker() {
     let re = regex::Regex::new(r"^session-\d{8}T\d{6}Z-[0-9a-f]{8}$").unwrap();
     assert!(re.is_match(&name), "{name}");
     assert_eq!(session.dir().parent().unwrap(), p.diagnostics_dir());
-    assert_eq!(session.engine_log_path(), session.dir().join("engine.log"));
+    assert_eq!(
+        session.engine_log_path(),
+        p.engine_log(),
+        "the report reads the file the UI writes the engine's stderr to"
+    );
     let marker: Value = serde_json::from_str(
         &fs::read_to_string(p.diagnostics_dir().join("active-session.json")).unwrap(),
     )

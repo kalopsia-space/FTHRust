@@ -224,9 +224,25 @@ pub fn close_popups(state: &mut AppState) {
     state.popups.hotkeys.close();
 }
 
-/// Opens a URL with the desktop's handler.
+/// Opens a URL or a path with the desktop's handler. The `xdg-open` child
+/// is waited for on a short-lived thread, so none is left as a zombie.
 pub fn open_url(url: &str) {
-    if let Err(e) = std::process::Command::new("xdg-open").arg(url).spawn() {
-        tracing::warn!("xdg-open {url}: {e}");
+    let spawned = std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(mut child) => {
+            let reaper = std::thread::Builder::new()
+                .name("fthrust-xdg-open".into())
+                .spawn(move || {
+                    let _ = child.wait();
+                });
+            if let Err(e) = reaper {
+                tracing::debug!("xdg-open reaper not started: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("xdg-open {url}: {e}"),
     }
 }

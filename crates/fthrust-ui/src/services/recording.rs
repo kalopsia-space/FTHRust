@@ -20,6 +20,9 @@ use crate::state::{AppState, StatusStyle, StatusText};
 
 /// The start acknowledgement deadline.
 pub const START_ACK_S: f64 = 10.0;
+/// How long the engine may take to come back with the recording profile
+/// (the supervisor's apply timeout plus a margin).
+pub const PREPARE_TIMEOUT_S: f64 = 40.0;
 /// Free space required before a recording starts (512 MiB).
 pub const MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 /// How long `RECORDING SAVED` shows.
@@ -30,6 +33,8 @@ pub const FAILED_STATUS_S: f64 = 3.0;
 pub const LOW_SPACE_FLOOR: u64 = 256 * 1024 * 1024;
 /// How often the free space is checked while recording.
 pub const SPACE_CHECK_S: f64 = 1.0;
+/// How long the finished recording's read-back check may take.
+pub const FINALIZE_TIMEOUT_S: f64 = 30.0;
 
 /// The recording state machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +151,7 @@ pub struct RecordingService {
     next_request_id: u64,
     request_id: u64,
     finalize: Option<Receiver<Result<(), String>>>,
+    check: fn(&Path) -> Result<(), String>,
     transient: Option<(StatusText, Option<f64>)>,
     profile_is_recording: bool,
     low_space_floor: u64,
@@ -173,6 +179,7 @@ impl RecordingService {
             next_request_id: 1,
             request_id: 0,
             finalize: None,
+            check: Self::check_recording,
             transient: None,
             profile_is_recording: false,
             low_space_floor: LOW_SPACE_FLOOR,
@@ -187,6 +194,11 @@ impl RecordingService {
         self.state
     }
 
+    /// How a finished recording is checked (tests stand in a slow one).
+    pub fn set_finalize_check(&mut self, check: fn(&Path) -> Result<(), String>) {
+        self.check = check;
+    }
+
     /// The free-space floor a running recording stops at (tests raise it).
     pub fn set_low_space_floor(&mut self, bytes: u64) {
         self.low_space_floor = bytes;
@@ -196,7 +208,10 @@ impl RecordingService {
     /// kept when the file exists.
     pub fn on_engine_lost(&mut self, now: f64) -> Vec<RecAction> {
         let mut out = Vec::new();
-        if self.state == RecordState::Idle {
+        // Preparing restarts the engine on purpose: the disconnect is the
+        // restart, not a loss (it used to fail every recording that needed
+        // its own quality profile). Preparing has its own deadline instead.
+        if matches!(self.state, RecordState::Idle | RecordState::Preparing) {
             return out;
         }
         let keep = self.path.as_ref().is_some_and(|p| p.exists());
@@ -367,6 +382,7 @@ impl RecordingService {
         if needs_profile {
             self.profile_is_recording = true;
             self.state = RecordState::Preparing;
+            self.requested_at = now;
             self.set_label("Preparing…", true);
             self.show("PREPARING RECORDING QUALITY", StatusStyle::Idle, None);
             out.push(RecAction::RestartForRecording(desired));
@@ -491,25 +507,16 @@ impl RecordingService {
                 request_id, path, ..
             } if *request_id == self.request_id && self.state == RecordState::Stopping => {
                 self.state = RecordState::Finalizing;
+                self.requested_at = now;
                 self.path = Some(path.clone());
                 self.set_label("Finalizing…", true);
                 let (tx, rx) = channel();
                 let probe_path = path.clone();
+                let check = self.check;
                 std::thread::Builder::new()
                     .name("fthrust-recording-validate".into())
                     .spawn(move || {
-                        let ok = std::fs::metadata(&probe_path)
-                            .map(|m| m.len() > 0)
-                            .unwrap_or(false);
-                        let result = if !ok {
-                            Err("The recorder produced no playable video fragments.".to_owned())
-                        } else if fthrust_media::probe::probe_video_metadata(&probe_path).is_some()
-                        {
-                            Ok(())
-                        } else {
-                            Err("The recording could not be read back as a video.".to_owned())
-                        };
-                        let _ = tx.send(result);
+                        let _ = tx.send(check(&probe_path));
                     })
                     .ok();
                 self.finalize = Some(rx);
@@ -527,10 +534,32 @@ impl RecordingService {
         out
     }
 
+    /// The finished recording reads back as a video.
+    pub fn check_recording(path: &Path) -> Result<(), String> {
+        let ok = std::fs::metadata(path)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+        if !ok {
+            Err("The recorder produced no playable video fragments.".to_owned())
+        } else if fthrust_media::probe::probe_video_metadata(path).is_some() {
+            Ok(())
+        } else {
+            Err("The recording could not be read back as a video.".to_owned())
+        }
+    }
+
     /// Timers: the start acknowledgement, the elapsed label, finalisation.
     pub fn on_tick(&mut self, now: f64) -> Vec<RecAction> {
         let mut out = Vec::new();
         match self.state {
+            RecordState::Preparing if now - self.requested_at > PREPARE_TIMEOUT_S => {
+                self.fail(
+                    "The capture engine did not come back with the recording quality.",
+                    false,
+                    &mut out,
+                    now,
+                );
+            }
             RecordState::Starting if now - self.requested_at > START_ACK_S => {
                 self.fail(
                     "The capture engine did not acknowledge the start request.",
@@ -576,7 +605,16 @@ impl RecordingService {
                 }
             }
             RecordState::Finalizing => {
-                let result = self.finalize.as_ref().and_then(|rx| rx.try_recv().ok());
+                let mut result = self.finalize.as_ref().and_then(|rx| rx.try_recv().ok());
+                // The check (a probe of the file) can hang on a stuck disk,
+                // and a check thread that never started never answers; both
+                // used to leave "Finalizing…" up for good.
+                if result.is_none() && now - self.requested_at > FINALIZE_TIMEOUT_S {
+                    result = Some(Err(
+                        "Checking the finished recording took too long; the file was kept."
+                            .to_owned(),
+                    ));
+                }
                 if let Some(result) = result {
                     self.finalize = None;
                     match result {

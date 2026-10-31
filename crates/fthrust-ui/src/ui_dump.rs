@@ -129,6 +129,11 @@ impl Writer {
     }
 }
 
+/// Whether `FTHRUST_UI_DUMP` asks for a dump.
+pub fn requested() -> bool {
+    std::env::var_os("FTHRUST_UI_DUMP").is_some_and(|p| !p.is_empty())
+}
+
 /// A writer when `FTHRUST_UI_DUMP` names a file.
 pub fn from_env() -> Option<Writer> {
     let path = std::env::var_os("FTHRUST_UI_DUMP")?;

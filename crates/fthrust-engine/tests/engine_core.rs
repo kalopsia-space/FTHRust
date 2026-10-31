@@ -14,6 +14,7 @@ use fthrust_engine::backend::{
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
+use fthrust_wayland::backend::DMABUF_FIRST_FRAME_DEADLINE;
 
 fn have_software_h264() -> bool {
     fthrust_media::init().unwrap();
@@ -331,6 +332,54 @@ fn transient_failures_wait_without_budget() {
 }
 
 #[test]
+fn a_transient_wayland_failure_at_startup_does_not_open_the_portal() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The compositor does not answer the first connection: ext and wlr are
+    // waited out instead of falling through to the portal, whose dialog
+    // would come up for nothing.
+    let mut script = SyntheticScript::new(320, 180);
+    for kind in [BackendKind::ExtImageCopy, BackendKind::WlrScreencopy] {
+        script.kinds.insert(
+            kind,
+            KindScript {
+                fail_inits: VecDeque::from(vec![FailureKind::CompositorUnreachable]),
+                ..KindScript::default()
+            },
+        );
+    }
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script,
+            candidates: vec![
+                BackendKind::ExtImageCopy,
+                BackendKind::WlrScreencopy,
+                BackendKind::PortalScreenCast,
+            ],
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    let mut engine = CaptureEngine::new(config(|_| {}), deps);
+    engine.start().unwrap();
+    let s = wait_for(&engine, Duration::from_secs(5), |s| s.frames_captured >= 1);
+    engine.shutdown();
+    assert_eq!(s.backend, Some(BackendKind::ExtImageCopy), "{s:?}");
+    assert_eq!(s.capture_generation, 1);
+    assert_eq!(*sleeps.lock().unwrap(), [2000], "one transient wait");
+}
+
+#[test]
 fn output_absent_waits_and_resumes_same_output() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");
@@ -457,6 +506,75 @@ fn content_watchdog_flags_black_screen() {
     assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0);
     assert!(s.content_luma_mean <= 8.0);
     h.engine.shutdown();
+}
+
+#[test]
+fn a_black_screen_restarts_capture_once() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Twelve black samples (one a second) flag the content and restart
+    // capture; while the picture stays black it is not restarted again.
+    let mut script = wlr_ok(320, 180);
+    script.black = true;
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let n = wait_notice(&h.engine, Duration::from_secs(30), |n| {
+        matches!(n, EngineNotice::Recovering { .. })
+    });
+    let EngineNotice::Recovering { reason } = n else {
+        unreachable!()
+    };
+    assert!(reason.contains("black"), "{reason}");
+    wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.capture_generation == 2 && s.health_flags & flags::RECOVERING == 0
+    });
+    std::thread::sleep(Duration::from_secs(4));
+    let s = h.engine.status();
+    h.engine.shutdown();
+    assert_eq!(s.capture_generation, 2, "restarted once: {s:?}");
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0, "still flagged");
+    assert!(s.content_suspicious_streak >= 15, "{s:?}");
+    assert_eq!(*h.sleeps.lock().unwrap(), [250]);
+}
+
+#[test]
+fn a_black_screen_never_reopens_the_portal() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // On the portal a restart means a new ScreenCast session, which can
+    // put the picker in front of the game: a dark run is only flagged.
+    let mut script = SyntheticScript::new(320, 180);
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    script.black = true;
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script: script.clone(),
+            candidates: vec![BackendKind::PortalScreenCast],
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    let mut engine = CaptureEngine::new(config(|c| c.fps = 30), deps);
+    engine.start().unwrap();
+    // Two samples past the one that makes the content suspect.
+    let s = wait_for(&engine, Duration::from_secs(30), |s| {
+        s.content_suspicious_streak >= 14
+    });
+    engine.shutdown();
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0, "{s:?}");
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(script.lock().unwrap().opens, 1, "the session was reopened");
+    assert!(sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
 #[test]
@@ -617,21 +735,26 @@ fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");
     }
-    // Frames arrive about eight times per encoded frame, then the screen
-    // goes static: the repeats must show the last fresh frame even though
-    // pacing never encoded it.
-    const LAST_FRESH: u64 = 60;
+    // Fresh frames are stamped 6 ms before they arrive (as PipeWire stamps
+    // portal frames), so after each wait for the encode slot the first ones
+    // are older than the slot and the throttle skips them. Then the screen
+    // goes static: the repeats must show the last fresh frame even when the
+    // encoder never took it.
+    const LAST_FRESH: u64 = 20;
     let mut script = wlr_ok(160, 90);
     script.frame_interval = Duration::from_millis(4);
+    script.timestamp_lag = Duration::from_millis(6);
     script.solid = true;
     script.static_after = Some(LAST_FRESH + 1);
     let mut h = harness(config(|c| c.fps = 30), script);
     let (tx, rx) = crossbeam_channel::unbounded();
     h.engine.set_packet_tap(Some(tx));
     h.engine.start().unwrap();
-    wait_for(&h.engine, Duration::from_secs(20), |s| {
-        s.frames_captured >= 30
-    });
+    let started = Instant::now();
+    while h.script.lock().unwrap().captures < LAST_FRESH + 30 {
+        assert!(started.elapsed() < Duration::from_secs(20), "no repeats");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     h.engine.shutdown();
     let packets: Vec<_> = rx.try_iter().collect();
     let extradata = h.engine.encoder_snapshot().map(|s| s.extradata);
@@ -645,6 +768,64 @@ fn repeats_carry_the_last_fresh_frame_when_pacing_skipped_it() {
         (got - expected).abs() <= 8,
         "last picture is grey {got}, the last fresh frame is grey {expected}"
     );
+}
+
+#[test]
+fn capture_requests_are_paced_to_the_frame_rate() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The backend could deliver 500 frames a second and 30 are encoded:
+    // every frame requested before the next encode slot would be copied
+    // by the compositor for nothing.
+    let mut script = wlr_ok(160, 90);
+    script.frame_interval = Duration::from_millis(2);
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 10
+    });
+    let captures = || h.script.lock().unwrap().captures;
+    let (c0, f0) = (captures(), h.engine.status().frames_captured);
+    std::thread::sleep(Duration::from_secs(1));
+    let (c1, f1) = (captures(), h.engine.status().frames_captured);
+    h.engine.shutdown();
+    let (captures, frames) = (c1 - c0, f1 - f0);
+    assert!(frames >= 20, "{frames} frames in a second at 30 fps");
+    assert!(
+        captures <= frames + frames / 2,
+        "{captures} capture requests for {frames} encoded frames"
+    );
+}
+
+#[test]
+fn a_static_screen_after_a_mode_switch_keeps_capturing() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // After a mode switch the backend has no frame of its new buffers to
+    // repeat while the compositor holds its request on a static screen,
+    // here for about two seconds. The engine re-sends what it last encoded
+    // instead of ending the generation (which, three times over, pushed
+    // capture off ext-image-copy and zero copy).
+    let mut script = wlr_ok(160, 90);
+    script.unchanged = Some((10, 60));
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let started = Instant::now();
+    while h.script.lock().unwrap().captures < 10 + 60 + 5 {
+        assert!(started.elapsed() < Duration::from_secs(20), "stalled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let s = h.engine.status();
+    h.engine.shutdown();
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert!(
+        s.frames_captured >= 60,
+        "{} frames: the static stretch was not encoded",
+        s.frames_captured
+    );
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
 #[test]
@@ -728,8 +909,9 @@ fn zero_copy_capture_encodes_dmabuf_frames() {
     };
     let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
     h.engine.start().unwrap();
+    // The watchdog samples the surfaces once a second, from a mapping.
     wait_for(&h.engine, Duration::from_secs(10), |s| {
-        s.frames_captured >= 30
+        s.frames_captured >= 30 && s.content_sample_sequence >= 1
     });
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
     assert_eq!(h.engine.normalized_frames(), 0);
@@ -752,6 +934,67 @@ fn dmabuf_geometry_change_reallocates_or_falls_back() {
     assert_eq!(s.capture_generation, 1, "no generation restart");
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 2, "reallocated once");
     h.engine.shutdown();
+}
+
+#[test]
+fn zero_copy_that_is_never_filled_falls_back_without_a_restart() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The compositor takes the dmabuf images and completes no capture into
+    // them: the backend repeats its shm frame until the first-frame
+    // deadline, then goes back to shm on its own. The engine frees the
+    // surfaces and keeps the generation.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.dmabuf_never_filled = true;
+    let mut h = harness(vaapi_config(), script);
+    let started = Instant::now();
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    assert!(h.engine.zero_copy_in_use(), "zero copy started");
+    let deadline = Instant::now() + DMABUF_FIRST_FRAME_DEADLINE + Duration::from_secs(5);
+    while h.engine.zero_copy_in_use() {
+        assert!(Instant::now() < deadline, "zero copy never fell back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let fell_back_after = started.elapsed();
+    let frames = h.engine.status().frames_captured;
+    let s = wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.frames_captured >= frames + 15
+    });
+    h.engine.shutdown();
+    assert!(
+        fell_back_after >= DMABUF_FIRST_FRAME_DEADLINE,
+        "fell back after {fell_back_after:?}"
+    );
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "no reallocation");
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
+fn zero_copy_survives_a_static_screen_past_the_first_frame_deadline() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The app starts on an idle desktop: the screen never changes. The
+    // switch to dmabuf starts a fresh session whose first capture comes
+    // anyway; every later one is held and repeated. Zero copy must stay.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.static_after = Some(0);
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    std::thread::sleep(DMABUF_FIRST_FRAME_DEADLINE + Duration::from_secs(1));
+    let s = h.engine.status();
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(zero_copy, "zero copy was dropped on a static screen: {s:?}");
+    assert!(s.frames_captured >= 100, "{s:?}");
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
 #[test]

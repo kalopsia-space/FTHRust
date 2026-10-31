@@ -116,8 +116,16 @@ fn run(
     if !layer_ok {
         tracing::warn!("no layer-shell: capture cards fall back to desktop notifications");
     }
-    let ctx = egui::Context::default();
-    crate::fonts::install(&ctx, &tokens);
+    // One egui Context and one GPU (device + renderer) for the thread's
+    // lifetime; a GPU error replaces both together.
+    let fresh_ctx = |tokens: &Tokens| {
+        let ctx = egui::Context::default();
+        crate::fonts::install(&ctx, tokens);
+        ctx.set_pixels_per_point(1.0);
+        ctx
+    };
+    let mut ctx = fresh_ctx(&tokens);
+    let mut gpu = surface::OverlayGpu::new();
     let mut model = CardModel::default();
     let mut surface: Option<surface::OverlaySurface> = None;
     let mut scale = 1.0f32;
@@ -155,6 +163,19 @@ fn run(
                 Err(_) => break,
             }
         };
+        // Checked before a new card builds its surface on a dead device.
+        if gpu.device_lost() {
+            surface = None;
+            gpu.reset();
+            ctx = fresh_ctx(&tokens);
+            // The card on screen went with the device: say it another way.
+            if model.is_live() {
+                model.hide();
+                if let Some(c) = last_content.take() {
+                    notify(&mut notify_rt, &c);
+                }
+            }
+        }
         match cmd {
             Some(Cmd::Shutdown) => break,
             Some(Cmd::Tokens(t)) => {
@@ -201,10 +222,10 @@ fn run(
                         (h * scale).round() as u32,
                     );
                     match surface::OverlaySurface::new(
+                        &mut gpu,
                         name.as_deref(),
                         size,
                         (MARGIN, 0, 0, 0),
-                        ctx.clone(),
                     ) {
                         Ok(s) => {
                             if let Ok(mut e) = stats.error.lock() {
@@ -235,7 +256,7 @@ fn run(
             None => surface = None,
             Some(frame) => {
                 if let Some(s) = surface.as_mut() {
-                    if !s.pump() {
+                    if !s.pump(&gpu) {
                         surface = None;
                         model.hide();
                         if let Some(c) = last_content.take() {
@@ -252,7 +273,7 @@ fn run(
                     );
                     let tokens_ref = &tokens;
                     let frame_ref = &frame;
-                    if let Err(e) = s.render(t, |ctx, painter, _| {
+                    if let Err(e) = s.render(&mut gpu, &ctx, t, |ctx, painter, _| {
                         paint(painter, ctx, tokens_ref, frame_ref, rect, scale);
                     }) {
                         tracing::warn!(error = %e, "capture card render failed");
@@ -260,6 +281,8 @@ fn run(
                             *err = Some(e.to_string());
                         }
                         surface = None;
+                        gpu.reset();
+                        ctx = fresh_ctx(&tokens);
                         model.hide();
                         if let Some(c) = last_content.take() {
                             notify(&mut notify_rt, &c);
