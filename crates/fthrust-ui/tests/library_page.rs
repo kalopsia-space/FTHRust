@@ -534,6 +534,106 @@ fn blank_bands(rects: &[(String, Rect)], top: f32, bottom: f32) -> Vec<(f32, f32
     bands
 }
 
+fn wheel_down(h: &mut egui_kittest::Harness<'_>, dy: f32) {
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -dy),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+}
+
+#[test]
+fn scrolling_away_drops_the_queued_thumbnail_jobs_of_the_old_rows() {
+    use fthrust_ui::library::thumbs::ThumbPool;
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = two_day_records(&tmp.path().join("clips"), 40, 20);
+    s.library_dirty = true;
+    // A pool without workers: whatever the page asks for stays queued.
+    s.thumb_pool = Some(ThumbPool::start_with(tmp.path().join("cache"), 0));
+    let tokens = s.tokens.clone();
+    let queued = std::rc::Rc::new(std::cell::Cell::new((0usize, 0usize)));
+    let probe = queued.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        let jobs = s.thumb_pool.as_ref().map_or(0, |p| p.inflight());
+        probe.set((jobs, s.visible_cards.len()));
+    });
+    h.run_steps(4);
+    let (first, built) = queued.get();
+    assert!(first > 0, "the first screen asked for thumbnails");
+    assert!(first <= built, "{first} jobs for {built} built cards");
+    h.hover_at(Pos2::new(700.0, 500.0));
+    // Down the page, pausing after each step long enough for the page to ask
+    // for what it then shows.
+    for _ in 0..8 {
+        wheel_down(&mut h, 400.0);
+        h.run_steps(40);
+    }
+    let (jobs, built) = queued.get();
+    assert!(
+        jobs <= built,
+        "{jobs} jobs queued for {built} built cards: the old rows' jobs stayed"
+    );
+}
+
+#[test]
+fn a_failed_thumbnail_is_asked_for_again_when_the_clip_changes() {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), 1);
+    s.library_dirty = true;
+    let clip = s.library.records[0].path.clone();
+    let fp = {
+        let r = &s.library.records[0];
+        format!("{}|{}", r.size, r.mtime_ns)
+    };
+    s.thumb_failed.insert(clip.clone(), fp, 0.0);
+    let tokens = s.tokens.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(5);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 0, "a fresh failure is left alone");
+    // The clip was rewritten.
+    s.library.records[0].size += 1;
+    s.library_dirty = true;
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(5);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 1, "a changed clip is tried again");
+    assert!(!s.thumb_failed.contains(&clip));
+}
+
+#[test]
+fn a_failed_thumbnail_is_asked_for_again_after_a_while() {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    s.library.records = synthetic_records(&tmp.path().join("clips"), 1);
+    s.library_dirty = true;
+    let fp = {
+        let r = &s.library.records[0];
+        format!("{}|{}", r.size, r.mtime_ns)
+    };
+    s.thumb_failed
+        .insert(s.library.records[0].path.clone(), fp, 0.0);
+    let tokens = s.tokens.clone();
+    // Each step is four seconds on egui's clock; a harness starts with a few.
+    let h = common::harness_with_dt(Vec2::new(1440.0, 900.0), 1.0, &tokens, 4.0, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 0, "held for the first seconds");
+    let mut h = common::harness_with_dt(Vec2::new(1440.0, 900.0), 1.0, &tokens, 4.0, |ui| {
+        shell::frame(ui, &mut s);
+    });
+    h.run_steps(10);
+    drop(h);
+    assert_eq!(s.thumb_requests_total, 1, "tried again once it is due");
+}
+
 #[test]
 fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
     let (tmp, mut s) = state(serde_json::json!({}));

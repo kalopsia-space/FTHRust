@@ -55,6 +55,7 @@ fn fingerprint(state: &AppState, path: &Path) -> String {
 }
 
 fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
+    let now = ui.ctx().input(|i| i.time);
     let mut results = Vec::new();
     if let Some(pool) = &state.thumb_pool {
         while let Ok(r) = pool.results().try_recv() {
@@ -67,7 +68,8 @@ fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
             continue;
         }
         match r.image {
-            Some(ThumbImage::Video(cached)) => {
+            Some(ThumbImage::Video(cached, rgba)) => {
+                state.thumb_failed.remove(&r.path);
                 let meta = cached.meta;
                 let mut details = vec![format!("{}p", meta.height)];
                 if meta.fps > 0.0 {
@@ -82,21 +84,19 @@ fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
                 state
                     .thumb_meta
                     .insert(r.path.clone(), (details.join(" · "), Some(meta.duration)));
-                if let Ok(img) = image::open(&cached.jpg) {
-                    let rgba = img.to_rgba8();
-                    let ci = egui::ColorImage::from_rgba_unmultiplied(
-                        [rgba.width() as usize, rgba.height() as usize],
-                        rgba.as_raw(),
-                    );
-                    let tex = ui.ctx().load_texture(
-                        format!("thumb:{}", r.path.display()),
-                        ci,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    state.thumb_textures.insert(r.path.clone(), tex, Some(meta));
-                }
+                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                    [rgba.width() as usize, rgba.height() as usize],
+                    rgba.as_raw(),
+                );
+                let tex = ui.ctx().load_texture(
+                    format!("thumb:{}", r.path.display()),
+                    ci,
+                    egui::TextureOptions::LINEAR,
+                );
+                state.thumb_textures.insert(r.path.clone(), tex, Some(meta));
             }
             Some(ThumbImage::Image(rgba)) => {
+                state.thumb_failed.remove(&r.path);
                 state
                     .thumb_meta
                     .insert(r.path.clone(), ("Screenshot".into(), None));
@@ -112,7 +112,9 @@ fn drain_thumbnails(ui: &Ui, state: &mut AppState) {
                 state.thumb_textures.insert(r.path.clone(), tex, None);
             }
             None => {
-                state.thumb_failed.insert(r.path.clone());
+                state
+                    .thumb_failed
+                    .insert(r.path.clone(), r.fingerprint.clone(), now);
                 state
                     .thumb_meta
                     .entry(r.path.clone())
@@ -647,10 +649,15 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                                 Vec2::new(e.texture.size()[0] as f32, e.texture.size()[1] as f32),
                             )
                         });
+                        // A failure holds until the file changes or the retry is due.
+                        let failed = state.thumb_failed.contains(path) && {
+                            let fp = fingerprint(state, path);
+                            state.thumb_failed.blocks(path, &fp, now)
+                        };
                         if thumbnail.is_none()
                             && on_screen
                             && !settling
-                            && !state.thumb_failed.contains(path)
+                            && !failed
                             && !state.thumb_requested.contains(path)
                         {
                             let fp = fingerprint(state, path);
@@ -752,6 +759,13 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         ui.ctx().request_repaint();
     }
     state.visible_cards = visible;
+    // Jobs for cards that scrolled out of the built rows would only delay the
+    // thumbnails of the ones in view; they are requested again on the way back.
+    if let Some(pool) = &state.thumb_pool {
+        for path in pool.retain(&state.visible_cards) {
+            state.thumb_requested.remove(&path);
+        }
+    }
     if let Some((path, item, title, link)) = menu_req {
         match item {
             MenuItem::Open => open_req = Some(path),

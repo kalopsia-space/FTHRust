@@ -478,7 +478,7 @@ pub struct AppState {
     /// Metadata text and duration per clip once probed.
     pub thumb_meta: std::collections::HashMap<std::path::PathBuf, (String, Option<f64>)>,
     /// Clips whose thumbnail could not be made.
-    pub thumb_failed: std::collections::HashSet<std::path::PathBuf>,
+    pub thumb_failed: crate::library::thumbs::ThumbFailures,
     /// Clips whose thumbnail was requested this generation.
     pub thumb_requested: std::collections::HashSet<std::path::PathBuf>,
     /// Transient card feedback: text and the time it expires.
@@ -747,7 +747,7 @@ impl AppState {
             thumb_pool: None,
             thumb_textures: crate::library::thumbs::ThumbTextures::default(),
             thumb_meta: std::collections::HashMap::new(),
-            thumb_failed: std::collections::HashSet::new(),
+            thumb_failed: crate::library::thumbs::ThumbFailures::default(),
             thumb_requested: std::collections::HashSet::new(),
             card_feedback: std::collections::HashMap::new(),
             open_clip_requested: None,

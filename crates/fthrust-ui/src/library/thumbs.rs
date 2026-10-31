@@ -2,7 +2,7 @@
 //! crate's cache, results delivered on a channel, and a bounded LRU of
 //! live egui textures (one per visible card, at most 96).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -16,6 +16,57 @@ use fthrust_media::thumbnail::library::{CachedThumbnail, image_thumbnail, load_o
 pub const MAX_LIVE_TEXTURES: usize = 96;
 /// Longest thumbnail job queue.
 pub const MAX_QUEUE: usize = 128;
+/// How long a failed thumbnail waits before the next try (a clip that changed
+/// is tried at once).
+pub const FAILED_RETRY_S: f64 = 30.0;
+
+/// Clips whose thumbnail could not be made, with the file they failed on and
+/// the time to try again.
+#[derive(Debug, Default)]
+pub struct ThumbFailures {
+    entries: HashMap<PathBuf, (String, f64)>,
+}
+
+impl ThumbFailures {
+    /// Records a failure of `path` as the file was (`fingerprint`) at `now`.
+    pub fn insert(&mut self, path: PathBuf, fingerprint: String, now: f64) {
+        self.entries.insert(path, (fingerprint, now + FAILED_RETRY_S));
+    }
+
+    /// `path` has a recorded failure (expired or not).
+    pub fn contains(&self, path: &Path) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    /// Whether `path` is still not worth a try: the file is what it was when
+    /// it failed, and the retry time has not come. An entry that no longer
+    /// holds is dropped.
+    pub fn blocks(&mut self, path: &Path, fingerprint: &str, now: f64) -> bool {
+        match self.entries.get(path) {
+            None => false,
+            Some((was, retry_at)) if was == fingerprint && now < *retry_at => true,
+            Some(_) => {
+                self.entries.remove(path);
+                false
+            }
+        }
+    }
+
+    /// Forgets `path`.
+    pub fn remove(&mut self, path: &Path) {
+        self.entries.remove(path);
+    }
+
+    /// Recorded failures.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// No failures.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 
 /// A live texture and the metadata it came with.
 pub struct ThumbEntry {
@@ -103,8 +154,9 @@ pub struct ThumbResult {
 /// What a job produced.
 #[derive(Debug)]
 pub enum ThumbImage {
-    /// A cached video poster.
-    Video(CachedThumbnail),
+    /// A cached video poster and its pixels, decoded by the worker (the UI
+    /// thread only uploads them).
+    Video(CachedThumbnail, image::RgbaImage),
     /// A decoded screenshot (RGBA, ≤ 640×360).
     Image(image::RgbaImage),
 }
@@ -136,6 +188,11 @@ pub struct ThumbPool {
 impl ThumbPool {
     /// Starts two workers writing into `cache_dir`.
     pub fn start(cache_dir: PathBuf) -> ThumbPool {
+        ThumbPool::start_with(cache_dir, 2)
+    }
+
+    /// Starts `workers` workers; with none, jobs only queue (tests).
+    pub fn start_with(cache_dir: PathBuf, workers: usize) -> ThumbPool {
         let queue = Arc::new((
             Mutex::new(Queue {
                 jobs: VecDeque::new(),
@@ -146,7 +203,7 @@ impl ThumbPool {
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         let repaint: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
-        let threads = (0..2)
+        let threads = (0..workers)
             .map(|i| {
                 let queue = queue.clone();
                 let tx = tx.clone();
@@ -227,6 +284,24 @@ impl ThumbPool {
         true
     }
 
+    /// Drops the queued jobs of clips outside `keep` (the cards that are
+    /// built now) and returns their paths: a job for a card that scrolled
+    /// away would only delay the thumbnails of the cards in view. Running
+    /// jobs finish.
+    pub fn retain(&self, keep: &[PathBuf]) -> Vec<PathBuf> {
+        let (q, _) = &*self.queue;
+        let mut q = q.lock().unwrap_or_else(|e| e.into_inner());
+        let mut dropped = Vec::new();
+        q.jobs.retain(|j| {
+            let wanted = keep.contains(&j.path);
+            if !wanted {
+                dropped.push(j.path.clone());
+            }
+            wanted
+        });
+        dropped
+    }
+
     /// Finished jobs.
     pub fn results(&self) -> &Receiver<ThumbResult> {
         &self.results
@@ -284,7 +359,10 @@ fn worker(
             load_or_build(&cache_dir, &job.path, &job.cancel)
                 .ok()
                 .flatten()
-                .map(ThumbImage::Video)
+                .and_then(|cached| {
+                    let rgba = image::open(&cached.jpg).ok()?.to_rgba8();
+                    Some(ThumbImage::Video(cached, rgba))
+                })
         } else {
             image_thumbnail(&job.path).ok().map(ThumbImage::Image)
         };
