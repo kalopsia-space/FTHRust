@@ -965,6 +965,38 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     dmabuf_invalidated = true;
                     continue;
                 }
+                Err(CaptureError::Unchanged) => {
+                    // The compositor holds the request on a static screen and
+                    // the backend's buffers changed since its last frame (a
+                    // mode switch): re-send what the encoder last took, so
+                    // the stream keeps its rate instead of timing out.
+                    let ts = monotonic_ns();
+                    if ts < next_encode_ns {
+                        continue;
+                    }
+                    next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
+                    watchdog.tick();
+                    packets.clear();
+                    if inner.keyframe_request.swap(false, Ordering::SeqCst) {
+                        enc.request_keyframe();
+                    }
+                    match enc.encode_repeat(ts, &mut packets) {
+                        Ok(true) => {
+                            encode_failures.on_encode_result(true);
+                            produced += 1;
+                            ever_produced = true;
+                            publish(&inner, &mut packets, fps);
+                        }
+                        // Nothing encoded yet: wait for the screen to change.
+                        Ok(false) => {}
+                        Err(e) => {
+                            if encode_failures.on_encode_result(false) {
+                                break GenerationEnd::EncoderFailed(e.to_string());
+                            }
+                        }
+                    }
+                    continue;
+                }
                 Err(CaptureError::Disconnected) => {
                     break GenerationEnd::BackendFailed {
                         transient: true,
@@ -1145,28 +1177,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     encode_failures.on_encode_result(true);
                     produced += 1;
                     ever_produced = true;
-                    let ring = inner.ring.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                    let tap = inner
-                        .packet_tap
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .clone();
-                    for p in packets.drain(..) {
-                        if let Some(tap) = &tap
-                            && tap.try_send(p.clone()).is_err()
-                        {
-                            inner.record_overflow.store(true, Ordering::SeqCst);
-                        }
-                        ring.push(p);
-                    }
-                    let mut s = inner.status.lock().unwrap_or_else(|p| p.into_inner());
-                    s.frames_captured += 1;
-                    if s.frames_captured.is_multiple_of(u64::from(fps.max(1)))
-                        || s.frames_captured == 1
-                    {
-                        drop(s);
-                        inner.notify(EngineNotice::StatusChanged);
-                    }
+                    publish(&inner, &mut packets, fps);
                 }
                 Err(e) => {
                     if encode_failures.on_encode_result(false) {
@@ -1231,6 +1242,31 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     }
     drop(s);
     inner.notify(EngineNotice::StatusChanged);
+}
+
+/// Hands one encoded frame's packets to the ring and the recording tap and
+/// counts the frame.
+fn publish(inner: &Inner, packets: &mut Vec<EncodedPacket>, fps: u32) {
+    let ring = inner.ring.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let tap = inner
+        .packet_tap
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    for p in packets.drain(..) {
+        if let Some(tap) = &tap
+            && tap.try_send(p.clone()).is_err()
+        {
+            inner.record_overflow.store(true, Ordering::SeqCst);
+        }
+        ring.push(p);
+    }
+    let mut s = inner.status.lock().unwrap_or_else(|p| p.into_inner());
+    s.frames_captured += 1;
+    if s.frames_captured.is_multiple_of(u64::from(fps.max(1))) || s.frames_captured == 1 {
+        drop(s);
+        inner.notify(EngineNotice::StatusChanged);
+    }
 }
 
 fn terminal_failure(inner: &Inner, reason: &str) {

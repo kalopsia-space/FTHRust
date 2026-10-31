@@ -253,6 +253,10 @@ pub struct SyntheticScript {
     /// Stamp each fresh frame this long before it is returned, as PipeWire
     /// stamps portal frames with the time they were produced.
     pub timestamp_lag: Duration,
+    /// After `.0` frames, report [`CaptureError::Unchanged`] `.1` times, a
+    /// frame interval apart, then deliver again: a static screen right
+    /// after a mode switch, with no frame of the new size to repeat.
+    pub unchanged: Option<(u64, u64)>,
     /// Offer dmabuf capture with these constraints. In dmabuf mode frames
     /// arrive as `FrameSource::Dmabuf` views with no pixel data.
     pub dmabuf: Option<DmabufConstraints>,
@@ -279,6 +283,7 @@ impl SyntheticScript {
             static_after: None,
             solid: false,
             timestamp_lag: Duration::ZERO,
+            unchanged: None,
             dmabuf: None,
             dmabuf_invalidate_after: None,
             dmabuf_uses: 0,
@@ -370,6 +375,7 @@ impl BackendFactory for SyntheticFactory {
             dmabuf_images: 0,
             dmabuf_next: 0,
             dmabuf_invalidated: false,
+            unchanged_reported: 0,
         }))
     }
 }
@@ -389,6 +395,7 @@ struct SyntheticBackend {
     dmabuf_images: usize,
     dmabuf_next: usize,
     dmabuf_invalidated: bool,
+    unchanged_reported: u64,
 }
 
 impl CaptureBackend for SyntheticBackend {
@@ -422,14 +429,22 @@ impl CaptureBackend for SyntheticBackend {
             std::thread::sleep(self.next_at - now);
         }
         self.next_at = Instant::now() + interval;
-        let (solid, is_static, lag) = {
+        let (solid, is_static, lag, unchanged) = {
             let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
             (
                 s.solid,
                 s.static_after.is_some_and(|n| self.frames >= n),
                 s.timestamp_lag,
+                s.unchanged,
             )
         };
+        if let Some((after, count)) = unchanged
+            && self.frames >= after
+            && self.unchanged_reported < count
+        {
+            self.unchanged_reported += 1;
+            return Err(CaptureError::Unchanged);
+        }
         let (w, h) = (self.width as usize, self.height as usize);
         let stride = if short_stride { w * 4 - 4 } else { w * 4 };
         self.buffer.resize(stride * h, 0);

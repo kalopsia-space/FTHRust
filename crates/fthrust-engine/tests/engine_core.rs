@@ -681,6 +681,36 @@ fn capture_requests_are_paced_to_the_frame_rate() {
 }
 
 #[test]
+fn a_static_screen_after_a_mode_switch_keeps_capturing() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // After a mode switch the backend has no frame of its new buffers to
+    // repeat while the compositor holds its request on a static screen,
+    // here for about two seconds. The engine re-sends what it last encoded
+    // instead of ending the generation (which, three times over, pushed
+    // capture off ext-image-copy and zero copy).
+    let mut script = wlr_ok(160, 90);
+    script.unchanged = Some((10, 60));
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let started = Instant::now();
+    while h.script.lock().unwrap().captures < 10 + 60 + 5 {
+        assert!(started.elapsed() < Duration::from_secs(20), "stalled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let s = h.engine.status();
+    h.engine.shutdown();
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert!(
+        s.frames_captured >= 60,
+        "{} frames: the static stretch was not encoded",
+        s.frames_captured
+    );
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
 fn static_black_rotated_stream_is_still_flagged() {
     if !have_software_h264() {
         return eprintln!("skipping: no software H.264 encoder");

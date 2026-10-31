@@ -39,9 +39,15 @@ impl std::fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
-/// Why a capture call produced no frame; every variant ends the generation.
+/// Why a capture call produced no frame; every variant but
+/// [`CaptureFailure::Unchanged`] ends the generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureFailure {
+    /// The compositor holds the frame request because the screen has not
+    /// changed, and the backend has no frame of its current buffers to
+    /// repeat (they changed with a mode switch or a buffer switch): the
+    /// caller repeats what it has. Not an error.
+    Unchanged,
     /// The compositor did not answer within the frame deadline.
     Timeout,
     /// The cancel flag was set.
@@ -58,6 +64,7 @@ pub enum CaptureFailure {
 impl std::fmt::Display for CaptureFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CaptureFailure::Unchanged => f.write_str("the screen has not changed"),
             CaptureFailure::Timeout => {
                 f.write_str("the compositor did not deliver a frame in time")
             }
@@ -94,7 +101,7 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
             FailureKind::CompositorUnreachable,
             format!("{step}: the Wayland connection was lost"),
         ),
-        CaptureFailure::Timeout => BackendError::new(
+        CaptureFailure::Timeout | CaptureFailure::Unchanged => BackendError::new(
             FailureKind::CompositorUnreachable,
             format!("{step}: the compositor did not answer"),
         ),
