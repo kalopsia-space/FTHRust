@@ -150,7 +150,10 @@ fn lifecycle_reaches_ready_and_play_queues() {
     };
     let mut e = r.open(&clip);
     assert_eq!(e.status_text(), "Preparing clip…");
-    assert!(!e.duration_known(), "the length is a placeholder until then");
+    assert!(
+        !e.duration_known(),
+        "the length is a placeholder until then"
+    );
     assert_eq!(e.play_label(), "PLAY");
     e.toggle_play(r.now());
     assert_eq!(e.lifecycle, Lifecycle::PlayQueued);

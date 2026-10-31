@@ -60,7 +60,11 @@ fn readiness_counts_the_questions_that_touch_the_file_system() {
     assert!(r.can_access(&clip));
     assert_eq!(r.state(&clip), ReadinessState::Ready);
     assert_eq!(r.state_lookups(), 2);
-    assert_eq!(r.clone().state_lookups(), 2, "a clone starts from the count");
+    assert_eq!(
+        r.clone().state_lookups(),
+        2,
+        "a clone starts from the count"
+    );
 }
 
 #[test]

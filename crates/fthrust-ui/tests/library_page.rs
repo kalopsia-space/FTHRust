@@ -212,7 +212,10 @@ fn a_frame_does_no_work_that_grows_with_the_library() {
     assert!(small.built > 0 && large.built > 0);
     // Nothing is finalizing, so no card asks the file system about its clip.
     assert_eq!(small.state_lookups, 0);
-    assert_eq!(large.state_lookups, 0, "a readiness check per card and frame");
+    assert_eq!(
+        large.state_lookups, 0,
+        "a readiness check per card and frame"
+    );
     // Every card's record comes from the path index.
     assert_eq!(small.slow_lookups, 0);
     assert_eq!(
