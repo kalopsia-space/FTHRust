@@ -795,3 +795,73 @@ fn stderr_reader_survives_bad_bytes() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Audit 2026-10-31: a crashed engine comes back on its own, a few times.
+#[test]
+fn a_crashed_engine_restarts_within_a_budget() {
+    use fthrust_ui::services::engine::{AUTO_RESTART_DELAY_S, AUTO_RESTART_LIMIT};
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    let mut pid = 60;
+    bring_up(&mut sv, pid, &mut now);
+    for round in 0..=AUTO_RESTART_LIMIT {
+        now += 1.0;
+        let fx = sv.handle(Input::ProcessExited { code: Some(139) }, now);
+        assert!(
+            error_titles(&fx)
+                .iter()
+                .any(|(t, _, _)| t == "ENGINE STOPPED"),
+            "the crash is still reported"
+        );
+        let fx = sv.handle(Input::Tick, now + AUTO_RESTART_DELAY_S + 0.01);
+        let spawned = fx.iter().any(|e| matches!(e, Effect::Spawn));
+        if round < AUTO_RESTART_LIMIT {
+            assert!(spawned, "round {round}: restarted on its own: {fx:?}");
+            now += AUTO_RESTART_DELAY_S + 0.01;
+            pid += 1;
+            sv.handle(Input::Spawned { pid }, now);
+            sv.handle(
+                Input::Hello {
+                    pid,
+                    version: "x".into(),
+                },
+                now,
+            );
+        } else {
+            assert!(!spawned, "the budget is spent: stays stopped");
+        }
+    }
+}
+
+/// A silent engine stops admitting saves at 3 s and is restarted at 15 s.
+#[test]
+fn a_silent_engine_is_reported_then_restarted() {
+    use fthrust_ui::services::engine::HANG_RESTART_S;
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 70, &mut now);
+    let fx = sv.handle(Input::Tick, now + 3.1);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Ui(Event::Health(h)) if h.state != HealthState::Healthy
+        )),
+        "save admission learns it is silent: {fx:?}"
+    );
+    let fx = sv.handle(Input::Tick, now + HANG_RESTART_S + 0.1);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+    assert!(fx.iter().any(|e| matches!(e, Effect::StartAfter(_))));
+}
+
+#[test]
+fn the_supervisor_sleeps_until_its_next_timer() {
+    let mut sv = Supervisor::new();
+    assert_eq!(sv.next_deadline(), None, "nothing to do while stopped");
+    let mut now = 0.0;
+    bring_up(&mut sv, 80, &mut now);
+    let at = sv.next_deadline().expect("connected: the silence check");
+    assert!(at > now && at <= now + 3.0, "{at} vs {now}");
+}

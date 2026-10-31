@@ -132,6 +132,7 @@ impl HotkeyServer {
     /// Stops serving and unlinks the socket.
     pub fn close(mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        let _ = UnixStream::connect(&self.path);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -142,6 +143,9 @@ impl HotkeyServer {
 impl Drop for HotkeyServer {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if self.thread.is_some() {
+            let _ = UnixStream::connect(&self.path);
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -156,6 +160,12 @@ fn serve(
     outbox: Outbox,
 ) {
     while !stop.load(Ordering::SeqCst) {
+        if !super::wait_for_connection(&listener, super::ACCEPT_POLL) {
+            continue;
+        }
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
         match listener.accept() {
             Ok((stream, _)) => {
                 let bindings = bindings.clone();
@@ -164,9 +174,7 @@ fn serve(
                     .name("fthrust-hotkey-client".into())
                     .spawn(move || handle(stream, &bindings, &outbox));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(15));
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => {
                 tracing::warn!(error = %e, "hotkey socket accept failed");
                 std::thread::sleep(Duration::from_millis(50));

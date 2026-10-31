@@ -110,7 +110,7 @@ The app's engine service (`fthrust-ui/src/services/engine.rs`) is a state machin
 1. **Spawn** `fthrust-engine --socket <path>` from `$FTHRUST_ENGINE` or next to the app, with stdin piped. The engine treats stdin closing as "the app is gone" and exits.
 2. **Connect**, retrying 60 times at 150 ms intervals, then wait up to 9 seconds for `Hello`.
 3. **Configure**, and wait up to 30 seconds for healthy capture before showing **SETTINGS APPLY TIMED OUT**.
-4. **Watch.** Three seconds without any event means the engine is gone. An unexpected exit shows **ENGINE STOPPED** with **RESTART ENGINE**.
+4. **Watch.** Three seconds without any event marks the engine disconnected, and saves are refused. Fifteen seconds of silence counts as a hang. A hang or an unexpected exit shows **ENGINE STOPPED** with **RESTART ENGINE**, and the app restarts the engine itself after 2 seconds, up to 3 times in 10 minutes.
 5. **Restart** with a 1-second gap. A restart requested during a save waits for the save to finish.
 6. **Stop** with `Shutdown`, then SIGTERM, then SIGKILL.
 

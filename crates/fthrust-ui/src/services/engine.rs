@@ -36,6 +36,15 @@ pub const SILENCE_S: f64 = 3.0;
 pub const RESTART_GAP_S: f64 = 1.0;
 /// Retry a deferred restart this often while a save runs.
 pub const RESTART_DEFER_S: f64 = 0.5;
+/// A crashed or hung engine is restarted after this long...
+pub const AUTO_RESTART_DELAY_S: f64 = 2.0;
+/// ...at most this many times...
+pub const AUTO_RESTART_LIMIT: usize = 3;
+/// ...within this window; after that it stays stopped until the user
+/// restarts it.
+pub const AUTO_RESTART_WINDOW_S: f64 = 600.0;
+/// A connected engine silent this long is taken as hung and restarted.
+pub const HANG_RESTART_S: f64 = 15.0;
 /// How long a graceful stop waits for the engine to exit before SIGTERM.
 pub const KILL_GRACE_S: f64 = 2.0;
 /// The same with a clip save in flight: the engine finishes the save first
@@ -169,6 +178,8 @@ pub struct Supervisor {
     /// A restart asked for after the running one already configured its
     /// process; it runs once that apply settles.
     queued_restart: Option<(EngineConfig, bool, bool)>,
+    /// When the engine was last restarted on its own (crash or hang).
+    auto_restarts: Vec<f64>,
     applying: bool,
     apply_deadline: Option<f64>,
     last_event_at: f64,
@@ -211,6 +222,7 @@ impl Supervisor {
             defer_restart_until: None,
             deferred_restart: None,
             queued_restart: None,
+            auto_restarts: Vec::new(),
             applying: false,
             apply_deadline: None,
             last_event_at: 0.0,
@@ -397,6 +409,9 @@ impl Supervisor {
         self.snapshot = Some(self.health.observe(false, 0, 0, 0, now));
         self.status(out, "ENGINE STOPPED", StatusStyle::Warning);
         out.push(Effect::Ui(Event::EngineConnected(false)));
+        out.push(Effect::Ui(Event::Health(
+            self.health.observe(false, 0, 0, 0, now),
+        )));
         self.error(
             out,
             "ENGINE STOPPED",
@@ -407,6 +422,44 @@ impl Supervisor {
             false,
             Some((RecoveryKind::EngineLineage, "Error 006")),
         );
+        self.schedule_auto_restart(out, now);
+    }
+
+    /// The reference left a crashed engine stopped until the user pressed
+    /// RESTART ENGINE, so capture silently ended mid-game. It now comes back
+    /// on its own a few times; the error bar still says what happened.
+    fn schedule_auto_restart(&mut self, out: &mut Vec<Effect>, now: f64) {
+        self.auto_restarts
+            .retain(|t| now - t < AUTO_RESTART_WINDOW_S);
+        if self.auto_restarts.len() >= AUTO_RESTART_LIMIT || self.config.is_none() {
+            return;
+        }
+        self.auto_restarts.push(now);
+        self.restart_at = Some(now + AUTO_RESTART_DELAY_S);
+        out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
+    }
+
+    /// When the supervisor next has something to do on its own (a timer);
+    /// `None` when only inputs can change anything.
+    pub fn next_deadline(&self) -> Option<f64> {
+        let mut at: Vec<f64> = Vec::new();
+        at.extend(self.restart_at);
+        at.extend(self.defer_restart_until);
+        at.extend(self.apply_deadline);
+        if let Phase::Connecting { since } = self.phase {
+            at.push(since + HANDSHAKE_S);
+        }
+        if self.is_connected() {
+            at.push(
+                self.last_event_at
+                    + if self.silence_reported {
+                        HANG_RESTART_S
+                    } else {
+                        SILENCE_S
+                    },
+            );
+        }
+        at.into_iter().reduce(f64::min)
     }
 
     /// Feeds one input; returns the effects.
@@ -804,9 +857,31 @@ impl Supervisor {
         }
         if self.is_connected() && now - self.last_event_at >= SILENCE_S && !self.silence_reported {
             self.silence_reported = true;
-            self.snapshot = Some(self.health.observe(false, 0, 0, 0, now));
+            let snapshot = self.health.observe(false, 0, 0, 0, now);
+            self.snapshot = Some(snapshot.clone());
+            // Save admission reads the health the UI was last sent: without
+            // this, saves were still admitted to a silent engine.
+            out.push(Effect::Ui(Event::Health(snapshot)));
             self.status(&mut out, "DISCONNECTED", StatusStyle::Warning);
             self.advance_incidents(&mut out, false, 0, HealthState::Stopped, now);
+        }
+        if self.is_connected()
+            && self.silence_reported
+            && now - self.last_event_at >= HANG_RESTART_S
+        {
+            tracing::warn!("engine silent for {HANG_RESTART_S} s; restarting it");
+            self.engine_gone(
+                &mut out,
+                "The capture engine stopped answering and was restarted.".into(),
+                now,
+            );
+            // engine_gone marked it stopped; the process is still there.
+            self.phase = Phase::Stopping;
+            self.generation += 1;
+            out.push(Effect::Kill {
+                graceful: false,
+                grace_s: KILL_GRACE_S,
+            });
         }
         out
     }
@@ -956,7 +1031,16 @@ impl EngineDriver {
             .name("fthrust-engine-supervisor".into())
             .spawn(move || {
                 loop {
-                    let input = match rx.recv_timeout(Duration::from_millis(100)) {
+                    // Sleep until the next timer (at most a second), not a
+                    // fixed 100 ms: an idle supervisor used to wake 10 times
+                    // a second for as long as the app ran.
+                    let now = ctx.start_epoch.elapsed().as_secs_f64();
+                    let wait = sv
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.next_deadline())
+                        .map_or(1.0, |at| (at - now).clamp(0.01, 1.0));
+                    let input = match rx.recv_timeout(Duration::from_secs_f64(wait)) {
                         Ok(i) => i,
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Input::Tick,
                         Err(_) => break,
@@ -1098,7 +1182,7 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                 let watcher = c.clone();
                 c.handle.spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        tokio::time::sleep(Duration::from_millis(250)).await;
                         let status = {
                             let Ok(mut slot) = watcher.child.lock() else {
                                 break;

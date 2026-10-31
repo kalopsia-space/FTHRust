@@ -3,9 +3,9 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fthrust_core::single_instance::{ACTIVATE, InstanceLock, LockResult, activation_socket_path};
@@ -20,7 +20,12 @@ pub struct Instance {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     primary: bool,
+    sock: Option<PathBuf>,
+    waker: Waker,
 }
+
+/// What an activation request calls to wake the app's event loop.
+type Waker = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
 impl Instance {
     /// This process owns the window.
@@ -32,11 +37,25 @@ impl Instance {
     pub fn activation_requested(&self) -> bool {
         self.activation.swap(false, Ordering::Relaxed)
     }
+
+    /// Wakes the app's event loop on an activation request. The listener
+    /// starts before the window exists, so the context it was given is a
+    /// stand-in that nothing paints; the services hand in the real wake-up.
+    pub fn set_waker(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut w) = self.waker.lock() {
+            *w = Some(wake);
+        }
+    }
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if self.thread.is_some()
+            && let Some(sock) = &self.sock
+        {
+            let _ = UnixStream::connect(sock);
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -61,6 +80,8 @@ pub fn become_primary(
                 stop: Arc::new(AtomicBool::new(false)),
                 thread: None,
                 primary: false,
+                sock: None,
+                waker: Arc::new(Mutex::new(None)),
             })
         }
         LockResult::Acquired(lock) => Ok(listen(Some(lock), runtime_dir, ctx)),
@@ -75,15 +96,23 @@ fn listen(lock: Option<InstanceLock>, runtime_dir: &Path, ctx: &egui::Context) -
     let sock = activation_socket_path(runtime_dir);
     let activation = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
+    let waker: Waker = Arc::new(Mutex::new(None));
     let _ = std::fs::remove_file(&sock);
     let thread = match UnixListener::bind(&sock) {
         Ok(listener) => {
             let _ = listener.set_nonblocking(true);
-            let (flag, stop_t, ctx) = (activation.clone(), stop.clone(), ctx.clone());
+            let (flag, stop_t, ctx, wake) =
+                (activation.clone(), stop.clone(), ctx.clone(), waker.clone());
+            let path = sock.clone();
             std::thread::Builder::new()
                 .name("fthrust-activation".into())
                 .spawn(move || {
                     while !stop_t.load(Ordering::Relaxed) {
+                        if !super::wait_for_connection(&listener, super::ACCEPT_POLL)
+                            || stop_t.load(Ordering::Relaxed)
+                        {
+                            continue;
+                        }
                         match listener.accept() {
                             Ok((mut conn, _)) => {
                                 let _ = conn.set_read_timeout(Some(ACTIVATE_TIMEOUT));
@@ -93,15 +122,17 @@ fn listen(lock: Option<InstanceLock>, runtime_dir: &Path, ctx: &egui::Context) -
                                 {
                                     flag.store(true, Ordering::Relaxed);
                                     ctx.request_repaint();
+                                    let wake = wake.lock().ok().and_then(|w| w.clone());
+                                    if let Some(wake) = wake {
+                                        wake();
+                                    }
                                 }
                             }
-                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                std::thread::sleep(Duration::from_millis(25));
-                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                             Err(_) => break,
                         }
                     }
-                    let _ = std::fs::remove_file(&sock);
+                    let _ = std::fs::remove_file(&path);
                 })
                 .ok()
         }
@@ -116,6 +147,8 @@ fn listen(lock: Option<InstanceLock>, runtime_dir: &Path, ctx: &egui::Context) -
         stop,
         thread,
         primary: true,
+        sock: Some(sock),
+        waker,
     }
 }
 

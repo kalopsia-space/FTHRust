@@ -216,6 +216,24 @@ pub enum Request {
     ResumeCapture,
 }
 
+/// Waits up to `timeout` for a pending connection on `listener`, asleep in
+/// poll(2): the accept loops used to spin on a non-blocking accept every
+/// 15-25 ms for as long as the app ran.
+pub fn wait_for_connection(
+    listener: &std::os::unix::net::UnixListener,
+    timeout: std::time::Duration,
+) -> bool {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd;
+    let ms = u16::try_from(timeout.as_millis().max(1)).unwrap_or(u16::MAX);
+    let mut fds = [PollFd::new(listener.as_fd(), PollFlags::POLLIN)];
+    matches!(poll(&mut fds, PollTimeout::from(ms)), Ok(n) if n > 0)
+}
+
+/// How long an accept loop sleeps between stop checks; stopping also
+/// connects to the socket to wake it at once.
+pub const ACCEPT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The app id registered with the desktop portals.
 pub const APP_ID: &str = "space.kalopsia.fthrust";
 
@@ -235,6 +253,14 @@ impl Outbox {
             ctx,
             waker: None,
         }
+    }
+
+    /// Wakes the event loop and requests a repaint, with no event.
+    pub fn wake(&self) {
+        if let Some(w) = &self.waker {
+            w();
+        }
+        self.ctx.request_repaint();
     }
 
     /// Sends an event, wakes the event loop and requests a repaint.
@@ -1025,6 +1051,8 @@ impl Services {
 
     /// Keeps the instance lock and activation listener alive.
     pub fn attach_instance(&mut self, instance: instance::Instance) {
+        let outbox = self.outbox.clone();
+        instance.set_waker(std::sync::Arc::new(move || outbox.wake()));
         self.instance = Some(instance);
     }
 
