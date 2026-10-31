@@ -794,14 +794,15 @@ impl Services {
                 recording::RecAction::RestoreClipProfile => {
                     if self.test_requests.is_some() {
                         self.dispatch(Request::RestartEngine, state);
-                    } else if let Some(d) = &self.engine
-                        && let Ok(config) = engine::engine_config(state)
-                    {
-                        d.request(engine::Input::Restart {
-                            config,
-                            allow_recording_prepare: false,
-                            explicit: false,
-                        });
+                    } else if let Some(d) = &self.engine {
+                        match engine::engine_config(state) {
+                            Ok(config) => d.request(engine::Input::Restart {
+                                config,
+                                allow_recording_prepare: false,
+                                explicit: false,
+                            }),
+                            Err(e) => self.report_config_error(&e),
+                        }
                     }
                 }
                 recording::RecAction::RefreshLibrary => state.scan_clips_requested = true,
@@ -1005,10 +1006,32 @@ impl Services {
             env,
             state.paths.engine_log(),
         );
-        if let Ok(config) = engine::engine_config(state) {
-            driver.request(engine::Input::Start(config));
+        match engine::engine_config(state) {
+            Ok(config) => driver.request(engine::Input::Start(config)),
+            Err(e) => self.report_config_error(&e),
         }
         self.engine = Some(driver);
+    }
+
+    /// Settings the engine can't be started with: say so (these errors were
+    /// dropped in most places, leaving "STARTING CAPTURE" up forever).
+    fn report_config_error(&self, detail: &str) {
+        tracing::warn!(detail, "capture settings rejected");
+        self.outbox.send(Event::Status {
+            text: "CAPTURE FAILED".into(),
+            style: StatusStyle::Warning,
+        });
+        self.outbox.send(Event::ErrorBar {
+            title: "SETTINGS APPLY FAILED".into(),
+            detail: detail.to_owned(),
+            level: Level::Error,
+            actions: vec![Action {
+                label: "OPEN SETTINGS".into(),
+                id: "open-settings".into(),
+            }],
+            key: Some("engine-config".into()),
+            dismiss_on_action: true,
+        });
     }
 
     /// Starts the engine found next to the executable (or `$FTHRUST_ENGINE`).
@@ -1348,14 +1371,7 @@ impl Services {
                             allow_recording_prepare: false,
                             explicit: false,
                         }),
-                        Err(e) => state.error_bar.push(
-                            "SETTINGS APPLY FAILED",
-                            &e,
-                            Level::Error,
-                            vec![],
-                            None,
-                            true,
-                        ),
+                        Err(e) => self.report_config_error(&e),
                     }
                 }
             }
@@ -1363,14 +1379,15 @@ impl Services {
             Request::Upload(path) => self.upload.enqueue(state, path),
             Request::ErrorAction(id) => match id.as_str() {
                 "restart" | "restart-capture" => {
-                    if let Some(d) = &self.engine
-                        && let Ok(config) = engine::engine_config(state)
-                    {
-                        d.request(engine::Input::Restart {
-                            config,
-                            allow_recording_prepare: false,
-                            explicit: true,
-                        });
+                    if let Some(d) = &self.engine {
+                        match engine::engine_config(state) {
+                            Ok(config) => d.request(engine::Input::Restart {
+                                config,
+                                allow_recording_prepare: false,
+                                explicit: true,
+                            }),
+                            Err(e) => self.report_config_error(&e),
+                        }
                     }
                 }
                 "open-folder" => {

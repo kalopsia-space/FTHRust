@@ -865,3 +865,31 @@ fn the_supervisor_sleeps_until_its_next_timer() {
     let at = sv.next_deadline().expect("connected: the silence check");
     assert!(at > now && at <= now + 3.0, "{at} vs {now}");
 }
+
+/// Audit 2026-10-31: settings the engine can't start with are reported
+/// instead of leaving "STARTING CAPTURE" up forever.
+#[test]
+fn unusable_capture_settings_are_reported_at_start() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s =
+        fthrust_ui::state::AppState::for_tests(d.path(), serde_json::json!({"framerate": 7}));
+    let ctx = egui::Context::default();
+    let mut services = fthrust_ui::services::Services::start(&s, &ctx);
+    services.start_engine_with(
+        d.path().join("no-such-engine"),
+        d.path().join("engine.sock"),
+        Vec::new(),
+        &s,
+    );
+    services.tick(&mut s);
+    assert_eq!(s.status.text, "CAPTURE FAILED");
+    assert!(
+        s.error_bar
+            .entries()
+            .iter()
+            .any(|e| e.title == "SETTINGS APPLY FAILED"),
+        "{:?}",
+        s.error_bar.entries()
+    );
+    services.shutdown();
+}
