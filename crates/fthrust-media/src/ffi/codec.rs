@@ -21,6 +21,9 @@ pub struct OpenParams {
     pub fps: u32,
     /// Target bitrate in bits per second.
     pub bitrate_bps: i64,
+    /// Peak bitrate and rate-control buffer, both in bits (`-maxrate`,
+    /// `-bufsize`); `None` leaves the encoder's own.
+    pub rate_cap: Option<(i64, i64)>,
     /// Private options applied before `avcodec_open2`.
     pub options: Vec<(&'static str, String)>,
     /// Keyframe interval in frames (`None` = two seconds).
@@ -175,6 +178,10 @@ impl RawEncoder {
                 den: 1,
             };
             (*ctx).bit_rate = params.bitrate_bps;
+            if let Some((max_rate, buffer)) = params.rate_cap {
+                (*ctx).rc_max_rate = max_rate;
+                (*ctx).rc_buffer_size = i32::try_from(buffer).unwrap_or(i32::MAX);
+            }
             if let Some(threads) = crate::encoder_policy::thread_count(name) {
                 (*ctx).thread_count = threads;
             }
@@ -389,6 +396,7 @@ mod tests {
             height: 64,
             fps: 30,
             bitrate_bps: 300_000,
+            rate_cap: None,
             options: Vec::new(),
             gop_frames: None,
             pix_fmt: ffi::AVPixelFormat::AV_PIX_FMT_YUV420P,
@@ -484,6 +492,28 @@ mod tests {
             ["huffman=slowest", "no_such_option=1"]
         );
         assert!(RawEncoder::rejected_options("no_such_encoder", &options).is_none());
+    }
+
+    #[test]
+    fn a_rate_cap_reaches_the_codec_context() {
+        crate::init().unwrap();
+        let Some(name) = ["libopenh264", "libx264"]
+            .into_iter()
+            .find(|n| RawEncoder::exists(n))
+        else {
+            return;
+        };
+        let capped = OpenParams {
+            rate_cap: Some((1_150_000, 2_000_000)),
+            ..params()
+        };
+        let raw = RawEncoder::open(name, &capped, None).unwrap();
+        // SAFETY: the context is open and owned by `raw`.
+        let (max, buffer) = unsafe { ((*raw.ctx).rc_max_rate, (*raw.ctx).rc_buffer_size) };
+        assert_eq!((max, buffer), (1_150_000, 2_000_000));
+        let raw = RawEncoder::open(name, &params(), None).unwrap();
+        // SAFETY: as above.
+        assert_eq!(unsafe { (*raw.ctx).rc_max_rate }, 0, "no cap unless asked");
     }
 
     #[test]

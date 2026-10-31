@@ -40,6 +40,28 @@ pub struct EncoderConfig {
     pub preset: u8,
 }
 
+/// A peak bitrate and the rate-control (VBV) buffer it holds over, FFmpeg's
+/// `-maxrate` and `-bufsize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RateCap {
+    /// Peak bitrate.
+    pub max_kbps: u32,
+    /// Buffer size.
+    pub buffer_kbits: u32,
+}
+
+/// How an encoder opens, besides its [`EncoderConfig`].
+#[derive(Clone, Copy, Debug, Default)]
+struct Opening {
+    /// Keyframe interval in frames (`None`: two seconds).
+    gop: Option<u32>,
+    /// Convert on the CPU even where the GPU could.
+    force_cpu: bool,
+    /// Test hook.
+    inject: Option<GpuFailure>,
+    rate_cap: Option<RateCap>,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FrameTiming {
     pts: i64,
@@ -163,7 +185,7 @@ impl Encoder {
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
-        Self::open_inner(cfg, devices, None, false, None)
+        Self::open_inner(cfg, devices, Opening::default())
     }
 
     /// [`Encoder::open`] with the CPU colour conversion forced (tests and
@@ -171,7 +193,11 @@ impl Encoder {
     #[doc(hidden)]
     pub fn open_forcing_cpu_conversion(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(cfg, &candidate_devices(), None, true, None)
+        let opening = Opening {
+            force_cpu: true,
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
     }
 
     /// Makes frame uploads use the staging copy and `av_hwframe_transfer_data`
@@ -187,13 +213,27 @@ impl Encoder {
     /// (playback proxies and tests; capture keeps the two-second default).
     pub fn open_with_gop(cfg: &EncoderConfig, gop_frames: u32) -> Result<Self> {
         crate::init()?;
-        Self::open_inner(
-            cfg,
-            &candidate_devices(),
-            Some(gop_frames.max(1)),
-            false,
-            None,
-        )
+        let opening = Opening {
+            gop: Some(gop_frames.max(1)),
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
+    }
+
+    /// [`Encoder::open_with_gop`] with a peak bitrate (size-targeted
+    /// exports).
+    pub fn open_with_gop_and_cap(
+        cfg: &EncoderConfig,
+        gop_frames: u32,
+        cap: RateCap,
+    ) -> Result<Self> {
+        crate::init()?;
+        let opening = Opening {
+            gop: Some(gop_frames.max(1)),
+            rate_cap: Some(cap),
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, &candidate_devices(), opening)
     }
 
     /// [`Encoder::open`] with a GPU conversion failure injected (tests).
@@ -203,18 +243,16 @@ impl Encoder {
         failure: GpuFailure,
     ) -> Result<Self> {
         crate::init()?;
-        let mut enc = Self::open_inner(cfg, &candidate_devices(), None, false, Some(failure))?;
+        let opening = Opening {
+            inject: Some(failure),
+            ..Opening::default()
+        };
+        let mut enc = Self::open_inner(cfg, &candidate_devices(), opening)?;
         enc.inject_convert_failure = failure == GpuFailure::FirstConvert;
         Ok(enc)
     }
 
-    fn open_inner(
-        cfg: &EncoderConfig,
-        devices: &[String],
-        gop: Option<u32>,
-        force_cpu: bool,
-        inject: Option<GpuFailure>,
-    ) -> Result<Self> {
+    fn open_inner(cfg: &EncoderConfig, devices: &[String], opening: Opening) -> Result<Self> {
         crate::init()?;
         if cfg.fps == 0 || cfg.enc_width == 0 || cfg.enc_height == 0 {
             return Err(MediaError::Invalid(
@@ -229,7 +267,7 @@ impl Encoder {
                 failures.push(format!("{name}: not in this FFmpeg build"));
                 continue;
             }
-            match Self::try_open(name, cfg, devices, gop, force_cpu, inject, &mut logged) {
+            match Self::try_open(name, cfg, devices, opening, &mut logged) {
                 Ok(raw) => {
                     tracing::info!(
                         encoder = *name,
@@ -237,10 +275,11 @@ impl Encoder {
                         height = cfg.enc_height,
                         fps = cfg.fps,
                         bitrate_kbps = cfg.bitrate_kbps,
+                        max_kbps = opening.rate_cap.map(|c| c.max_kbps),
                         preset = cfg.preset,
                         "encoder opened"
                     );
-                    return Self::finish_open(raw, cfg, gop);
+                    return Self::finish_open(raw, cfg, opening.gop);
                 }
                 Err(e) => failures.push(format!("{name}: {e}")),
             }
@@ -264,11 +303,15 @@ impl Encoder {
         name: &'static str,
         cfg: &EncoderConfig,
         devices: &[String],
-        gop: Option<u32>,
-        force_cpu: bool,
-        inject: Option<GpuFailure>,
+        opening: Opening,
         logged: &mut bool,
     ) -> Result<RawEncoder> {
+        let Opening {
+            gop,
+            force_cpu,
+            inject,
+            rate_cap,
+        } = opening;
         let is_vaapi = name.contains("_vaapi");
         let is_hw =
             is_vaapi || name.contains("nvenc") || name.contains("amf") || name.contains("qsv");
@@ -277,6 +320,12 @@ impl Encoder {
             height: cfg.enc_height,
             fps: cfg.fps,
             bitrate_bps: i64::from(cfg.bitrate_kbps) * 1000,
+            rate_cap: rate_cap.map(|c| {
+                (
+                    i64::from(c.max_kbps) * 1000,
+                    i64::from(c.buffer_kbits) * 1000,
+                )
+            }),
             options: preset_options(name, cfg.preset).unwrap_or_default(),
             gop_frames: gop,
             pix_fmt: if is_hw {
@@ -396,9 +445,7 @@ impl Encoder {
             name,
             &cfg,
             &candidate_devices(),
-            None,
-            false,
-            None,
+            Opening::default(),
             &mut false,
         ) else {
             return false;

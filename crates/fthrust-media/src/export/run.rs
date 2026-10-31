@@ -19,7 +19,7 @@ use fthrust_core::export::graph::{AudioOut, MapRef, VideoOut};
 
 use super::encode::{h264_config, is_hardware, status_for_encoder};
 use super::{INACTIVITY_S, Job, Quality, Stop};
-use crate::encoder::Encoder;
+use crate::encoder::{Encoder, RateCap};
 use crate::ring::EncodedPacket;
 
 /// One output stream.
@@ -517,7 +517,19 @@ pub(super) fn attempt(
             VideoEnc::Ffv1(ctx.open_as_with(codec, opts)?)
         } else {
             let cfg = h264_config(w, h, inp.fps, job.quality, job.video_bitrate_kbps, software);
-            let enc = Encoder::open_with_gop(&cfg, 30).map_err(|e| Stop::Encoder {
+            // A size preset's peak rate, over a buffer of two seconds at
+            // the target rate (the reference's `-maxrate` and `-bufsize`).
+            let opened = match job.max_rate_kbps {
+                Some(max_kbps) => {
+                    let cap = RateCap {
+                        max_kbps,
+                        buffer_kbits: cfg.bitrate_kbps.saturating_mul(2),
+                    };
+                    Encoder::open_with_gop_and_cap(&cfg, 30, cap)
+                }
+                None => Encoder::open_with_gop(&cfg, 30),
+            };
+            let enc = opened.map_err(|e| Stop::Encoder {
                 hardware: !software,
                 message: e.to_string(),
             })?;

@@ -648,6 +648,38 @@ fn a_filter_graph_error_fails_the_export_with_its_reason() {
 }
 
 #[test]
+fn a_size_preset_caps_the_peak_rate() {
+    use fthrust_media::encoder::encoder_exists;
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "rate.mp4", 2, 0) else {
+        return;
+    };
+    // x264 writes its rate control settings into the stream, so the test
+    // can see them; OpenH264 would be picked first and writes none.
+    if encoder_exists("libopenh264") || !encoder_exists("libx264") {
+        eprintln!("skipping: the software H.264 encoder is not x264");
+        return;
+    }
+    let out = tmp.path().join("capped.mp4");
+    let mut s = spec(&[(0.0, 2.0)]);
+    s.force_video_encode = true;
+    let mut j = job(&src, out.clone(), &s, Quality::Quality);
+    j.expected_duration_s = 2.0;
+    j.video_bitrate_kbps = Some(1000);
+    j.max_rate_kbps = Some(1150);
+    // Straight to the software encoder.
+    j.fail_first_encoder = true;
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let bytes = std::fs::read(&out).unwrap();
+    let needle = b"vbv_maxrate=1150 vbv_bufsize=2000";
+    assert!(
+        bytes.windows(needle.len()).any(|w| w == needle),
+        "the encoder ran without the preset's peak rate"
+    );
+}
+
+#[test]
 fn a_corrupt_packet_does_not_abort_the_export() {
     let tmp = tempfile::tempdir().unwrap();
     let Some(src) = clip(tmp.path(), "c.mp4", 3, 1) else {
