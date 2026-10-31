@@ -1381,3 +1381,59 @@ fn log_zero_copy_off(logged: &mut bool, reason: &str) {
         tracing::info!(reason, "zero-copy capture unavailable; copying frames");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_recording_keyframe_is_requested_only_once_the_tap_is_in_place() {
+        // The capture thread consumes the keyframe request at its next frame
+        // and reads the tap after encoding it. Requested before the tap was
+        // installed, the keyframe could reach the ring but not the recorder,
+        // which then waited for the next scheduled keyframe (up to 2 s).
+        let script = Arc::new(Mutex::new(crate::backend::SyntheticScript::new(64, 64)));
+        let deps = EngineDeps {
+            backends: Arc::new(crate::backend::SyntheticFactory {
+                script,
+                candidates: vec![BackendKind::WlrScreencopy],
+            }),
+            audio: Arc::new(crate::audio::SyntheticAudio::new()),
+            backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+        };
+        let config = EngineConfig {
+            capture: fthrust_core::capture_config::CaptureConfig::default(),
+            max_buffer_mb: 0,
+            backend_override: None,
+        };
+        let engine = CaptureEngine::new(config, deps);
+        let handle = engine.handle();
+        for round in 0..2000 {
+            handle.set_packet_tap(None);
+            handle.inner.keyframe_request.store(false, Ordering::SeqCst);
+            let (tx, _rx) = crossbeam_channel::bounded(1);
+            let inner = handle.inner.clone();
+            let ready = Arc::new(std::sync::Barrier::new(2));
+            let watcher = {
+                let ready = ready.clone();
+                std::thread::spawn(move || {
+                    ready.wait();
+                    while !inner.keyframe_request.load(Ordering::SeqCst) {
+                        std::hint::spin_loop();
+                    }
+                    inner
+                        .packet_tap
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_some()
+                })
+            };
+            ready.wait();
+            handle.set_packet_tap(Some(tx));
+            assert!(
+                watcher.join().unwrap(),
+                "round {round}: the keyframe was requested before the tap was installed"
+            );
+        }
+    }
+}
