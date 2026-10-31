@@ -3,18 +3,25 @@
 # carry it: BtbN's monthly build assets are pruned after about two years, and
 # the LGPL asks us to offer the source of the libraries we distribute.
 #
-#   packaging/archive-ffmpeg-source.sh --out FILE.tar.xz [--manifest FILE]
+#   packaging/archive-ffmpeg-source.sh --out FILE.tar.xz [--manifest FILE] [--libraries FILE]
 #
-# The archive holds two trees, each fetched at the commit that
-# packaging/ffmpeg_manifest_linux.json pins (corresponding_source) and checked
-# against it: FFmpeg itself (ffmpeg-<describe>/) and BtbN's build scripts
+# The archive holds trees, each fetched at a commit that is checked against its
+# pin: FFmpeg itself (ffmpeg-<describe>/) and BtbN's build scripts
 # (FFmpeg-Builds-<commit>/, whose scripts.d/ names the upstream repository and
-# commit of every library built into the shared libraries), plus a README.txt
-# with the configure line. FILE.tar.xz.sha256 is written next to it.
-# ARCHIVE_ALLOW_LOCAL_REPO=1 lets the manifest name a local path (tests only).
+# commit of every library built into the shared libraries), both pinned in
+# packaging/ffmpeg_manifest_linux.json (corresponding_source); and the source of
+# every library the registry (packaging/ffmpeg_libraries.json) marks "gpl", at
+# the commit BtbN's scripts build (<id>-<commit>/): a GPL library built into a
+# shipped library is offered with its source. A README.txt gives the configure
+# line. FILE.tar.xz.sha256 is written next to it. Before archiving, the
+# registry is checked against the fetched scripts (check-ffmpeg-depends.py).
+# ARCHIVE_ALLOW_LOCAL_REPO=1 lets the pins name a local path, and
+# --skip-depends-check skips that check (tests only).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$HERE/ffmpeg_manifest_linux.json"
+LIBRARIES="$HERE/ffmpeg_libraries.json"
+SKIP_DEPENDS=0
 OUT=""
 die() { echo "archive-ffmpeg-source: $*" >&2; exit 1; }
 
@@ -22,12 +29,15 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT="${2:?--out needs a file}"; shift ;;
         --manifest) MANIFEST="${2:?--manifest needs a file}"; shift ;;
+        --libraries) LIBRARIES="${2:?--libraries needs a file}"; shift ;;
+        --skip-depends-check) SKIP_DEPENDS=1 ;;
         *) die "unknown argument $1" ;;
     esac
     shift
 done
-[ -n "$OUT" ] || die "usage: archive-ffmpeg-source.sh --out FILE.tar.xz [--manifest FILE]"
+[ -n "$OUT" ] || die "usage: archive-ffmpeg-source.sh --out FILE.tar.xz [--manifest FILE] [--libraries FILE]"
 [ -f "$MANIFEST" ] || die "missing $MANIFEST"
+[ -f "$LIBRARIES" ] || die "missing $LIBRARIES"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -59,6 +69,25 @@ bs_dir="FFmpeg-Builds-${bs_commit:0:12}"
 fetch ffmpeg "$ff_repo" "$ff_commit" "$ff_dir"
 fetch build-scripts "$bs_repo" "$bs_commit" "$bs_dir"
 
+# The registry has to account for every library those scripts pull in, or the archive (and the release) stops here.
+if [ $SKIP_DEPENDS = 0 ]; then
+    python3 -I "$HERE/check-ffmpeg-depends.py" --manifest "$MANIFEST" --libraries "$LIBRARIES" --scripts "$stage/$bs_dir" \
+        || die "the library registry does not match BtbN's build scripts"
+fi
+
+# GPL libraries built into the shipped libraries come with their source.
+gpl_readme=""
+while IFS=$'\t' read -r id name license repo commit holders; do
+    [ -n "$id" ] || continue
+    dir="$id-${commit:0:12}"
+    fetch "$id" "$repo" "$commit" "$dir"
+    gpl_readme+="  $dir/
+      $name ($license) at commit $commit
+      ($repo)
+      compiled into $holders; GPL code, so its source is part of this archive.
+"
+done < <(jq -r '(.libraries[], .supporting_libraries[]) | select(.gpl == true) | [.id, .name, .license, .pinned_repo, .pinned_commit, (.in_libraries | join(" and "))] | @tsv' "$LIBRARIES")
+
 # A stable timestamp: the FFmpeg commit's, unless the caller fixes one.
 mtime="${SOURCE_DATE_EPOCH:-$(git -C "$work/ffmpeg" log -1 --format=%ct "$ff_commit")}"
 
@@ -84,11 +113,12 @@ This archive is the corresponding source:
       ($bs_repo)
       scripts.d/ holds one script per library built into the shared libraries;
       each names the upstream repository and the commit or tag it builds.
-
-FFmpeg is licensed under the LGPL (version 3 or later for this build; see
-$ff_dir/COPYING.LGPLv3). The external libraries compiled into it keep their own
-licences, listed with their texts in THIRD_PARTY_NOTICES.md and licenses/ffmpeg/
-of the FTHRust release.
+${gpl_readme}
+FFmpeg's own code is licensed under the LGPL (version 3 or later for this build;
+see $ff_dir/COPYING.LGPLv3). The external libraries compiled into it keep their
+own licences, listed with their texts in THIRD_PARTY_NOTICES.md and
+licenses/ffmpeg/ of the FTHRust release; where that list marks one as GPL, the
+shared library it is compiled into is distributed under the GPL.
 
 The build was configured with:
 

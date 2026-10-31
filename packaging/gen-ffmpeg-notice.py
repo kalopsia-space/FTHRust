@@ -83,12 +83,47 @@ def main():
             problems.append(f"licence text missing for {e['id']}: {path}")
     ids = [e["id"] for e in libs + supporting]
     problems += [f"duplicate library id {i}" for i in sorted({i for i in ids if ids.count(i) > 1})]
+    gpl = [e for e in libs + supporting if e.get("gpl")]
+    for e in gpl:
+        if not e.get("signature") or not e.get("in_libraries"):
+            problems.append(f"{e['id']} is marked gpl but has no signature and in_libraries: verify-appdir.sh needs them to check the claim")
     on_disk = {f for f in os.listdir(args.licenses) if f.endswith(".txt")} if os.path.isdir(args.licenses) else set()
     for f in sorted(on_disk - {e["text"] for e in libs + supporting}):
         problems.append(f"licenses/ffmpeg/{f} belongs to no library in the registry")
     if problems:
         print("gen-ffmpeg-notice: " + "\n gen-ffmpeg-notice: ".join(problems), file=sys.stderr)
         sys.exit(1)
+
+    # What the registry says about GPL code inside the shipped libraries, as sentences for the notices. A library is
+    # "gpl" when it has no non-GPL licence option and is compiled into a shipped library.
+    if gpl:
+        containers = " and ".join(f"`{l}`" for l in sorted({l for e in gpl for l in e["in_libraries"]}))
+        built_into = "; ".join(
+            f"{e['name']} ({e['license']}) is built into " + " and ".join(f"`{l}`" for l in e["in_libraries"]) for e in gpl
+        )
+        names = " and ".join(f"{e['name']} ({e['license']})" for e in gpl)
+        needed = " and ".join(sorted({n for e in gpl for n in e["needed_by"]}))
+        wording = {
+            "licence_summary": f"LGPL v3 or later for FFmpeg's own code; {built_into}",
+            "gpl_consequence": (
+                f"{containers} contains GPL code and is distributed under the GPL, here together with FTHRust's own "
+                "GPL-3.0-only code; the FFmpeg libraries without GPL code in them stay under the LGPL."
+            ),
+            "licence_row": (
+                "**LGPL v3 or later** for FFmpeg's own code (`--enable-version3`, no `--enable-gpl`, no `--enable-nonfree`), "
+                f"but {built_into}, so {containers} is distributed under the GPL"
+            ),
+            "configuration_sentence": (
+                f"The configuration enables no GPL or non-free library itself, but BtbN's scripts compile in {names} for {needed}."
+            ),
+        }
+    else:
+        wording = {
+            "licence_summary": "LGPL v3 or later",
+            "gpl_consequence": "",
+            "licence_row": "**LGPL v3 or later** (`--enable-version3`, no `--enable-gpl`, no `--enable-nonfree`)",
+            "configuration_sentence": "The configuration has no GPL or non-free library.",
+        }
 
     out = []
     w = out.append
@@ -106,11 +141,20 @@ def main():
         "FFmpeg runs rather than compiled in; they are listed because the build is configured with them. "
         "Where a project's own licence file says more than one thing, the text keeps all of it.\n"
     )
+    for e in gpl:
+        where = " and ".join(f"`{l}`" for l in e["in_libraries"])
+        w(
+            f"**GPL code in the shipped libraries.** {e['name']} ({e['license']}) is compiled into {where}, because "
+            f"{', '.join(e['needed_by'])} is built against it. Its licence file offers the GPL and nothing else, so "
+            f"{where} is distributed under the GPL, together with FTHRust's own GPL-3.0-only code; the FFmpeg libraries "
+            f"without GPL code in them remain under the LGPL. The source of {e['name']} is the repository and commit "
+            "named in the tables below, and is included in the FFmpeg source archive of each release.\n"
+        )
     w("| Option | Library | Licence | Upstream (pinned) | Licence text |")
     w("|---|---|---|---|---|")
     for e in sorted(libs, key=lambda e: e["name"].lower()):
         flags = " ".join(f"`{f}`" for f in e["flags"])
-        w(f"| {flags} | {e['name']} | {e['license']} | {upstream(e)} | [{e['text']}](licenses/ffmpeg/{e['text']}) |")
+        w(f"| {flags} | {e['name']} | {'**' + e['license'] + '**' if e.get('gpl') else e['license']} | {upstream(e)} | [{e['text']}](licenses/ffmpeg/{e['text']}) |")
     w("")
     notes = [e for e in libs if e.get("note")]
     if notes:
@@ -121,7 +165,7 @@ def main():
     w("| Library | Licence | Built for | Upstream (pinned) | Licence text |")
     w("|---|---|---|---|---|")
     for e in sorted(supporting, key=lambda e: e["name"].lower()):
-        w(f"| {e['name']} | {e['license']} | {', '.join(e['needed_by'])} | {upstream(e)} | [{e['text']}](licenses/ffmpeg/{e['text']}) |")
+        w(f"| {e['name']} | {'**' + e['license'] + '**' if e.get('gpl') else e['license']} | {', '.join(e['needed_by'])} | {upstream(e)} | [{e['text']}](licenses/ffmpeg/{e['text']}) |")
     w("")
     w("Options that add no third-party code:\n")
     for o in sorted(ignored):
@@ -130,7 +174,7 @@ def main():
     if disabled:
         w(
             "The configure line also disables these libraries and options (the GPL and non-free libraries among "
-            "them), so nothing from them is bundled: "
+            "them), so nothing from them is bundled through it: "
             + ", ".join(f"`{o}`" for o in disabled)
             + ".\n"
         )
@@ -156,6 +200,7 @@ def main():
         "commit": cs["ffmpeg"]["commit"],
         "scripts_commit": cs["build_scripts"]["commit"],
         "shipped_files": ", ".join(f"`{n}`" for n in sorted(manifest["soname_map"].values())),
+        **wording,
     }
     text = open(args.template).read()
     marker = "<!-- ffmpeg-libraries -->"

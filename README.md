@@ -121,4 +121,4 @@ Found a bug? Export a diagnostic report (**Settings → General → Troubleshoot
 
 ## License
 
-[GPL-3.0-only](LICENSE). The AppImage bundles an LGPL build of FFmpeg; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled component and its licence. Oswald is under the SIL Open Font License.
+[GPL-3.0-only](LICENSE). The AppImage bundles BtbN's shared build of FFmpeg, configured for the LGPL; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled component and its licence, including any GPL code that build compiles into its libraries. Oswald is under the SIL Open Font License.

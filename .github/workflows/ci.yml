@@ -54,6 +54,9 @@ jobs:
       - run: tools/test-check-upload-isolation.sh
       - run: tools/check-upload-isolation.sh
       - run: tools/check-workspace-deps.sh
+      # Every library BtbN's scripts build for the enabled FFmpeg options (FFTW, which is GPL, came in through
+      # Chromaprint) is in the licence registry or recorded as not linked. Fetches BtbN's scripts at the pinned commit.
+      - run: packaging/check-ffmpeg-depends.py
       - run: tools/check-assets.sh
       - run: tools/check-version.sh
       - name: No bytecode or build output is tracked

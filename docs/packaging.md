@@ -23,7 +23,7 @@ usr/bin/fthrust                 the app
 usr/bin/fthrust-engine          the capture engine
 usr/bin/fthrust-uploader        the uploader
 usr/bin/assets/                 fonts, icons, sounds
-usr/lib/libav*.so.*, libsw*.so.* a pinned LGPL FFmpeg 8.1
+usr/lib/libav*.so.*, libsw*.so.* a pinned FFmpeg 8.1 (BtbN's lgpl-shared build)
 ```
 
 The release tarball `FTHRust-<version>-x86_64.tar.gz` packs the same gated files as a relocatable prefix: `bin/` (the three binaries, rpath unchanged), `lib/` (FFmpeg), `share/fthrust/assets/`, `share/applications/`, `share/icons/`, `share/licenses/fthrust/`, plus `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/` and `packaging/ffmpeg_manifest_linux.json` at the top. The notices and licence texts are in both places, so the links in `THIRD_PARTY_NOTICES.md` resolve next to either copy. `build-appimage.sh` builds it after the AppImage, extracts it, and checks that `bin/fthrust` and `bin/fthrust-engine` load FFmpeg only from the tarball's `lib/` and report the workspace version.
@@ -72,15 +72,16 @@ packaging/docker-build.sh tools/test-packaging.sh
 
 ## Gates
 
-`packaging/verify-appdir.sh <AppDir>` prints `PASS` or `FAIL` for each of seven checks and a final `RESULT:`:
+`packaging/verify-appdir.sh <AppDir>` prints `PASS` or `FAIL` for each of eight checks and a final `RESULT:`:
 
 1. **files**: every required file is present and the three binaries are executable.
 2. **ffmpeg-libs**: the FFmpeg libraries are exactly the pinned ones, unmodified.
-3. **forbidden-flags**: FFmpeg was built without `--enable-gpl`, `--enable-nonfree`, x264, x265, xvid or xavs2, so the bundle stays LGPL.
+3. **forbidden-flags**: FFmpeg was configured without `--enable-gpl`, `--enable-nonfree`, x264, x265, xvid or xavs2. That makes it an LGPL build of FFmpeg, not an LGPL bundle: a library BtbN's scripts compile in for one of the enabled ones can still be GPL (gate 8).
 4. **linkage**: binaries use an `RPATH` (not `RUNPATH`) to `usr/lib`, link only the pinned FFmpeg sonames, and **don't bundle `libpipewire`**.
 5. **glibc ceiling**: nothing needs a glibc newer than **2.35** (the baseline in `linux_release_baseline.json`).
 6. **ffmpeg-config**: every bundled FFmpeg library contains the configure line the manifest records. The licence notices are generated from that line, so this keeps them tied to the binary.
 7. **notice-links**: every relative link in `THIRD_PARTY_NOTICES.md` resolves inside the package (`packaging/check-notice-links.sh`).
+8. **gpl-libs**: a library the registry marks `"gpl": true` (FFTW, built into `libavformat` through Chromaprint) contains its signature string, and exactly the bundled libraries the registry names do. A mismatch means the licence notices describe another build than the package.
 
 `tools/test-packaging.sh` tests the gates themselves, by feeding them a good AppDir and deliberately broken ones (a tampered library, a `RUNPATH` instead of an `RPATH`, and so on). It needs `patchelf` and the fetched FFmpeg, so it's easiest to run through `docker-build.sh`.
 
@@ -88,7 +89,7 @@ packaging/docker-build.sh tools/test-packaging.sh
 
 | Input | Pinned in | Notes |
 |---|---|---|
-| FFmpeg | `ffmpeg_manifest_linux.json` | BtbN's LGPL shared build of FFmpeg 8.1, with its sonames, forbidden configure flags, the build's configure line, and the commits of FFmpeg and of BtbN's build scripts that it was built from (`corresponding_source`). |
+| FFmpeg | `ffmpeg_manifest_linux.json` | BtbN's `lgpl-shared` build of FFmpeg 8.1, with its sonames, forbidden configure flags, the build's configure line, and the commits of FFmpeg and of BtbN's build scripts that it was built from (`corresponding_source`). |
 | FFmpeg libraries | `ffmpeg_libraries.json`, `../licenses/ffmpeg/` | What each external library in the configure line is, its licence and licence text. See [Licences and notices](#licences-and-notices). |
 | appimagetool and runtime | `appimage_tool_manifest.json` | appimagetool 1.9.1 and the type-2 runtime. |
 | PipeWire SDK | `pipewire_sdk_manifest.json` | PipeWire 1.0.5 source, for linking only. |
@@ -102,8 +103,9 @@ To update an input, change its manifest (URL, size and SHA-256), rebuild, and le
 A new BtbN build changes more than a URL:
 
 1. In `ffmpeg_manifest_linux.json` set the release, asset, size and hash, the sonames and library hashes, `configuration` (the configure line, printed by `strings libavutil.so.* | grep -- --prefix=`; the gate fails until it matches the libraries) and `corresponding_source`: the FFmpeg commit from the version string (`n8.1.2-34-g9b6c8969e0` is 34 commits after `n8.1.2`), and the commit of the BtbN scheduled run that published the asset (**Actions → Build FFmpeg**, its head SHA).
-2. Run `tools/gen-notices.sh`. It fails while the new configure line has an option `ffmpeg_libraries.json` does not describe, or the registry describes one it no longer has, or a licence text is missing or unused. For a new library add its entry (the repository and commit are in BtbN's `scripts.d/` at the commit you just pinned), put its licence file in `licenses/ffmpeg/`, and read the licence off the file.
-3. `packaging/archive-ffmpeg-source.sh --out /tmp/ffmpeg-source.tar.xz` should work against the new pins; the release does the same.
+2. Run `packaging/check-ffmpeg-depends.py` (it fetches BtbN's scripts at the commit you just pinned). It follows `ffbuild_depends` from every enabled option and fails for each library BtbN builds that the registry neither lists nor records under `not_linked` with the reason none of it is in the shipped libraries, and for a pin that differs from what the script builds. A new transitive library is either added to `supporting_libraries` (with `"gpl": true`, a `signature` string and `in_libraries` if it has no non-GPL licence option: look for the string in the new libraries with `strings`) or goes under `not_linked` after checking the libraries for traces of it.
+3. Run `tools/gen-notices.sh`. It fails while the new configure line has an option `ffmpeg_libraries.json` does not describe, or the registry describes one it no longer has, or a licence text is missing or unused. For a new library add its entry (the repository and commit are in BtbN's `scripts.d/` at the commit you just pinned), put its licence file in `licenses/ffmpeg/`, and read the licence off the file.
+4. `packaging/archive-ffmpeg-source.sh --out /tmp/ffmpeg-source.tar.xz` should work against the new pins; the release does the same, including the dependency check.
 
 ## Licences and notices
 
@@ -113,9 +115,11 @@ A new BtbN build changes more than a URL:
 - The FFmpeg libraries, written by `packaging/gen-ffmpeg-notice.py` from the manifest's configure line and `ffmpeg_libraries.json`: a table of every external library BtbN's build is configured with (and the supporting libraries its scripts build for them), each with its licence, upstream, the commit BtbN's scripts pin, and its licence text under `licenses/ffmpeg/`.
 - [cargo-about](https://github.com/EmbarkStudios/cargo-about), for the licence of every crate linked into the shipped binaries. Dev and build dependencies are excluded. The accepted licences in `packaging/about.toml` mirror `deny.toml`.
 
-The licences in the FFmpeg table are read off each project's own licence file; they are an inventory, not legal advice. The generator refuses to run when the configure line and the registry disagree, so a new BtbN build cannot ship with libraries the notices do not mention.
+The licences in the FFmpeg table are read off each project's own licence file; they are an inventory, not legal advice. The generator refuses to run when the configure line and the registry disagree. That only covers the libraries a configure option names: `check-ffmpeg-depends.py` (a CI step, and part of the release's source archive step) covers the ones BtbN's scripts pull in for them, which is how FFTW was found. It reads the scripts' declared dependencies, so a library linked in without being declared stays invisible, and `not_linked` entries rest on a look at the shipped libraries, not a proof.
 
-FFmpeg is LGPL, so the release also carries its source. BtbN prunes monthly builds after about two years, so `fetch-third-party.sh --ffmpeg` cannot rebuild an old release; instead `packaging/archive-ffmpeg-source.sh` writes `FTHRust-ffmpeg-source-<version>.tar.xz` from the FFmpeg commit and the BtbN build-script commit pinned in the manifest (both checked against their full commit ids), and the release workflow attaches it. The sources of the external libraries are not in it: BtbN's `scripts.d/` names each one's repository and commit.
+**One library in the package is GPL.** FFTW (GPL-2.0-or-later, no other licence option) is compiled into `libavformat` because BtbN builds Chromaprint against it. The registry marks it, the generated notices say so wherever they speak of FFmpeg's licence, gate 8 checks it against the libraries, and its source goes into the release's source archive. FFmpeg's own code, and the libraries without GPL code in them, stay LGPL. Building FFmpeg without `--enable-chromaprint` (the app does not use it) would remove FFTW.
+
+FFmpeg is LGPL and `libavformat` carries a GPL library, so the release also carries their source. BtbN prunes monthly builds after about two years, so `fetch-third-party.sh --ffmpeg` cannot rebuild an old release; instead `packaging/archive-ffmpeg-source.sh` writes `FTHRust-ffmpeg-source-<version>.tar.xz` from the FFmpeg commit and the BtbN build-script commit pinned in the manifest and the pinned commit of each GPL library (all checked against their full commit ids), and the release workflow attaches it. The sources of the other external libraries are not in it: BtbN's `scripts.d/` names each one's repository and commit.
 
 After changing dependencies or the FFmpeg pin:
 

@@ -6,11 +6,12 @@
 #   packaging/verify-appdir.sh <AppDir>
 #
 # Prints PASS/FAIL per check and RESULT: PASS|FAIL; exits 0 only on PASS.
-# MAX_GLIBC_OVERRIDE replaces the baseline ceiling and FFMPEG_MANIFEST_OVERRIDE
-# the FFmpeg manifest (tests only).
+# MAX_GLIBC_OVERRIDE replaces the baseline ceiling, FFMPEG_MANIFEST_OVERRIDE the
+# FFmpeg manifest and FFMPEG_LIBRARIES_OVERRIDE the library registry (tests only).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FFM="${FFMPEG_MANIFEST_OVERRIDE:-$HERE/ffmpeg_manifest_linux.json}"
+REG="${FFMPEG_LIBRARIES_OVERRIDE:-$HERE/ffmpeg_libraries.json}"
 MAX_GLIBC="${MAX_GLIBC_OVERRIDE:-$(jq -r .max_glibc "$HERE/linux_release_baseline.json")}"
 BINARIES=(fthrust fthrust-engine fthrust-uploader)
 DIR="${1:-}"
@@ -121,6 +122,23 @@ if [ -z "$want" ] || [ "$want" = null ]; then problems+=("the manifest records n
 
 # 7. notice-links: the links in THIRD_PARTY_NOTICES.md resolve inside the package.
 if out="$("$HERE/check-notice-links.sh" --require-links "$DIR/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass notice-links; else fail notice-links "$(tr '\n' ' ' <<<"$out")"; fi
+
+# 8. gpl-libs: a library the notices declare as GPL ("gpl": true in the registry) is in exactly the bundled
+# libraries they name. Each is recognised by a string only it contains; a mismatch means the licence notices
+# describe a different build than the one in the package.
+problems=()
+while IFS=$'\t' read -r id sig names; do
+    [ -n "$id" ] || continue
+    while IFS= read -r -d '' f; do
+        base="$(basename "$f")"
+        has=0 want=0
+        grep -aqF -- "$sig" "$f" && has=1
+        for n in $names; do [[ "$base" == "$n".so.* ]] && want=1; done
+        [ $has = 1 ] && [ $want = 0 ] && problems+=("$id is in $base, which the notices do not name")
+        [ $has = 0 ] && [ $want = 1 ] && problems+=("$id is not in $base, which the notices say holds it")
+    done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
+done < <(jq -r '(.libraries[], .supporting_libraries[]) | select(.gpl == true) | [.id, .signature, (.in_libraries | join(" "))] | @tsv' "$REG")
+[ ${#problems[@]} -eq 0 ] && pass gpl-libs || fail gpl-libs "${problems[*]}"
 
 [ $failed -eq 0 ] && { echo "RESULT: PASS"; exit 0; }
 echo "RESULT: FAIL"

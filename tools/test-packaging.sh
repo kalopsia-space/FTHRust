@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice|desktop|deps|profile]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|depends|links|ffnotice|desktop|deps|profile]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -142,6 +142,15 @@ group_gate() {
     d="$(fixture noconfig)"; jq 'del(.configuration)' "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$WORK/manifest-noconfig.json"
     gate_expect gate_fails_missing_config 1 "FAIL ffmpeg-config" "$d" FFMPEG_MANIFEST_OVERRIDE="$WORK/manifest-noconfig.json"
 
+    d="$(fixture gplmoved)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .in_libraries) = ["libavcodec"]' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-moved.json"
+    gate_expect gate_fails_when_a_gpl_library_is_not_where_the_notices_say 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-moved.json"
+
+    d="$(fixture gplgone)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signature) = "no_such_string_in_any_library"' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-gone.json"
+    gate_expect gate_fails_when_a_gpl_library_is_not_in_the_libraries 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-gone.json"
+
+    d="$(fixture gplextra)"; jq '(.supporting_libraries[] | select(.id == "fftw3") | .signature) = "av_version_info"' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-extra.json"
+    gate_expect gate_fails_when_a_gpl_library_is_also_in_other_libraries 1 "FAIL gpl-libs" "$d" FFMPEG_LIBRARIES_OVERRIDE="$WORK/reg-extra.json"
+
     d="$(fixture missing)"; rm "$d/THIRD_PARTY_NOTICES.md"
     gate_expect gate_fails_missing_notices 1 "FAIL files" "$d"
 
@@ -275,11 +284,12 @@ EOF
 }
 
 group_archive() {
-    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m out r ffc bsc
-    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d"
+    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m reg out r ffc bsc gc
+    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d" "$src/gpl"
     echo 'int main(void){return 0;}' > "$src/ffmpeg/main.c"
     echo '#!/bin/sh' > "$src/scripts/scripts.d/50-x.sh"
-    for r in ffmpeg scripts; do
+    echo 'double fft(double x){return x;}' > "$src/gpl/fft.c"
+    for r in ffmpeg scripts gpl; do
         git -C "$src/$r" init -q
         git -C "$src/$r" config uploadpack.allowAnySHA1InWant true
         git -C "$src/$r" add -A
@@ -287,43 +297,141 @@ group_archive() {
     done
     ffc="$(git -C "$src/ffmpeg" rev-parse HEAD)"
     bsc="$(git -C "$src/scripts" rev-parse HEAD)"
+    gc="$(git -C "$src/gpl" rev-parse HEAD)"
     m="$WORK/source-manifest.json"
     jq --arg a "$src/ffmpeg" --arg b "$ffc" --arg c "$src/scripts" --arg d "$bsc" \
         '.corresponding_source = {ffmpeg: {repo: $a, commit: $b, describe: "n1-test"}, build_scripts: {repo: $c, commit: $d}}' \
         "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$m"
+    reg="$WORK/source-registry.json"
+    jq -n --arg repo "$src/gpl" --arg c "$gc" \
+        '{ignored_options: {}, libraries: [], not_linked: {}, supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $repo, pinned_commit: $c, text: "gplx.txt", needed_by: ["x"], gpl: true, signature: "gplx_sig", in_libraries: ["libavformat"]}]}' > "$reg"
     out="$WORK/source-out/src.tar.xz"
+    local opts=(--manifest "$m" --libraries "$reg" --skip-depends-check)
 
-    if ! r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --out "$out" 2>&1)"; then
+    if ! r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" "${opts[@]}" --out "$out" 2>&1)"; then
         fail archive_builds "$r"; return
     fi
     local listing missing="" f readme
     listing="$(tar -tJf "$out" | sed 's|^\./||')"
-    for f in ffmpeg-n1-test/main.c "FFmpeg-Builds-${bsc:0:12}/scripts.d/50-x.sh" README.txt; do
+    for f in ffmpeg-n1-test/main.c "FFmpeg-Builds-${bsc:0:12}/scripts.d/50-x.sh" "gplx-${gc:0:12}/fft.c" README.txt; do
         grep -qxF "$f" <<<"$listing" || missing="$missing $f"
     done
-    if [ -z "$missing" ]; then pass archive_has_both_trees_and_readme; else fail archive_has_both_trees_and_readme "missing:$missing"; fi
+    if [ -z "$missing" ]; then pass archive_has_the_trees_the_gpl_library_and_readme; else fail archive_has_the_trees_the_gpl_library_and_readme "missing:$missing"; fi
     readme="$(tar -xJOf "$out" ./README.txt)"
     if grep -qF "$ffc" <<<"$readme" && grep -qF -- "--enable-libdav1d" <<<"$readme" && grep -qF "$(jq -r .source.sha256 "$m")" <<<"$readme"; then
         pass archive_readme_names_commits_configuration_and_binary
     else fail archive_readme_names_commits_configuration_and_binary "$readme"; fi
+    if grep -qF "GPLX (GPL-2.0-or-later) at commit $gc" <<<"$readme" && grep -q "GPL code, so its source is part of this archive" <<<"$readme"; then
+        pass archive_readme_names_the_gpl_library
+    else fail archive_readme_names_the_gpl_library "$readme"; fi
     if (cd "$WORK/source-out" && sha256sum -c --quiet src.tar.xz.sha256 >/dev/null 2>&1); then pass archive_checksum; else fail archive_checksum "sha256 mismatch"; fi
 
     jq '.corresponding_source.ffmpeg.commit = "0000000000000000000000000000000000000000"' "$m" > "$WORK/source-bad-commit.json"
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-bad-commit.json" --out "$WORK/source-out/bad.tar.xz" 2>&1)"; then
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-bad-commit.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/bad.tar.xz" 2>&1)"; then
         fail archive_unknown_commit_fails "exit 0"
     elif grep -q "could not fetch" <<<"$r" && [ ! -e "$WORK/source-out/bad.tar.xz" ]; then pass archive_unknown_commit_fails
     else fail archive_unknown_commit_fails "$r"; fi
 
     jq '.corresponding_source.ffmpeg.commit = "v8.1"' "$m" > "$WORK/source-tag-pin.json"
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-tag-pin.json" --out "$WORK/source-out/tag.tar.xz" 2>&1)"; then
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-tag-pin.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/tag.tar.xz" 2>&1)"; then
         fail archive_rejects_a_movable_pin "exit 0"
     elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_movable_pin
     else fail archive_rejects_a_movable_pin "$r"; fi
 
-    if r="$("$arch" --manifest "$m" --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
+    # a GPL library has to be pinned to a full commit as well
+    jq '.supporting_libraries[0].pinned_commit = "openssl-3.6.3"' "$reg" > "$WORK/source-registry-tag.json"
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --libraries "$WORK/source-registry-tag.json" --skip-depends-check --out "$WORK/source-out/gpltag.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_gpl_library_pinned_by_tag "exit 0"
+    elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_gpl_library_pinned_by_tag
+    else fail archive_rejects_a_gpl_library_pinned_by_tag "$r"; fi
+
+    if r="$("$arch" --manifest "$m" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
         fail archive_rejects_a_non_https_repo "exit 0"
     elif grep -q "must be https" <<<"$r"; then pass archive_rejects_a_non_https_repo
     else fail archive_rejects_a_non_https_repo "$r"; fi
+
+    # Without --skip-depends-check the registry is checked against the fetched scripts first; these
+    # scripts are nothing like BtbN's, so no archive is made.
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --libraries "$reg" --out "$WORK/source-out/nodeps.tar.xz" 2>&1)"; then
+        fail archive_checks_the_registry_against_the_scripts "exit 0"
+    elif grep -q "does not match BtbN's build scripts" <<<"$r" && [ ! -e "$WORK/source-out/nodeps.tar.xz" ]; then pass archive_checks_the_registry_against_the_scripts
+    else fail archive_checks_the_registry_against_the_scripts "$r"; fi
+}
+
+# The dependency check on small synthetic BtbN scripts: the FFTW case, where a library is pulled in by another
+# one's ffbuild_depends and no configure option names it.
+group_depends() {
+    local chk="$ROOT/packaging/check-ffmpeg-depends.py" d="$WORK/depends" out
+    mkdir -p "$d/scripts.d/45-grp"
+    cat > "$d/scripts.d/50-foo.sh" <<'EOF'
+#!/bin/bash
+SCRIPT_REPO="https://example.org/foo.git"
+SCRIPT_COMMIT="1111111111111111111111111111111111111111"
+ffbuild_depends() {
+    echo base
+    echo bar
+    echo grp
+}
+ffbuild_configure() {
+    echo --enable-libfoo
+}
+EOF
+    cat > "$d/scripts.d/40-bar.sh" <<'EOF'
+#!/bin/bash
+SCRIPT_REPO="https://example.org/bar.git"
+SCRIPT_COMMIT="2222222222222222222222222222222222222222"
+ffbuild_depends() {
+    echo base
+}
+EOF
+    printf '#!/bin/bash\nffbuild_dummy() { :; }\n' > "$d/scripts.d/15-base.sh"
+    cat > "$d/scripts.d/45-grp/50-baz.sh" <<'EOF'
+#!/bin/bash
+SCRIPT_REPO="https://example.org/baz.git"
+SCRIPT_REV="77"
+EOF
+    jq -n '{configuration: "--enable-version3 --enable-libfoo"}' > "$d/manifest.json"
+    registry() { # extra-library-json not-linked-json -> registry file
+        jq -n --argjson extra "$1" --argjson nl "$2" \
+            '{ignored_options: {"--enable-version3": "x"}, not_linked: $nl,
+              libraries: [{id: "foo", name: "foo", flags: ["--enable-libfoo"], license: "MIT", url: "https://example.org/foo", pinned_repo: "https://example.org/foo.git", pinned_commit: "1111111111111111111111111111111111111111", text: "foo.txt"}],
+              supporting_libraries: $extra}' > "$d/registry.json"
+    }
+    local bar='{"id": "bar", "name": "bar", "license": "MIT", "url": "https://example.org/bar", "pinned_repo": "https://example.org/bar.git", "pinned_commit": "2222222222222222222222222222222222222222", "text": "bar.txt", "needed_by": ["foo"]}'
+    local baz='{"id": "baz", "name": "baz", "license": "MIT", "url": "https://example.org/baz", "pinned_repo": "https://example.org/baz.git", "pinned_commit": "r77", "text": "baz.txt", "needed_by": ["foo"]}'
+    run() { python3 -I "$chk" --manifest "$d/manifest.json" --libraries "$d/registry.json" --scripts "$d" 2>&1; }
+
+    registry "[$bar, $baz]" '{}'
+    if out="$(run)"; then pass depends_accepts_a_registry_that_covers_the_closure; else fail depends_accepts_a_registry_that_covers_the_closure "$out"; fi
+
+    registry "[$baz]" '{}'
+    if out="$(run)"; then fail depends_finds_a_transitive_library_the_registry_lacks "exit 0"
+    elif grep -q "bar (https://example.org/bar) is built for --enable-libfoo" <<<"$out"; then pass depends_finds_a_transitive_library_the_registry_lacks
+    else fail depends_finds_a_transitive_library_the_registry_lacks "$out"; fi
+
+    registry "[$baz]" '{"bar": "build time only"}'
+    if out="$(run)"; then pass depends_accepts_a_library_recorded_as_not_linked; else fail depends_accepts_a_library_recorded_as_not_linked "$out"; fi
+
+    registry "[$bar]" '{}'
+    if out="$(run)"; then fail depends_follows_directory_groups "exit 0"
+    elif grep -q "baz (https://example.org/baz) is built for --enable-libfoo > foo > grp" <<<"$out"; then pass depends_follows_directory_groups
+    else fail depends_follows_directory_groups "$out"; fi
+
+    registry "[$bar, $baz]" '{"ghost": "never needed"}'
+    if out="$(run)"; then fail depends_rejects_a_stale_not_linked_entry "exit 0"
+    elif grep -q "not_linked names" <<<"$out"; then pass depends_rejects_a_stale_not_linked_entry
+    else fail depends_rejects_a_stale_not_linked_entry "$out"; fi
+
+    registry "[$bar, $baz]" '{}'
+    jq '.libraries[0].pinned_commit = "3333333333333333333333333333333333333333"' "$d/registry.json" > "$d/registry-drift.json"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest.json" --libraries "$d/registry-drift.json" --scripts "$d" 2>&1)"; then fail depends_catches_a_pin_that_drifted "exit 0"
+    elif grep -q "foo: the registry pins 3333" <<<"$out" && grep -q "builds 1111" <<<"$out"; then pass depends_catches_a_pin_that_drifted
+    else fail depends_catches_a_pin_that_drifted "$out"; fi
+
+    jq -n '{configuration: "--enable-version3 --enable-libfoo --enable-libnothing --enable-libmissing --enable-libabsent"}' > "$d/manifest-many.json"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest-many.json" --libraries "$d/registry.json" --scripts "$d" 2>&1)"; then fail depends_refuses_scripts_that_do_not_look_like_btbns "exit 0"
+    elif grep -q "have a provider script" <<<"$out"; then pass depends_refuses_scripts_that_do_not_look_like_btbns
+    else fail depends_refuses_scripts_that_do_not_look_like_btbns "$out"; fi
 }
 
 group_links() {
@@ -392,6 +500,22 @@ group_ffnotice() {
     if grep -qF '`openssl-3.6.3`' <<<"$out" && grep -qF '`r6531`' <<<"$out" && grep -qF '`c150ba6c9b9b`' <<<"$out" && ! grep -qF 'openssl-3.6.`' <<<"$out"; then
         pass ffnotice_abbreviates_only_commit_ids
     else fail ffnotice_abbreviates_only_commit_ids "$(grep -o 'openssl-3[^|]*' <<<"$out" | head -2)"; fi
+    if grep -q '\*\*GPL-2.0-or-later\*\*' <<<"$out" && grep -q 'GPL code in the shipped libraries' <<<"$out" && grep -qF 'fftw3.txt' <<<"$out"; then pass ffnotice_marks_the_gpl_library
+    else fail ffnotice_marks_the_gpl_library "no GPL section"; fi
+
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= del(.signature)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nosig.json"
+    if out="$(python3 -I "$gen" --libraries "$WORK/reg-nosig.json" 2>&1)"; then fail ffnotice_gpl_library_needs_a_signature "exit 0"
+    elif grep -q "fftw3 is marked gpl but has no signature" <<<"$out"; then pass ffnotice_gpl_library_needs_a_signature
+    else fail ffnotice_gpl_library_needs_a_signature "$out"; fi
+
+    printf '{{ffmpeg.licence_summary}}|{{ffmpeg.licence_row}}|{{ffmpeg.configuration_sentence}}|{{ffmpeg.gpl_consequence}}\n<!-- ffmpeg-libraries -->\n' > "$WORK/tpl-licence.md"
+    out="$(python3 -I "$gen" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"
+    if [ "$(grep -o 'FFTW' <<<"$out" | wc -l)" -ge 3 ] && grep -q 'libavformat' <<<"$out"; then pass ffnotice_licence_wording_names_the_gpl_library
+    else fail ffnotice_licence_wording_names_the_gpl_library "$out"; fi
+    jq '(.supporting_libraries[] | select(.id == "fftw3")) |= (del(.gpl) | del(.signature) | del(.in_libraries))' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nogpl.json"
+    out="$(python3 -I "$gen" --libraries "$WORK/reg-nogpl.json" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"
+    if grep -q '^LGPL v3 or later|\*\*LGPL v3 or later\*\* (`--enable-version3`' <<<"$out" && ! grep -q 'GPL code' <<<"$out" && grep -q 'The configuration has no GPL or non-free library.' <<<"$out"; then pass ffnotice_without_a_gpl_library_says_lgpl
+    else fail ffnotice_without_a_gpl_library_says_lgpl "$out"; fi
 
     printf 'ffmpeg {{ffmpeg.describe}} sha {{ffmpeg.sha256}}\n<!-- ffmpeg-libraries -->\ntail\n' > "$WORK/tpl.md"
     out="$(python3 -I "$gen" --template "$WORK/tpl.md" 2>&1)"
@@ -442,7 +566,7 @@ group_desktop() {
 }
 
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice desktop deps profile)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive depends links ffnotice desktop deps profile)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

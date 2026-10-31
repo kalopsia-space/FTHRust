@@ -1,5 +1,5 @@
 {
-  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree. pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit.",
+  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signature is a string only it contains, in_libraries the shipped libraries that hold it; verify-appdir.sh checks both).",
   "ignored_options": {
     "--enable-version3": "Selects LGPL version 3 or later (needed by gmp, aribb24, opencore-amr and libvmaf); adds no code.",
     "--enable-shared": "Builds shared libraries; adds no code.",
@@ -221,7 +221,8 @@
       "text": "libxcb.txt",
       "source_files": [
         "COPYING"
-      ]
+      ],
+      "note": "Loaded from the system at run time (libavdevice dlopens libxcb.so.1 and its shm, shape and xfixes extensions); none of it is compiled into FFmpeg."
     },
     {
       "id": "libx11",
@@ -236,7 +237,8 @@
       "text": "libx11.txt",
       "source_files": [
         "COPYING"
-      ]
+      ],
+      "note": "Loaded from the system at run time (libavdevice dlopens libX11.so.6, libXext.so.6 and libXv.so.1); none of it is compiled into FFmpeg."
     },
     {
       "id": "pulseaudio",
@@ -379,7 +381,8 @@
       "text": "chromaprint.txt",
       "source_files": [
         "LICENSE.md"
-      ]
+      ],
+      "note": "Built against FFTW (GPL-2.0-or-later, listed below), which Chromaprint's own LICENSE.md says to take into account when distributing it in binary form."
     },
     {
       "id": "dav1d",
@@ -794,7 +797,8 @@
       "text": "sdl2.txt",
       "source_files": [
         "LICENSE.txt"
-      ]
+      ],
+      "note": "No trace of SDL is in the shipped libraries (it serves BtbN's ffplay, which is not shipped); it is listed because the configure line enables it."
     },
     {
       "id": "snappy",
@@ -1179,6 +1183,48 @@
       "needed_by": [
         "Lilv"
       ]
+    },
+    {
+      "id": "fftw3",
+      "name": "FFTW",
+      "license": "GPL-2.0-or-later",
+      "url": "https://www.fftw.org/",
+      "pinned_repo": "https://github.com/FFTW/fftw3.git",
+      "pinned_commit": "93ed4c786934aec9946f8dda4b4e3eb08f8be41c",
+      "text": "fftw3.txt",
+      "source_files": [
+        "COPYRIGHT",
+        "COPYING"
+      ],
+      "needed_by": [
+        "Chromaprint"
+      ],
+      "gpl": true,
+      "signature": "fftw_dft_indirect_register",
+      "in_libraries": [
+        "libavformat"
+      ]
     }
-  ]
+  ],
+  "not_linked": {
+    "libglvnd": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libsamplerate": "A dependency of PulseAudio's daemon; BtbN builds only the client library, and no libsamplerate code is in the shipped libraries.",
+    "libxau": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxcursor": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxext": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxfixes": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxi": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxinerama": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxrandr": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxrender": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxscrnsaver": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libxv": "X11 client library; libavdevice loads libXv.so.1 from the system at run time and nothing of it is compiled in.",
+    "libxxf86vm": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "mingw": "Windows targets only.",
+    "mingw-std-threads": "Windows targets only.",
+    "xcbproto": "X11 protocol descriptions and headers for building the X11 libraries; build time only.",
+    "xorg-macros": "Autoconf macros for building the X11 libraries; build time only.",
+    "xproto": "X11 protocol descriptions and headers for building the X11 libraries; build time only.",
+    "xtrans": "X11 protocol descriptions and headers for building the X11 libraries; build time only."
+  }
 }
