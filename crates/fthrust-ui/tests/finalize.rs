@@ -430,6 +430,26 @@ fn opening_a_finalizing_clip_is_refused() {
 }
 
 #[test]
+fn opening_a_recording_in_progress_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));
+    let c = tmp.path().join("FTHR_recording_2027-01-15_10-00-00.mp4");
+    std::fs::write(&c, b"first fragment").unwrap();
+    s.readiness.recording(&c);
+    assert!(!fthrust_ui::editor::sessions::open(&mut s, &c));
+    let bar = s.error_bar.current().unwrap();
+    assert_eq!(bar.title, "CLIP STILL RECORDING");
+    assert_eq!(
+        bar.detail,
+        "Playback, editing and upload become available when the recording has finished."
+    );
+    assert!(s.editor.is_none());
+    // Over, readiness no longer refuses it.
+    s.readiness.forget(&c);
+    assert!(s.readiness.can_access(&c));
+}
+
+#[test]
 fn a_finalized_clip_gets_a_new_thumbnail() {
     let tmp = tempfile::tempdir().unwrap();
     let mut s = AppState::for_tests(tmp.path(), serde_json::json!({}));

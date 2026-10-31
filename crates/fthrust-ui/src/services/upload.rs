@@ -557,7 +557,11 @@ impl UploadService {
         let mut later = VecDeque::new();
         while let Some((path, compress)) = self.waiting.pop_front() {
             match state.readiness.state(&path) {
-                ReadinessState::EngineCommitted | ReadinessState::Finalizing => {
+                // A recording is held back as long as it is written: an
+                // upload that deletes the file would take a live one.
+                ReadinessState::Recording
+                | ReadinessState::EngineCommitted
+                | ReadinessState::Finalizing => {
                     later.push_back((path, compress));
                     continue;
                 }

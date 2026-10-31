@@ -437,6 +437,27 @@ fn queue_dedups_and_waits_for_readiness() {
     assert!(!r.svc.busy());
 }
 
+/// A recording is written straight into its final name; an upload that
+/// deletes the file afterwards (or one that sends half of it) must wait.
+#[test]
+fn a_recording_in_progress_is_never_uploaded() {
+    let mut r = rig(&uploader_ok("https://cdn.example/rec.mp4"), json!({}));
+    let clip = r.clip("FTHR_recording_2027-01-15_10-00-00.mp4");
+    r.state.readiness.recording(&clip);
+    r.svc.enqueue(&mut r.state, clip.clone());
+    // Long enough for the uploader program to start and write its request.
+    for i in 0..50 {
+        r.svc.tick(&mut r.state, i as f64 * 0.02);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(r.requests().is_empty(), "waits while it is written");
+    assert!(clip.exists(), "and the file is untouched");
+    // The recording ends: it is an ordinary clip, and the upload goes ahead.
+    r.state.readiness.forget(&clip);
+    r.settle();
+    assert_eq!(r.requests().len(), 1, "uploaded once it is over");
+}
+
 #[test]
 fn settings_problem_offers_the_settings() {
     let mut r = rig(

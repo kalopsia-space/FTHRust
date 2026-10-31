@@ -131,10 +131,14 @@ impl VideoTexture {
     }
 
     /// Frees the texture and unregisters it from the renderer it was
-    /// registered with.
+    /// registered with. The live preview's shader keeps a bind group on the
+    /// last frame it drew, which would hold the texture on the GPU after
+    /// this; that lets go of it too.
     pub fn clear(&mut self) {
         if let (Some(id), Some(renderer)) = (self.id.take(), self.renderer.take()) {
-            renderer.write().free_texture(&id);
+            let mut renderer = renderer.write();
+            renderer.free_texture(&id);
+            crate::editor::preview::release_frame(&mut renderer);
         }
         self.texture = None;
         self.view_unorm = None;
