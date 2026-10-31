@@ -54,6 +54,8 @@ pub struct VaapiFrames {
     width: u32,
     height: u32,
     sw_format: ffi::AVPixelFormat,
+    /// Surfaces in the pool (VA-API pools are fixed in size).
+    surfaces: usize,
     /// The device path that opened.
     pub device_path: String,
     /// Whether uploads write into mapped surfaces; shared with every pool
@@ -78,7 +80,8 @@ impl VaapiFrames {
         Err(last.unwrap_or_else(|| MediaError::Invalid("no render node found".into())))
     }
 
-    /// Opens one render node, for an NV12 pool there.
+    /// Opens one render node, for an NV12 pool of [`ENCODER_SURFACES`]
+    /// there.
     pub(crate) fn create_on(path: &str, width: u32, height: u32) -> Result<Self> {
         let cpath =
             CString::new(path).map_err(|_| MediaError::Invalid("device path has NUL".into()))?;
@@ -100,18 +103,21 @@ impl VaapiFrames {
             width,
             height,
             sw_format: ffi::AVPixelFormat::AV_PIX_FMT_NV12,
+            surfaces: ENCODER_SURFACES,
             device_path: path.to_string(),
             mapped: Arc::new(AtomicBool::new(true)),
         })
     }
 
-    /// A pool of `sw_format` surfaces on this device context, so frames from
-    /// both pools share one VADisplay. Created on first use, like this one.
+    /// A pool of `surfaces` `sw_format` surfaces on this device context, so
+    /// frames from both pools share one VADisplay. Created on first use,
+    /// like this one.
     pub(crate) fn pool_on(
         &self,
         width: u32,
         height: u32,
         sw_format: ffi::AVPixelFormat,
+        surfaces: usize,
     ) -> Result<Self> {
         let device = self.device_ref()?;
         Ok(Self {
@@ -120,6 +126,7 @@ impl VaapiFrames {
             width,
             height,
             sw_format,
+            surfaces,
             device_path: self.device_path.clone(),
             mapped: Arc::clone(&self.mapped),
         })
@@ -131,7 +138,13 @@ impl VaapiFrames {
         if !frames.is_null() {
             return Ok(frames);
         }
-        let frames = alloc_pool(self.device, self.width, self.height, self.sw_format)?;
+        let frames = alloc_pool(
+            self.device,
+            self.width,
+            self.height,
+            self.sw_format,
+            self.surfaces,
+        )?;
         self.frames.set(frames);
         Ok(frames)
     }
@@ -295,16 +308,28 @@ impl Drop for VaapiFrames {
     }
 }
 
-/// Surfaces in every VA-API pool (fixed size: `av_hwframe_get_buffer`
-/// fails once all are taken).
+/// The most capture surfaces an encoder exports as dmabufs.
 pub(crate) const POOL_SURFACES: usize = 8;
 
-/// Allocates and initialises a [`POOL_SURFACES`]-surface pool on `device`.
+/// Surfaces in the encoder's NV12 upload pool (CPU conversion). The
+/// encoder holds up to `async_depth` (2) frames while the GPU encodes
+/// them, the repeat reference is the newest of those, and one more is
+/// being filled: three in the worst case, plus one to spare. VA-API pools
+/// are fixed in size: `av_hwframe_get_buffer` fails once all are taken.
+pub(crate) const ENCODER_SURFACES: usize = 4;
+
+/// Surfaces in the GPU converter's BGRX upload pool: a frame is uploaded,
+/// converted and released before the next is taken, and a second lets
+/// the next upload start while the GPU still converts; one to spare.
+pub(crate) const UPLOAD_SURFACES: usize = 3;
+
+/// Allocates and initialises a pool of `surfaces` surfaces on `device`.
 fn alloc_pool(
     device: *mut ffi::AVBufferRef,
     width: u32,
     height: u32,
     sw_format: ffi::AVPixelFormat,
+    surfaces: usize,
 ) -> Result<*mut ffi::AVBufferRef> {
     // SAFETY: device is a valid device context ref; the frames context
     // layout is FFmpeg's public AVHWFramesContext.
@@ -318,7 +343,7 @@ fn alloc_pool(
         (*ctx).sw_format = sw_format;
         (*ctx).width = width as i32;
         (*ctx).height = height as i32;
-        (*ctx).initial_pool_size = POOL_SURFACES as i32;
+        (*ctx).initial_pool_size = surfaces as i32;
         let ret = ffi::av_hwframe_ctx_init(frames);
         if ret < 0 {
             let mut frames = frames;

@@ -112,6 +112,49 @@ fn zero_copy_gpu_memory_at_4k() {
     );
 }
 
+/// The GPU memory a 4K VA-API encoder holds while capture copies frames
+/// through shared memory and the GPU converts them.
+#[test]
+#[ignore = "measurement, run by hand (amdgpu)"]
+fn shared_memory_gpu_memory_at_4k() {
+    fthrust_media::init().unwrap();
+    assert!(vaapi_available(), "this measurement needs a VA-API device");
+    let (w, h) = (3840u32, 2160u32);
+    let cfg = EncoderConfig {
+        src_width: w,
+        src_height: h,
+        enc_width: w,
+        enc_height: h,
+        fps: 60,
+        bitrate_kbps: 40_000,
+        codec: Codec::H264,
+        encoder: EncoderPref::Vaapi,
+        preset: 4,
+    };
+    let base = process_gpu_memory_mib().unwrap_or((0.0, 0.0));
+    let mut enc = Encoder::open(&cfg).unwrap();
+    assert_eq!(enc.conversion(), Conversion::Gpu);
+    let frame = support::synthetic_bgra(w, h, 0);
+    let mut out = Vec::new();
+    for i in 0..60u32 {
+        enc.encode(
+            &frame,
+            w as usize * 4,
+            w,
+            h,
+            i64::from(i) * 1_000_000_000 / 60,
+            &mut out,
+        )
+        .unwrap();
+    }
+    let capturing = process_gpu_memory_mib().expect("amdgpu fdinfo");
+    println!(
+        "4K VA-API encoder, shared-memory frames: {:.0} MiB VRAM + {:.0} MiB GTT",
+        capturing.0 - base.0,
+        capturing.1 - base.1
+    );
+}
+
 #[test]
 #[ignore = "measurement, run by hand"]
 fn gpu_conversion_uses_less_cpu_than_cpu_conversion() {
