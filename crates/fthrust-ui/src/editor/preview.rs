@@ -508,6 +508,23 @@ pub fn install(rs: &egui_wgpu::RenderState) {
     }
 }
 
+/// Lets go of the last frame the preview shader drew. Its bind group holds a
+/// view of that frame's texture, and so the texture, until the next frame
+/// replaces it, which for an editor that was closed is never.
+pub fn release_frame(renderer: &mut egui_wgpu::Renderer) {
+    if let Some(r) = renderer.callback_resources.get_mut::<PreviewResources>() {
+        r.bind_group = None;
+    }
+}
+
+/// Whether the preview shader still holds a frame.
+pub fn holds_frame(renderer: &egui_wgpu::Renderer) -> bool {
+    renderer
+        .callback_resources
+        .get::<PreviewResources>()
+        .is_some_and(|r| r.bind_group.is_some())
+}
+
 /// Draws the video through the shader inside egui's render pass.
 pub struct PreviewCallback {
     /// The frame (gamma-encoded view).

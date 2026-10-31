@@ -2,13 +2,14 @@
 //! request is retained), a coalesced filesystem watcher on the clips root,
 //! its subfolders and the import roots, and a 30 s timer refresh.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fthrust_core::clip_files::is_partial_name;
+use fthrust_core::clip_readiness::canonical_key;
 use fthrust_core::library_index::{LibraryRecord, ScanRoots, is_media_name, scan_with_dirs};
 use notify::Watcher;
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
@@ -67,6 +68,10 @@ struct Shared {
     cancel: Mutex<Arc<AtomicBool>>,
     stop: AtomicBool,
     generation: Mutex<u64>,
+    /// Files written under their final name (a manual recording), by the name
+    /// they were given and by their real name: their data changes start no
+    /// scan.
+    muted: Mutex<Vec<PathBuf>>,
 }
 
 /// The service handle.
@@ -90,6 +95,7 @@ impl ScanService {
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             stop: AtomicBool::new(false),
             generation: Mutex::new(0),
+            muted: Mutex::new(Vec::new()),
         });
         let (event_tx, event_rx) = channel();
         let (wake_tx, wake_rx) = channel::<()>();
@@ -151,6 +157,40 @@ impl ScanService {
         self.request(ScanKind::Foreground);
     }
 
+    /// A file is being written under its final name, as a manual recording
+    /// is: writes to it start no scan, which would walk the whole tree for
+    /// every fragment of the recording. It appearing, going and being renamed
+    /// still do. Nothing written in between is seen, so whoever calls
+    /// [`Self::unmute_writes`] also asks for a scan.
+    pub fn mute_writes(&self, path: &Path) {
+        let mut muted = self.shared.muted.lock().unwrap_or_else(|e| e.into_inner());
+        for name in [path.to_path_buf(), canonical_key(path)] {
+            if !muted.contains(&name) {
+                muted.push(name);
+            }
+        }
+    }
+
+    /// The writing is over: the file's data changes count again, whichever
+    /// name it is given here.
+    pub fn unmute_writes(&self, path: &Path) {
+        let key = canonical_key(path);
+        self.shared
+            .muted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|m| m != path && canonical_key(m) != key);
+    }
+
+    /// The files whose writes are ignored, under the names they were given.
+    pub fn muted_writes(&self) -> Vec<PathBuf> {
+        self.shared
+            .muted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Scan results (direct channel).
     pub fn events(&self) -> &Receiver<ScanEvent> {
         &self.events
@@ -205,11 +245,14 @@ impl Emit {
     }
 }
 
-/// Whether a filesystem event can change what a scan lists. A recording
-/// grows its `.partial` file for as long as it runs, and the engine writes
-/// sidecars next to the clips; neither is something the library shows, and
-/// a scan for each write would walk the whole tree during a game.
-pub fn watcher_event_matters(ev: &notify::Event) -> bool {
+/// Whether a filesystem event can change what a scan lists. A save grows its
+/// `.partial` file for as long as it runs, and the engine writes sidecars next
+/// to the clips; neither is something the library shows. A manual recording is
+/// written straight into its final name, which the library does list, so the
+/// writes to it are told apart by name: `muted` holds the files being written
+/// (see [`ScanService::mute_writes`]). A scan for each write would walk the
+/// whole tree for as long as the recording runs, during a game.
+pub fn watcher_event_matters(ev: &notify::Event, muted: &[PathBuf]) -> bool {
     let changed = matches!(
         ev.kind,
         notify::EventKind::Create(_) | notify::EventKind::Remove(_) | notify::EventKind::Modify(_)
@@ -225,23 +268,42 @@ pub fn watcher_event_matters(ev: &notify::Event) -> bool {
             | notify::EventKind::Remove(RemoveKind::Folder)
             | notify::EventKind::Modify(ModifyKind::Name(_))
     );
+    // Writing to a file adds, removes and renames nothing.
+    let write =
+        matches!(ev.kind, notify::EventKind::Modify(k) if !matches!(k, ModifyKind::Name(_)));
     ev.paths.is_empty()
         || ev.paths.iter().any(|p| {
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
                 return true;
             };
-            !is_partial_name(name) && (structural || is_media_name(name))
+            !is_partial_name(name)
+                && (structural || is_media_name(name))
+                && !(write && is_muted(p, muted))
         })
+}
+
+/// Whether `path` is one of the files in `muted`. Events name a file as the
+/// watched folder is spelled, which need not be how the caller spelled it, so
+/// a file of the same name is also compared by its real path.
+fn is_muted(path: &Path, muted: &[PathBuf]) -> bool {
+    muted.iter().any(|m| m == path)
+        || (muted.iter().any(|m| m.file_name() == path.file_name())
+            && muted.contains(&canonical_key(path)))
 }
 
 fn worker(shared: Arc<Shared>, events: Emit, wake: Receiver<()>, watch_wake: Sender<()>) {
     let watcher_flag = Arc::new(AtomicBool::new(false));
     let flag = watcher_flag.clone();
+    let watch_shared = shared.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         // inotify reports our own directory listings as `Access(Open)`;
         // only real changes count, or every scan would trigger the next.
         let Ok(ev) = res else { return };
-        if watcher_event_matters(&ev) {
+        let matters = {
+            let muted = watch_shared.muted.lock().unwrap_or_else(|e| e.into_inner());
+            watcher_event_matters(&ev, &muted)
+        };
+        if matters {
             flag.store(true, Ordering::Relaxed);
             let _ = watch_wake.send(());
         }
