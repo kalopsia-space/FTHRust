@@ -121,3 +121,27 @@ fn store_failure_falls_back_to_memory() {
             .all(|p| matches!(p.data, Payload::Mem(_)))
     );
 }
+
+#[test]
+fn clear_keeps_the_disk_store() {
+    // An encoder reopen or a geometry change clears the ring; the replay
+    // buffer must stay on disk afterwards instead of quietly moving to RAM.
+    let dir = tempfile::tempdir().unwrap();
+    let ring = disk_ring(dir.path(), 10_000, 4096);
+    for f in 0..30 {
+        ring.push(packet(f, 30, 1000));
+    }
+    ring.clear();
+    assert_eq!(ring.stats().packets, 0);
+    for f in 0..60 {
+        ring.push(packet(f, 30, 1000));
+    }
+    let snap = ring.snapshot(2_000, 0, 0).unwrap();
+    assert_eq!(snap.packets.len(), 60);
+    assert!(
+        snap.packets
+            .iter()
+            .all(|p| matches!(p.data, Payload::Disk(_))),
+        "payloads after the clear stay on disk"
+    );
+}

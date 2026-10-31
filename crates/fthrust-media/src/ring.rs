@@ -295,10 +295,15 @@ impl EncodedRing {
         }
     }
 
-    /// Drops everything (encoder reopen or reconfigure).
+    /// Drops every packet (encoder reopen or reconfigure). A disk ring
+    /// keeps its segment store.
     pub fn clear(&self) {
         let mut inner = self.lock();
-        *inner = Inner::default();
+        let store = inner.store.take();
+        *inner = Inner {
+            store,
+            ..Inner::default()
+        };
         self.latest_wall_time_ns.store(0, Ordering::Release);
     }
 
