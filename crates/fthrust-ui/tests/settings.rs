@@ -239,18 +239,18 @@ fn export_presets_list_builtins_first_and_describe() {
 fn settings_presets_save_load_delete_roundtrip() {
     let (_tmp, mut s) = state(serde_json::json!({"clip_length": 45, "framerate": 120}));
     assert_eq!(
-        general::settings_preset_names(&s),
+        general::settings_preset_names(&mut s),
         vec!["— no presets —".to_owned()]
     );
     general::save_settings_preset(&mut s, "Fast");
-    assert_eq!(general::settings_preset_names(&s), vec!["Fast".to_owned()]);
+    assert_eq!(general::settings_preset_names(&mut s), vec!["Fast".to_owned()]);
     s.set_setting("clip_length", serde_json::json!(15));
     assert!(general::load_settings_preset(&mut s, "Fast"));
     assert_eq!(s.settings.get_i64("clip_length"), Some(45));
     assert!(s.restart_pending);
     assert!(general::delete_settings_preset(&mut s, "Fast"));
     assert_eq!(
-        general::settings_preset_names(&s),
+        general::settings_preset_names(&mut s),
         vec!["— no presets —".to_owned()]
     );
 }
