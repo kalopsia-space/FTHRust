@@ -165,6 +165,15 @@ def main():
             "configuration_sentence": "The configuration has no GPL or non-free library.",
         }
 
+    # What the archive does not hold although it is compiled in: code BtbN's scripts download while building.
+    downloads = sorted((e for e in libs + supporting if e.get("fetched_at_build")), key=lambda e: e["name"].lower())
+    archive_exceptions = ""
+    if downloads:
+        archive_exceptions = (
+            " It does not hold what BtbN's scripts download while building: "
+            + "; ".join(f"for {e['name']}, {e['fetched_at_build']}" for e in downloads)
+            + "."
+        )
 
     out = []
     w = out.append
@@ -224,7 +233,7 @@ def main():
         "SPIRV-Tools, and libjxl builds highway); their notices are in the upstream sources named "
         "above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg "
         "commit, BtbN's build scripts and the source of every library above that is compiled into the shipped "
-        "libraries, at the commits or tags named above, with its README. This is a technical "
+        "libraries, at the commits or tags named above, with its README." + archive_exceptions + " This is a technical "
         "inventory, not legal advice.\n"
     )
     section = "\n".join(out)
@@ -242,6 +251,7 @@ def main():
         "commit": cs["ffmpeg"]["commit"],
         "scripts_commit": cs["build_scripts"]["commit"],
         "shipped_files": ", ".join(f"`{n}`" for n in sorted(manifest["soname_map"].values())),
+        "archive_exceptions": archive_exceptions,
         **wording,
     }
     text = open(args.template).read()

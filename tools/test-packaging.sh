@@ -938,6 +938,15 @@ group_ffnotice() {
     registry_rejects ffnotice_a_tag_pin_needs_the_commit_it_names 'del(.libraries[] | select(.id == "openssl") | .resolved_commit)' "openssl: pinned_commit openssl-3.6.3 is a tag, so resolved_commit has to be the 40-digit commit it names"
     registry_rejects ffnotice_the_commit_a_tag_names_is_a_full_commit_id '(.libraries[] | select(.id == "openssl") | .resolved_commit) = "aae016bfd52f"' "openssl: pinned_commit openssl-3.6.3 is a tag, so resolved_commit has to be the 40-digit commit it names"
     registry_rejects ffnotice_resolved_commit_is_for_tags_only '(.libraries[] | select(.id == "zlib")) += {resolved_commit: "aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f"}' "zlib: resolved_commit is for tag pins"
+    # The notices name what the archive does not hold (shaderc's and rav1e's downloads), taken from the registry
+    out="$(python3 -I "$gen" --template "$ROOT/packaging/notices/header.md" 2>&1)"
+    if grep -q "It does not hold what BtbN's scripts download while building: for rav1e, the Rust crates" <<<"$out" && grep -q "for shaderc, its third-party projects" <<<"$out"; then
+        pass ffnotice_names_what_the_archive_does_not_hold
+    else fail ffnotice_names_what_the_archive_does_not_hold "$(grep -c 'It does not hold' <<<"$out")"; fi
+    jq 'del(.libraries[] | select(.id == "shaderc") | .fetched_at_build) | del(.libraries[] | select(.id == "rav1e") | .fetched_at_build)' "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-nodownloads.json"
+    out="$(python3 -I "$gen" --libraries "$WORK/reg-nodownloads.json" --template "$ROOT/packaging/notices/header.md" 2>&1)"
+    if ! grep -q "It does not hold" <<<"$out"; then pass ffnotice_says_nothing_about_downloads_when_there_are_none
+    else fail ffnotice_says_nothing_about_downloads_when_there_are_none "$out"; fi
     out="$(jq -r '[(.libraries[], .supporting_libraries[]) | select(has("fetched_at_build")) | .id] | sort | join(" ")' "$ROOT/packaging/ffmpeg_libraries.json")"
     if [ "$out" = "rav1e shaderc" ]; then pass ffnotice_registry_names_what_btbns_scripts_download_while_building
     else fail ffnotice_registry_names_what_btbns_scripts_download_while_building "$out"; fi
