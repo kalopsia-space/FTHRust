@@ -137,9 +137,11 @@ fn only_visible_rows_request_thumbnails() {
     let frame = started.elapsed();
     drop(h);
     eprintln!("frame with 5000 records: {frame:?}");
-    // 16 ms in release terms; tests run unoptimised, so allow 50 ms.
+    // Only a gross guard: per-frame work is pinned by counts in
+    // `a_frame_does_no_work_that_grows_with_the_library`. A 50 ms wall-clock
+    // limit failed on a loaded CI runner (audit 2026-10-31).
     assert!(
-        frame.as_millis() < 50,
+        frame.as_millis() < 1000,
         "a frame with 5000 records took {frame:?}"
     );
     assert_eq!(s.library.count, 5000);
