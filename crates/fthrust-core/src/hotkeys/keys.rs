@@ -182,6 +182,35 @@ pub(crate) fn keysym(key: &str) -> Option<Cow<'static, str>> {
         .map(|(_, keysym)| Cow::Borrowed(*keysym))
 }
 
+/// The punctuation egui reports as a key of its own when it is typed with
+/// Shift held on a US-style layout, and the key it sits on (as egui names it).
+const SHIFTED_ON: &[(&str, &str)] = &[
+    ("exclamationmark", "1"),
+    ("questionmark", "Slash"),
+    ("colon", "Semicolon"),
+    ("pipe", "Backslash"),
+    ("opencurlybracket", "OpenBracket"),
+    ("closecurlybracket", "CloseBracket"),
+    ("plus", "Equals"),
+];
+
+/// The key a shifted symbol is typed on, by egui's names: `Exclamationmark`
+/// is `1` with Shift, `Questionmark` is `Slash`, `Colon` is `Semicolon`,
+/// `Pipe` is `Backslash`, the curly brackets are the square ones and `Plus`
+/// is `Equals` (the US layout; other layouts put these elsewhere, and
+/// `None` is returned for every key that is not one of them).
+///
+/// A compositor binds a key by what it types with no modifier held, so
+/// `Shift+Exclamationmark` (keysym `exclam`) never fires on Hyprland while
+/// `Shift+1` does. The hotkey popup records the base key when Shift is held.
+pub(crate) fn unshifted_base(name: &str) -> Option<&'static str> {
+    let name = canonical(name);
+    SHIFTED_ON
+        .iter()
+        .find(|(shifted, _)| *shifted == name)
+        .map(|(_, base)| *base)
+}
+
 /// The key part of a combo (`Ctrl+Shift+S` → `S`).
 pub(crate) fn key_part(combo: &str) -> &str {
     combo.rsplit('+').next().unwrap_or("")

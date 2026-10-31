@@ -3,6 +3,13 @@
 //! The hotkey popup stores egui's key names (`PageUp`, `Equals`, `Backtick`,
 //! `Quote`, the brackets, `PrintScreen`...). The Hyprland `.conf` writer, the
 //! Lua writer and the GlobalShortcuts trigger all need xkb keysym names.
+//!
+//! Parsing is not firing: a compositor binds a key by what it types with no
+//! modifier held. Shifted punctuation (`Exclamationmark`, `Questionmark`,
+//! `Colon`, `Pipe`, the curly brackets, `Plus`) therefore has a keysym here
+//! (`exclam`...) that only matches when it is typed without Shift, so the
+//! popup records it as the key it sits on when Shift is held
+//! ([`unshifted_key_name`], tested at the end of this file).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -11,7 +18,7 @@ use egui::Key;
 use fthrust_core::hotkeys::hyprland::{
     bind_actions, bind_line, to_hyprland_bind, write_lua_block, write_managed_conf,
 };
-use fthrust_core::hotkeys::{HotkeyBindings, to_portal_trigger};
+use fthrust_core::hotkeys::{HotkeyBindings, to_portal_trigger, unshifted_key_name};
 
 const SOCK: &str = "/run/user/1000/fthrust/hotkey.sock";
 const EXE: &str = "/opt/fthrust/bin/fthrust";
@@ -334,6 +341,54 @@ fn the_display_names_of_the_reference_and_the_keysyms_themselves_still_work() {
     assert_eq!(to_portal_trigger("Ctrl+S"), "CTRL+s");
     assert_eq!(to_hyprland_bind("Alt+7").1, "7");
     assert_eq!(to_portal_trigger("Alt+7"), "ALT+7");
+}
+
+/// The key each shifted symbol egui reports sits on in a US layout.
+fn expected_base(key: Key) -> Option<Key> {
+    Some(match key {
+        Key::Exclamationmark => Key::Num1,
+        Key::Questionmark => Key::Slash,
+        Key::Colon => Key::Semicolon,
+        Key::Pipe => Key::Backslash,
+        Key::OpenCurlyBracket => Key::OpenBracket,
+        Key::CloseCurlyBracket => Key::CloseBracket,
+        Key::Plus => Key::Equals,
+        _ => return None,
+    })
+}
+
+#[test]
+fn shifted_punctuation_is_recorded_as_the_key_it_is_typed_on() {
+    for &key in Key::ALL {
+        let recorded = unshifted_key_name(key.name());
+        match expected_base(key) {
+            Some(base) => {
+                let name = recorded.unwrap_or_else(|| panic!("{key:?} has a base key"));
+                // egui itself accepts the recorded name, as the key it should be.
+                assert_eq!(Key::from_name(name), Some(base), "{key:?} -> {name}");
+                // And what the compositor is told is the unshifted key.
+                let mut b = HotkeyBindings::defaults();
+                b.set_keyboard("save_clip", &format!("Ctrl+Shift+{name}"));
+                let stored = b.get("save_clip").unwrap().to_owned();
+                let (mods, hypr) = to_hyprland_bind(&stored);
+                assert_eq!(mods, "CTRL SHIFT");
+                let shifted = to_hyprland_bind(&format!("Ctrl+Shift+{}", key.name())).1;
+                assert_ne!(
+                    hypr, shifted,
+                    "{key:?}: the base key is not the shifted keysym"
+                );
+            }
+            None => assert_eq!(recorded, None, "{key:?} is recorded as it is"),
+        }
+    }
+    // The spellings the popup stores after normalising.
+    assert_eq!(unshifted_key_name("Questionmark"), Some("Slash"));
+    assert_eq!(unshifted_key_name("Exclamationmark"), Some("1"));
+    assert_eq!(unshifted_key_name("Opencurlybracket"), Some("OpenBracket"));
+    // Letters, digits and the unshifted punctuation stay as they are.
+    for name in ["S", "1", "Slash", "Equals", "Semicolon", "F9", "PageUp"] {
+        assert_eq!(unshifted_key_name(name), None, "{name}");
+    }
 }
 
 #[test]

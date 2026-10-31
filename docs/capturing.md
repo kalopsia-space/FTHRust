@@ -77,6 +77,8 @@ You'll get a capture card instead of a clip if:
 
 Change them in the **Hotkeys** popup in the toolbar. Hotkeys are global: they work while your game has focus.
 
+A desktop binds a key as it is typed with nothing held, so when you hold Shift the popup records a shifted symbol as the key it sits on (on a US layout): Shift+1, not Shift+!, and likewise `/` for `?`, `;` for `:`, `\` for `|`, `[` and `]` for `{` and `}`, `=` for `+`. Letters and every other key are recorded as you type them.
+
 Wayland doesn't let apps read the keyboard while another window has focus, so FTHRust asks your desktop to deliver the keys for it. How depends on your desktop:
 
 ### Hyprland: automatic

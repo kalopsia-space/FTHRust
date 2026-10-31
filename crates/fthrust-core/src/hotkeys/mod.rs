@@ -262,6 +262,17 @@ fn normalize_controller_combo(input: &str) -> String {
     out.join("+")
 }
 
+/// The key to record when the key egui calls `name` was pressed with Shift
+/// held: for shifted punctuation (`Exclamationmark`, `Questionmark`, `Colon`,
+/// `Pipe`, the curly brackets, `Plus`) the key it is typed on in a US layout
+/// (`1`, `Slash`, `Semicolon`, `Backslash`, `OpenBracket`, `CloseBracket`,
+/// `Equals`); `None` for every other key, which is recorded as it is. A
+/// compositor matches a bind on the unshifted key, so `Shift+1` fires where
+/// `Shift+Exclamationmark` (keysym `exclam`) never does.
+pub fn unshifted_key_name(name: &str) -> Option<&'static str> {
+    keys::unshifted_base(name)
+}
+
 /// Converts an FTHR combo such as `Ctrl+Shift+S` to the freedesktop
 /// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`). Keys are
 /// spelled as xkb keysym names (`Page Up`, `PageUp` and `Pageup` all give
