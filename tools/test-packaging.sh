@@ -522,11 +522,11 @@ archive_cases() {
     mkdir -p "$stub"
     cat > "$stub/git" <<EOF
 #!/bin/sh
-sub=""; skip=0
+sub=""; skip=0; dir=""; prev=""
 for a in "\$@"; do
-    if [ \$skip = 1 ]; then skip=0; continue; fi
+    if [ \$skip = 1 ]; then skip=0; if [ "\$prev" = -C ]; then dir="\$a"; fi; continue; fi
     case "\$a" in
-        -c|-C) skip=1 ;;
+        -c|-C) skip=1; prev="\$a" ;;
         -*) ;;
         *) sub="\$a"; break ;;
     esac
@@ -538,6 +538,7 @@ if [ "\$sub" = fetch ]; then
     case "\${GIT_STUB:-}" in
         fail) echo "fatal: simulated network failure" >&2; exit 128 ;;
         fail-twice) if [ \$n -le 2 ]; then echo "fatal: simulated network failure" >&2; exit 128; fi ;;
+        fail-libs) case "\$dir" in */lib-*) echo "fatal: simulated network failure" >&2; exit 128 ;; esac ;;
         hang) exec "$real_sleep" 30 ;;
     esac
 fi
@@ -570,6 +571,27 @@ EOF
     if r="$(archiving hang ARCHIVE_FETCH_TIMEOUT=1 2>&1)"; then fail archive_times_out_a_hanging_fetch "exit 0"
     elif [ "$(fetches)" = 3 ] && grep -q "could not fetch" <<<"$r"; then pass archive_times_out_a_hanging_fetch
     else fail archive_times_out_a_hanging_fetch "$r ($(fetches) fetches)"; fi
+
+    # A mirror gets two attempts of its own and then the repository the whole schedule, starting again at the first
+    # timeout: a filtered git:// mirror must not cost the whole schedule before https is tried. Every fetch into a
+    # library's directory fails here: the mirror twice, the repository three times (ARCHIVE_ATTEMPTS is 3), and the
+    # message says so.
+    jq '.libraries |= map(select(.id == "libmirror")) | .supporting_libraries = []' "$reg" > "$WORK/source-registry-mirroronly.json"
+    rm -f "$counter" "$tolog" "$sleeplog"
+    r="$(env PATH="$stub:$PATH" GIT_STUB=fail-libs ARCHIVE_TIMEOUT_STEP=60 ARCHIVE_FETCH_TIMEOUT=120 \
+        "$arch" --manifest "$m" --libraries "$WORK/source-registry-mirroronly.json" --skip-depends-check --out "$WORK/source-out/mirror.tar.xz" 2>&1)"
+    if [ "$(fetches)" = 7 ] && [ "$(tr '\n' ' ' < "$tolog")" = "120 120 120 180 120 180 240 " ] \
+        && grep -q "libmirror: could not fetch $mc from $src/mirrored-copy after 2 attempts or from $src/mirrored after 3 attempts" <<<"$r"; then
+        pass archive_gives_a_mirror_two_attempts_and_the_repository_the_full_schedule
+    else fail archive_gives_a_mirror_two_attempts_and_the_repository_the_full_schedule "$r (fetches $(fetches), timeouts $(tr '\n' ' ' < "$tolog"))"; fi
+    rm -f "$counter" "$tolog" "$sleeplog"
+    r="$(env PATH="$stub:$PATH" GIT_STUB=fail-libs ARCHIVE_MIRROR_ATTEMPTS=1 \
+        "$arch" --manifest "$m" --libraries "$WORK/source-registry-mirroronly.json" --skip-depends-check --out "$WORK/source-out/mirror1.tar.xz" 2>&1)"
+    if [ "$(fetches)" = 6 ] && grep -q "from $src/mirrored-copy after 1 attempts or from" <<<"$r"; then pass archive_mirror_attempts_are_a_setting_of_their_own
+    else fail archive_mirror_attempts_are_a_setting_of_their_own "$r (fetches $(fetches))"; fi
+    if r="$(ARCHIVE_MIRROR_ATTEMPTS=0 "$arch" "${opts[@]}" --out "$WORK/source-out/nomirror.tar.xz" 2>&1)"; then fail archive_refuses_no_mirror_attempts "exit 0"
+    elif grep -q "ARCHIVE_MIRROR_ATTEMPTS must be at least 1" <<<"$r"; then pass archive_refuses_no_mirror_attempts
+    else fail archive_refuses_no_mirror_attempts "$r"; fi
 
     # With none of the retry settings changed the schedule is BtbN's: 10 attempts, timeouts of 120 s growing by 60 s to
     # 660 s, and between attempts a random pause of 5 to 90 s (the stand-in sleep records them and returns at once).

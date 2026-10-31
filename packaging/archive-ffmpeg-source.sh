@@ -28,13 +28,16 @@
 #
 # Every network step goes through the retry BtbN's own scripts use (images/base/
 # retry-tool.sh): 10 attempts, the first with a 120 s timeout and each further one
-# 60 s longer (up to 660 s), and a random pause of 5 to 90 s after a failure. Each
-# repository gets an origin remote, as BtbN's git-mini-clone does, so that relative
+# 60 s longer (up to 660 s), and a random pause of 5 to 90 s after a failure. A mirror
+# gets only 2 attempts of its own before the repository gets the whole schedule: a
+# filtered git:// host would otherwise cost an hour or more before https is tried.
+# Each repository gets an origin remote, as BtbN's git-mini-clone does, so that relative
 # submodule URLs resolve. Requests to github.com carry ARCHIVE_GITHUB_TOKEN when it
 # is set (the release job passes its token), the way actions/checkout does: about a
 # hundred anonymous fetches from one runner address are what a rate limit is for.
 #
-# Environment: ARCHIVE_GITHUB_TOKEN; ARCHIVE_ATTEMPTS (10), ARCHIVE_FETCH_TIMEOUT
+# Environment: ARCHIVE_GITHUB_TOKEN; ARCHIVE_ATTEMPTS (10), ARCHIVE_MIRROR_ATTEMPTS (2),
+# ARCHIVE_FETCH_TIMEOUT
 # (120 s, the first attempt's), ARCHIVE_TIMEOUT_STEP (60 s), ARCHIVE_PAUSE_MIN (5 s)
 # and ARCHIVE_PAUSE_MAX (90 s); ARCHIVE_XZ_OPTS (-T0 -9); ARCHIVE_SVN (svn);
 # SOURCE_DATE_EPOCH. For the tests only: ARCHIVE_ALLOW_LOCAL_REPO=1 lets the pins
@@ -46,6 +49,7 @@ LIBRARIES="$HERE/ffmpeg_libraries.json"
 SKIP_DEPENDS=0
 OUT=""
 ATTEMPTS="${ARCHIVE_ATTEMPTS:-10}"
+MIRROR_ATTEMPTS="${ARCHIVE_MIRROR_ATTEMPTS:-2}"
 FETCH_TIMEOUT="${ARCHIVE_FETCH_TIMEOUT:-120}"
 TIMEOUT_STEP="${ARCHIVE_TIMEOUT_STEP:-60}"
 PAUSE_MIN="${ARCHIVE_PAUSE_MIN:-5}"
@@ -53,10 +57,11 @@ PAUSE_MAX="${ARCHIVE_PAUSE_MAX:-90}"
 XZ_OPTS="${ARCHIVE_XZ_OPTS:--T0 -9}"
 SVN="${ARCHIVE_SVN:-svn}"
 die() { echo "archive-ffmpeg-source: $*" >&2; exit 1; }
-for v in ATTEMPTS FETCH_TIMEOUT TIMEOUT_STEP PAUSE_MIN PAUSE_MAX; do
+for v in ATTEMPTS MIRROR_ATTEMPTS FETCH_TIMEOUT TIMEOUT_STEP PAUSE_MIN PAUSE_MAX; do
     [[ "${!v}" =~ ^[0-9]+$ ]] || die "ARCHIVE_$v must be a whole number, not '${!v}'"
 done
 [ "$ATTEMPTS" -ge 1 ] || die "ARCHIVE_ATTEMPTS must be at least 1"
+[ "$MIRROR_ATTEMPTS" -ge 1 ] || die "ARCHIVE_MIRROR_ATTEMPTS must be at least 1"
 [ "$PAUSE_MAX" -ge "$PAUSE_MIN" ] || die "ARCHIVE_PAUSE_MAX is below ARCHIVE_PAUSE_MIN"
 # No prompts for credentials, and no background gc or maintenance: git starts one after a clone or fetch, detached, and
 # it writes into .git while this script is removing it (that failed a trial run on libplacebo's many submodules).
@@ -95,22 +100,23 @@ mkdir -p "$stage"
 
 field() { jq -er "$1" "$MANIFEST" || die "$MANIFEST has no $1"; }
 
-# retry DESCRIPTION COMMAND...: BtbN's retry-tool. The command up to $ATTEMPTS times, the first under a timeout of
-# $FETCH_TIMEOUT seconds and each further one under $TIMEOUT_STEP more, with a random pause of $PAUSE_MIN to $PAUSE_MAX
-# seconds after a failure.
-retry() {
-    local what="$1" attempt=1 limit pause
-    shift
+# retry_n ATTEMPTS DESCRIPTION COMMAND...: BtbN's retry-tool. The command up to ATTEMPTS times, the first under a timeout
+# of $FETCH_TIMEOUT seconds and each further one under $TIMEOUT_STEP more, with a random pause of $PAUSE_MIN to $PAUSE_MAX
+# seconds after a failure. retry is retry_n with the full $ATTEMPTS.
+retry_n() {
+    local max="$1" what="$2" attempt=1 limit pause
+    shift 2
     while :; do
         limit=$((FETCH_TIMEOUT + (attempt - 1) * TIMEOUT_STEP))
         if timeout "$limit" "$@"; then return 0; fi
-        [ $attempt -lt "$ATTEMPTS" ] || return 1
+        [ $attempt -lt "$max" ] || return 1
         pause=$((PAUSE_MIN + RANDOM % (PAUSE_MAX - PAUSE_MIN + 1)))
-        echo "archive-ffmpeg-source: $what failed (attempt $attempt of $ATTEMPTS, limit ${limit}s), trying again in ${pause}s" >&2
+        echo "archive-ffmpeg-source: $what failed (attempt $attempt of $max, limit ${limit}s), trying again in ${pause}s" >&2
         sleep "$pause"
         attempt=$((attempt + 1))
     done
 }
+retry() { retry_n "$ATTEMPTS" "$@"; }
 
 # check_repo NAME REPO KIND: REPO is an https URL (or, when KIND is "mirror", a git:// one: what arrives is checked against
 # the commit id anyway). A local path is accepted only for the tests; any other scheme never is.
@@ -127,14 +133,15 @@ check_repo() {
 }
 
 # git_fetch DIR NAME PIN REPO [MIRROR]: PIN (a commit id or a tag), shallow, into the new repository DIR, from MIRROR if
-# there is one and else (or if that fails) from REPO. The repository gets an origin remote, as BtbN's git-mini-clone does,
+# there is one (MIRROR_ATTEMPTS attempts: a mirror that is filtered or slow must not cost the whole schedule) and else, or
+# if that fails, from REPO (the full schedule). The repository gets an origin remote, as BtbN's git-mini-clone does,
 # so that a relative submodule URL (../x.git) resolves against the place the tree came from. Sets fetched_from.
 git_fetch() {
-    local dir="$1" name="$2" pin="$3" repo="$4" mirror="${5:-}" ref candidate kind origin=0
+    local dir="$1" name="$2" pin="$3" repo="$4" mirror="${5:-}" ref candidate kind tries origin=0
     "${GIT[@]}" init -q "$dir"
     if [[ "$pin" =~ ^[0-9a-f]{40}$ ]]; then ref="$pin"; else ref="refs/tags/$pin:refs/tags/$pin"; fi
     for kind in mirror repo; do
-        if [ "$kind" = mirror ]; then candidate="$mirror"; else candidate="$repo"; fi
+        if [ "$kind" = mirror ]; then candidate="$mirror" tries="$MIRROR_ATTEMPTS"; else candidate="$repo" tries="$ATTEMPTS"; fi
         [ -n "$candidate" ] || continue
         check_repo "$name" "$candidate" "$kind"
         if [ $origin = 1 ]; then
@@ -143,7 +150,7 @@ git_fetch() {
             "${GIT[@]}" -C "$dir" remote add origin "$candidate"
             origin=1
         fi
-        if retry "fetching $name from $candidate" "${GIT[@]}" -C "$dir" fetch -q --depth 1 origin "$ref"; then
+        if retry_n "$tries" "fetching $name from $candidate" "${GIT[@]}" -C "$dir" fetch -q --depth 1 origin "$ref"; then
             fetched_from="$candidate"
             return 0
         fi
@@ -180,7 +187,7 @@ fetch_library() {
     [[ "$pin" =~ ^[0-9a-f]{40}$ || "$pin" =~ ^[A-Za-z0-9][A-Za-z0-9._+/-]*$ ]] \
         || die "$id: pin must be a 40-digit commit id, a tag name or a Subversion revision (rNNN): $pin"
     git_fetch "$tree" "$id" "$pin" "$repo" "$mirror" \
-        || die "$id: could not fetch $pin from ${mirror:+$mirror or }$repo after $ATTEMPTS attempts each"
+        || die "$id: could not fetch $pin from ${mirror:+$mirror after $MIRROR_ATTEMPTS attempts or from }$repo after $ATTEMPTS attempts"
     if [[ "$pin" =~ ^[0-9a-f]{40}$ ]]; then
         commit="$("${GIT[@]}" -C "$tree" rev-parse FETCH_HEAD)"
         [ "$commit" = "$pin" ] || die "$id: fetched $commit, expected $pin"
