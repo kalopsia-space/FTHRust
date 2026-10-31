@@ -610,3 +610,474 @@ fn launch_success_publishes_active_config() {
         "an exited engine clears the active config: {fx:?}"
     );
 }
+
+/// Audit 2026-10-31 tier 1 #3: quitting mid-save gives the engine time to
+/// finish the clip instead of the usual two seconds.
+#[test]
+fn stop_mid_save_waits_for_the_engine() {
+    use fthrust_ui::services::engine::{KILL_GRACE_S, SAVE_EXIT_GRACE_S};
+    let grace = |fx: &[Effect]| {
+        fx.iter().find_map(|e| match e {
+            Effect::Kill { grace_s, .. } => Some(*grace_s),
+            _ => None,
+        })
+    };
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 30, &mut now);
+    sv.set_save_busy(true);
+    assert_eq!(grace(&sv.handle(Input::Stop, now)), Some(SAVE_EXIT_GRACE_S));
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 31, &mut now);
+    let fx = sv.handle(Input::Stop, now);
+    assert_eq!(grace(&fx), Some(KILL_GRACE_S));
+    // From the moment it stops, the pages see the engine as gone, so no
+    // save is admitted to a daemon that is shutting down.
+    assert!(
+        fx.contains(&Effect::Ui(Event::EngineConnected(false))),
+        "{fx:?}"
+    );
+}
+
+/// The driver's shutdown waits for the process to exit on its own (here a
+/// stand-in engine that takes 2.5 s and ignores SIGTERM) instead of
+/// returning at once and letting the runtime's shutdown SIGKILL it.
+#[test]
+fn driver_shutdown_waits_for_the_engine_to_finish() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let done = d.path().join("finished");
+    let script = d.path().join("slow-engine");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ntrap '' TERM\nsleep 2.5\ntouch '{}'\n",
+            done.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let outbox = fthrust_ui::services::Outbox::new(tx, egui::Context::default());
+    let driver = fthrust_ui::services::engine::EngineDriver::start(
+        rt.handle().clone(),
+        outbox,
+        script,
+        d.path().join("engine.sock"),
+        Vec::new(),
+        d.path().join("engine.log"),
+    );
+    driver.request(Input::Start(config()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !driver.process_running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(driver.process_running(), "the stand-in engine started");
+    driver.supervisor().lock().unwrap().set_save_busy(true);
+    let started = std::time::Instant::now();
+    driver.shutdown();
+    assert!(
+        started.elapsed() >= std::time::Duration::from_secs(2),
+        "shutdown returned after {:?}, before the engine finished",
+        started.elapsed()
+    );
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+    assert!(done.is_file(), "the engine ran to completion, not killed");
+}
+
+fn config_fps(fps: u32) -> EngineConfig {
+    let mut c = config();
+    c.capture.fps = fps;
+    c
+}
+
+fn configured_fps(fx: &[Effect]) -> Option<u32> {
+    fx.iter().find_map(|e| match e {
+        Effect::Send(fthrust_ipc::Command::Configure(c)) => Some(c.capture.fps),
+        _ => None,
+    })
+}
+
+fn restart(fps: u32) -> Input {
+    Input::Restart {
+        config: config_fps(fps),
+        allow_recording_prepare: false,
+        explicit: false,
+    }
+}
+
+/// Audit 2026-10-31: settings applied while a restart is pending or
+/// deferred used to be dropped (the first config won).
+#[test]
+fn the_newest_settings_win_while_a_restart_is_deferred() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 40, &mut now);
+    sv.set_save_busy(true);
+    sv.handle(restart(90), now);
+    sv.handle(restart(120), now + 0.1);
+    sv.set_save_busy(false);
+    let mut fx = sv.handle(Input::Tick, now + 0.7);
+    // Stopped, then started again after the gap with the newest settings.
+    fx.extend(sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.8));
+    fx.extend(sv.handle(Input::Tick, now + 2.0));
+    fx.extend(sv.handle(Input::Spawned { pid: 41 }, now + 2.1));
+    fx.extend(sv.handle(
+        Input::Hello {
+            pid: 41,
+            version: "x".into(),
+        },
+        now + 2.2,
+    ));
+    assert_eq!(configured_fps(&fx), Some(120), "{fx:?}");
+}
+
+#[test]
+fn settings_applied_during_a_restart_are_not_dropped() {
+    // Before the new process is configured: it starts with the newest.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 50, &mut now);
+    sv.handle(restart(90), now);
+    sv.handle(restart(144), now + 0.1);
+    let mut fx = sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.2);
+    fx.extend(sv.handle(Input::Tick, now + 1.5));
+    fx.extend(sv.handle(Input::Spawned { pid: 51 }, now + 1.6));
+    fx.extend(sv.handle(
+        Input::Hello {
+            pid: 51,
+            version: "x".into(),
+        },
+        now + 1.7,
+    ));
+    assert_eq!(configured_fps(&fx), Some(144), "{fx:?}");
+    // After it was configured: one more restart once the apply settles.
+    sv.handle(restart(165), now + 1.8);
+    let mut frames = 0;
+    let mut t = now + 1.8;
+    let mut fx = Vec::new();
+    for _ in 0..6 {
+        t += 0.5;
+        frames += 30;
+        fx.extend(sv.handle(Input::Status(status(frames, flags::ACTIVE, 1)), t));
+    }
+    fx.extend(sv.handle(Input::Tick, t + 0.1));
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "the queued restart ran: {fx:?}"
+    );
+}
+
+/// The engine's stderr is read to the end even past bytes that aren't
+/// UTF-8 (the reader used to stop, and the engine died on EPIPE).
+#[test]
+fn stderr_reader_survives_bad_bytes() {
+    use fthrust_ui::services::engine::{pump_stderr, startup_error_line};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let bytes: &[u8] = b"starting\n\xff\xfe broken\nFTHR_STARTUP_ERROR: NO_OUTPUT: none found\n";
+    let mut lines = Vec::new();
+    rt.block_on(pump_stderr(bytes, |l| lines.push(l.to_owned())));
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[1].ends_with(" broken"));
+    match startup_error_line(&lines[2]) {
+        Some(Input::StartupError { code, detail }) => {
+            assert_eq!(code, "NO_OUTPUT");
+            assert_eq!(detail, "none found");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Audit 2026-10-31: a crashed engine comes back on its own, a few times.
+#[test]
+fn a_crashed_engine_restarts_within_a_budget() {
+    use fthrust_ui::services::engine::{AUTO_RESTART_DELAY_S, AUTO_RESTART_LIMIT};
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    let mut pid = 60;
+    bring_up(&mut sv, pid, &mut now);
+    for round in 0..=AUTO_RESTART_LIMIT {
+        now += 1.0;
+        let fx = sv.handle(Input::ProcessExited { code: Some(139) }, now);
+        assert!(
+            error_titles(&fx)
+                .iter()
+                .any(|(t, _, _)| t == "ENGINE STOPPED"),
+            "the crash is still reported"
+        );
+        let fx = sv.handle(Input::Tick, now + AUTO_RESTART_DELAY_S + 0.01);
+        let spawned = fx.iter().any(|e| matches!(e, Effect::Spawn));
+        if round < AUTO_RESTART_LIMIT {
+            assert!(spawned, "round {round}: restarted on its own: {fx:?}");
+            now += AUTO_RESTART_DELAY_S + 0.01;
+            pid += 1;
+            sv.handle(Input::Spawned { pid }, now);
+            sv.handle(
+                Input::Hello {
+                    pid,
+                    version: "x".into(),
+                },
+                now,
+            );
+        } else {
+            assert!(!spawned, "the budget is spent: stays stopped");
+        }
+    }
+}
+
+/// A silent engine stops admitting saves at 3 s and is restarted at 15 s.
+#[test]
+fn a_silent_engine_is_reported_then_restarted() {
+    use fthrust_ui::services::engine::HANG_RESTART_S;
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 70, &mut now);
+    let fx = sv.handle(Input::Tick, now + 3.1);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Ui(Event::Health(h)) if h.state != HealthState::Healthy
+        )),
+        "save admission learns it is silent: {fx:?}"
+    );
+    let fx = sv.handle(Input::Tick, now + HANG_RESTART_S + 0.1);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+    assert!(fx.iter().any(|e| matches!(e, Effect::StartAfter(_))));
+}
+
+#[test]
+fn the_supervisor_sleeps_until_its_next_timer() {
+    let mut sv = Supervisor::new();
+    assert_eq!(sv.next_deadline(), None, "nothing to do while stopped");
+    let mut now = 0.0;
+    bring_up(&mut sv, 80, &mut now);
+    let at = sv.next_deadline().expect("connected: the silence check");
+    assert!(at > now && at <= now + 3.0, "{at} vs {now}");
+}
+
+/// Audit 2026-10-31: settings the engine can't start with are reported
+/// instead of leaving "STARTING CAPTURE" up forever.
+#[test]
+fn unusable_capture_settings_are_reported_at_start() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s =
+        fthrust_ui::state::AppState::for_tests(d.path(), serde_json::json!({"framerate": 7}));
+    let ctx = egui::Context::default();
+    let mut services = fthrust_ui::services::Services::start(&s, &ctx);
+    services.start_engine_with(
+        d.path().join("no-such-engine"),
+        d.path().join("engine.sock"),
+        Vec::new(),
+        &s,
+    );
+    services.tick(&mut s);
+    assert_eq!(s.status.text, "CAPTURE FAILED");
+    assert!(
+        s.error_bar
+            .entries()
+            .iter()
+            .any(|e| e.title == "SETTINGS APPLY FAILED"),
+        "{:?}",
+        s.error_bar.entries()
+    );
+    services.shutdown();
+}
+
+/// Audit 2026-10-31: an engine left over from an earlier session is asked
+/// to stop before a new one starts (its socket used to be unlinked and a
+/// second engine started beside it).
+#[test]
+fn a_leftover_engine_is_asked_to_stop() {
+    use fthrust_ipc::transport::EngineServer;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("engine.sock");
+    let got_shutdown = rt.block_on(async {
+        let server = EngineServer::bind(&path).await.unwrap();
+        let old_engine = tokio::spawn(async move {
+            // Like the daemon, it serves one client after another.
+            loop {
+                let mut conn = server.accept().await.unwrap();
+                let _ = conn
+                    .events
+                    .send(fthrust_ipc::Event::Hello {
+                        protocol_version: fthrust_ipc::PROTOCOL_VERSION,
+                        pid: 0,
+                        version: "old".into(),
+                    })
+                    .await;
+                if let Some(fthrust_ipc::Command::Shutdown) = conn.commands.recv().await {
+                    // Exits: the connection and the socket go away.
+                    return true;
+                }
+            }
+        });
+        let started = std::time::Instant::now();
+        fthrust_ui::services::engine::retire_stale_engine(&path).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        old_engine.await.unwrap()
+    });
+    assert!(got_shutdown, "the old engine was told to shut down");
+    assert!(!path.exists(), "and its socket went with it");
+    // Nothing listening: nothing to do, and quickly.
+    rt.block_on(fthrust_ui::services::engine::retire_stale_engine(&path));
+}
+
+/// Review of the audit fixes: quitting right after Apply, or within the
+/// auto-restart delay, must not start a new engine.
+#[test]
+fn stop_is_final() {
+    use fthrust_ui::services::engine::AUTO_RESTART_DELAY_S;
+    // Apply, then quit before the restart gap ends.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 90, &mut now);
+    sv.handle(restart(144), now);
+    let mut fx = sv.handle(Input::Stop, now + 0.2);
+    fx.extend(sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.5));
+    fx.extend(sv.handle(Input::Tick, now + 3.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    // A crash, then quit inside the auto-restart delay.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 91, &mut now);
+    sv.handle(Input::ProcessExited { code: Some(139) }, now + 1.0);
+    let mut fx = sv.handle(Input::Stop, now + 1.5);
+    fx.extend(sv.handle(Input::Tick, now + 1.0 + AUTO_RESTART_DELAY_S + 1.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+}
+
+/// A stop that arrives while the process is still being spawned kills the
+/// process once it appears.
+#[test]
+fn a_process_spawned_after_a_stop_is_killed() {
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Stop, 0.1);
+    let fx = sv.handle(Input::Spawned { pid: 92 }, 0.2);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Kill {
+                graceful: false,
+                ..
+            }
+        )),
+        "{fx:?}"
+    );
+}
+
+/// Settings merged into a restart that hasn't configured its process yet
+/// are the ones reported active.
+#[test]
+fn a_merged_restart_reports_the_settings_it_ran() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 93, &mut now);
+    sv.handle(restart(90), now);
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.2);
+    sv.handle(Input::Tick, now + 1.5);
+    sv.handle(restart(144), now + 1.55);
+    sv.handle(Input::Spawned { pid: 94 }, now + 1.6);
+    sv.handle(
+        Input::Hello {
+            pid: 94,
+            version: "x".into(),
+        },
+        now + 1.7,
+    );
+    let mut fx = Vec::new();
+    let mut t = now + 1.7;
+    let mut frames = 0;
+    for _ in 0..6 {
+        t += 0.5;
+        frames += 30;
+        fx.extend(sv.handle(Input::Status(status(frames, flags::ACTIVE, 1)), t));
+    }
+    let active = fx.iter().rev().find_map(|e| match e {
+        Effect::Ui(Event::ActiveConfig(Some(c))) => Some(c.fps),
+        _ => None,
+    });
+    assert_eq!(active, Some(144), "{fx:?}");
+}
+
+/// While the old process is still stopping, an overdue restart doesn't make
+/// the supervisor wake every 10 ms.
+#[test]
+fn an_overdue_restart_waits_for_the_stop() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 95, &mut now);
+    sv.handle(restart(144), now);
+    let later = now + 5.0;
+    sv.handle(Input::Tick, later);
+    if let Some(at) = sv.next_deadline() {
+        assert!(at > now + 1.0, "deadline {at} is the overdue restart");
+    }
+}
+
+/// An engine finishing a save no longer accepts clients (no Hello): the new
+/// start waits for it to let go of the socket instead of failing to bind.
+#[test]
+fn a_leftover_engine_that_no_longer_answers_is_waited_for() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("engine.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let releaser = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+        })
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    rt.block_on(fthrust_ui::services::engine::retire_stale_engine_within(
+        &path,
+        std::time::Duration::from_secs(20),
+    ));
+    let waited = started.elapsed();
+    releaser.join().unwrap();
+    assert!(
+        waited >= std::time::Duration::from_secs(2),
+        "returned after {waited:?}, while the socket was still held"
+    );
+    assert!(waited < std::time::Duration::from_secs(10), "{waited:?}");
+}
+
+/// Review of the audit fixes: once the app is quitting, an engine that
+/// dies (a logout signals it too) isn't answered with a new one.
+#[test]
+fn quitting_stops_restarts_but_not_the_engine() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 96, &mut now);
+    let fx = sv.handle(Input::Quitting, now);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "the engine keeps running for the rest of the shutdown"
+    );
+    let mut fx = sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.5);
+    fx.extend(sv.handle(Input::Tick, now + 5.0));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+}

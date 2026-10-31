@@ -59,6 +59,7 @@ impl App {
 
     /// Runs the services without painting (loop wakes between frames).
     pub fn tick(&mut self) {
+        self.state.flush_saves(false);
         if let Some(services) = self.services.as_mut() {
             services.tick(&mut self.state);
         }
@@ -112,6 +113,7 @@ impl App {
 
     /// The reference's shutdown order, then the window geometry is saved.
     pub fn on_exit(&mut self) {
+        self.state.flush_saves(true);
         editor::sessions::shutdown(&mut self.state);
         if let Some(mut services) = self.services.take() {
             services.prepare_exit(&mut self.state);

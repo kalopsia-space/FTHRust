@@ -99,7 +99,11 @@ impl MicLevel {
                 let _ = thread.join();
                 Err(e)
             }
-            Err(_) => Err("PipeWire did not answer".into()),
+            Err(_) => {
+                // Don't leave the stream thread behind if it connects late.
+                let _ = quit_tx.send(());
+                Err("PipeWire did not answer".into())
+            }
         }
     }
 

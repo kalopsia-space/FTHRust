@@ -114,3 +114,28 @@ fn only_a_device_change_restarts_the_level_stream() {
     );
     assert!(needs_restart(Some(&None), &mic));
 }
+
+/// Audit 2026-10-31: Gary's picture is uploaded no larger than it can
+/// appear (a 2048 px picture showed at about 820 px on a 1080p output).
+#[test]
+fn picture_is_uploaded_at_its_largest_on_screen_size() {
+    use fthrust_ui::overlay::gary::{fitted, picture_rect};
+    let big = image::RgbaImage::from_pixel(2048, 2048, image::Rgba([10, 20, 30, 255]));
+    let screen = egui::Vec2::new(1920.0, 1080.0);
+    let img = fitted(&big, screen);
+    let largest = picture_rect(
+        egui::Rect::from_min_size(egui::Pos2::ZERO, screen),
+        egui::Vec2::new(2048.0, 2048.0),
+        1.0,
+    )
+    .size();
+    assert!(
+        (img.size[0] as f32 - largest.x).abs() <= 1.0,
+        "{:?} vs {largest:?}",
+        img.size
+    );
+    assert!(img.size[0] < 1000);
+    // A small picture is left alone.
+    let small = image::RgbaImage::from_pixel(300, 200, image::Rgba([1, 2, 3, 255]));
+    assert_eq!(fitted(&small, screen).size, [300, 200]);
+}

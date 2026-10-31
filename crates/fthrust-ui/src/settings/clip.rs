@@ -194,6 +194,16 @@ pub fn detection_text(state: &AppState) -> String {
     }
 }
 
+/// `_on_clips_folder_use_default`: commits the platform default folder the
+/// same way BROWSE commits a chosen one (writable check, a derived
+/// recording folder follows). Removing the key instead left no clips folder
+/// for the rest of the session (saves failed) and let the legacy migration
+/// pick `~/FTHR_Clips` at the next start.
+pub fn use_default_clips_directory(state: &mut AppState) {
+    let default = state.paths.default_clips_directory();
+    crate::services::browse::apply(state, BrowseKind::ClipsFolder, vec![default]);
+}
+
 /// The Clip page body.
 pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
@@ -218,9 +228,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
         state.browse_requested = Some(BrowseKind::ClipsFolder);
     }
     if default {
-        state.settings.remove("clips_directory");
-        let _ = state.settings.save();
-        state.clips_directory_changed = true;
+        use_default_clips_directory(state);
     }
     space(ui, 8.0);
     let rec_dir = state

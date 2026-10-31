@@ -59,15 +59,29 @@ fn registry(ctx: &Context) -> Registry {
     })
 }
 
+/// Whether markers are recorded. On by default (tests and the bench read
+/// them); the app turns it off when nothing will read them, so a frame
+/// doesn't build and register about a thousand markers for nobody.
+static RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Turns marker recording on or off for the process.
+pub fn set_recording(on: bool) {
+    RECORDING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Builder returned by [`mark`].
 pub struct MarkerBuilder<'a> {
     ctx: &'a Context,
     marker: Marker,
+    on: bool,
 }
 
 impl MarkerBuilder<'_> {
     /// Expects `color` at the rect centre.
     pub fn fill(mut self, color: Color) -> Self {
+        if !self.on {
+            return self;
+        }
         let at = self.marker.rect.center();
         self.marker.samples.push(Sample {
             role: "fill",
@@ -79,6 +93,9 @@ impl MarkerBuilder<'_> {
 
     /// Expects `color` at an absolute position.
     pub fn sample(mut self, role: &'static str, at: Pos2, color: Color) -> Self {
+        if !self.on {
+            return self;
+        }
         self.marker.samples.push(Sample {
             role,
             at,
@@ -89,6 +106,9 @@ impl MarkerBuilder<'_> {
 
     /// Expects `color` on the left edge, mid-height (a 1 px border).
     pub fn edge(mut self, color: Color) -> Self {
+        if !self.on {
+            return self;
+        }
         let r = self.marker.rect;
         self.marker.samples.push(Sample {
             role: "edge",
@@ -100,6 +120,9 @@ impl MarkerBuilder<'_> {
 
     /// Expects `color` on the top edge, mid-width.
     pub fn top(mut self, color: Color) -> Self {
+        if !self.on {
+            return self;
+        }
         let r = self.marker.rect;
         self.marker.samples.push(Sample {
             role: "top",
@@ -111,6 +134,9 @@ impl MarkerBuilder<'_> {
 
     /// Records the text run.
     pub fn text(mut self, content: impl Into<String>, px: f32, weight: Weight) -> Self {
+        if !self.on {
+            return self;
+        }
         self.marker.text = Some(TextRun {
             content: content.into(),
             px,
@@ -121,12 +147,18 @@ impl MarkerBuilder<'_> {
 
     /// Records the icon asset and size.
     pub fn icon(mut self, asset: impl Into<String>, size_px: f32) -> Self {
+        if !self.on {
+            return self;
+        }
         self.marker.icon = Some((asset.into(), size_px));
         self
     }
 
     /// Stores the marker.
     pub fn done(self) {
+        if !self.on {
+            return;
+        }
         // Markers belong to one pass: a new pass drops the previous pass's set.
         let pass = self.ctx.cumulative_pass_nr();
         let pass_id = Id::unique("fthrust-fidelity-pass");
@@ -149,15 +181,17 @@ pub fn marker_label(text: &str) -> String {
 
 /// Starts a marker for `name` covering `rect`.
 pub fn mark<'a>(ui: &'a Ui, name: impl Into<String>, rect: Rect) -> MarkerBuilder<'a> {
+    let on = RECORDING.load(std::sync::atomic::Ordering::Relaxed);
     MarkerBuilder {
         ctx: ui.ctx(),
         marker: Marker {
-            name: name.into(),
+            name: if on { name.into() } else { String::new() },
             rect,
             samples: Vec::new(),
             text: None,
             icon: None,
         },
+        on,
     }
 }
 

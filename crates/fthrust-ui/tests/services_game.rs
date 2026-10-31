@@ -335,3 +335,32 @@ fn unavailable_protocol_sets_label_and_warning() {
     );
     assert_eq!(s.running_windows, Vec::<String>::new());
 }
+
+/// Audit 2026-10-31: the compositor connection is made on the detector's
+/// thread, and a failure arrives as an event instead of blocking startup.
+#[test]
+fn detector_connects_off_the_ui_thread() {
+    use fthrust_ui::services::game::GameDetector;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let outbox = fthrust_ui::services::Outbox::new(tx, egui::Context::default());
+    let caller = std::thread::current().id();
+    let detector = GameDetector::start_with(
+        move || {
+            assert_ne!(
+                std::thread::current().id(),
+                caller,
+                "not on the caller's thread"
+            );
+            Err("no wlr-foreign-toplevel-management".into())
+        },
+        outbox,
+    );
+    let ev = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("an availability event");
+    assert_eq!(
+        ev,
+        fthrust_ui::services::Event::GameDetectionAvailability(false)
+    );
+    detector.stop();
+}

@@ -343,3 +343,28 @@ fn hotkey_recording_commits_a_chord_and_clear_unsets() {
             .contains("bash -c '\"fthrust\" --hotkey save_clip'")
     );
 }
+
+/// Audit 2026-10-31 tier 1 #4: a clip length that changes the replay buffer
+/// asks for Apply; one that doesn't (a custom length already covers it)
+/// does not.
+#[test]
+fn clip_length_change_asks_for_a_restart_when_the_buffer_changes() {
+    use fthrust_ui::popups::capture_settings::set_clip_length;
+    let d = tempfile::tempdir().unwrap();
+    let mut s = fthrust_ui::state::AppState::for_tests(
+        d.path(),
+        serde_json::json!({"clip_length": 30, "custom_clip_lengths": [90]}),
+    );
+    set_clip_length(&mut s, 60);
+    assert_eq!(s.settings.get_i64("clip_length"), Some(60));
+    assert!(
+        !s.restart_pending,
+        "the 90 s custom length already sizes the buffer"
+    );
+    set_clip_length(&mut s, 120);
+    assert_eq!(s.settings.get_i64("clip_length"), Some(120));
+    assert!(
+        s.restart_pending,
+        "a bigger buffer needs the engine restarted"
+    );
+}

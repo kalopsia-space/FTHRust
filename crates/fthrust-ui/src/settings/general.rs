@@ -30,7 +30,10 @@ const NO_PRESETS: &str = "— no presets —";
 
 /// Combo items for the export presets (`name · Built-in` first).
 pub fn export_preset_items(store: &ExportPresetStore) -> Vec<(String, String)> {
-    let mut all = store.all().unwrap_or_default();
+    preset_items(store.all().unwrap_or_default())
+}
+
+fn preset_items(mut all: Vec<ExportPreset>) -> Vec<(String, String)> {
     all.sort_by_key(|p| !p.built_in);
     all.iter()
         .map(|p| {
@@ -64,10 +67,13 @@ pub fn export_preset_detail(p: &ExportPreset) -> String {
 }
 
 /// Settings preset names, or the placeholder.
-pub fn settings_preset_names(state: &AppState) -> Vec<String> {
-    let names = PresetsStore::new(&state.paths)
-        .list_names()
-        .unwrap_or_default();
+pub fn settings_preset_names(state: &mut AppState) -> Vec<String> {
+    let store = PresetsStore::new(&state.paths);
+    let names = state
+        .settings_presets_memo
+        .get(&state.paths.presets_file(), || {
+            store.list_names().unwrap_or_default()
+        });
     if names.is_empty() {
         vec![NO_PRESETS.to_owned()]
     } else {
@@ -321,7 +327,12 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
 fn export_presets_widget(ui: &mut Ui, state: &mut AppState, w: f32) {
     let t = state.tokens.clone();
     let store = ExportPresetStore::new(&state.paths);
-    let items = export_preset_items(&store);
+    let all = state
+        .export_presets_memo
+        .get(&state.paths.export_presets_file(), || {
+            store.all().unwrap_or_default()
+        });
+    let items = preset_items(all.clone());
     let selected_id = state.export_preset_selected.clone();
     let sel = items
         .iter()
@@ -329,7 +340,7 @@ fn export_presets_widget(ui: &mut Ui, state: &mut AppState, w: f32) {
         .unwrap_or(0);
     let selected: Option<ExportPreset> = items
         .get(sel)
-        .and_then(|(_, id)| store.get(id).ok().flatten());
+        .and_then(|(_, id)| all.iter().find(|p| p.preset_id == *id).cloned());
     let built_in = selected.as_ref().map(|p| p.built_in).unwrap_or(true);
     // Row: combo (stretch) + New (primary) + Edit + Delete (outline), spacing 8.
     let labels = ["New", "Edit", "Delete"];

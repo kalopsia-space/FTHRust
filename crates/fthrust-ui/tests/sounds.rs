@@ -100,3 +100,41 @@ fn customize_preview_plays_through_the_services() {
     );
     assert!(s.sound_preview_requested.is_none());
 }
+
+/// Review of the audit fixes: a cue asked for before PipeWire opened (the
+/// startup cue on a slow session) plays once it does.
+#[test]
+fn a_cue_waits_for_the_stream_to_open() {
+    use fthrust_ui::services::sounds::LazySink;
+    let lazy = LazySink::default();
+    let pcm = Arc::new(Pcm {
+        rate: 48_000,
+        channels: 2,
+        samples: vec![0.0; 8],
+    });
+    lazy.play(pcm.clone(), 0.5);
+    let sink = Arc::new(FakeSink {
+        played: Mutex::new(Vec::new()),
+    });
+    lazy.open(sink.clone());
+    assert_eq!(*sink.played.lock().unwrap(), vec![(8, 0.5)]);
+    // Once open, cues go straight through; a stop before opening drops
+    // the waiting cue.
+    lazy.play(pcm, 1.0);
+    assert_eq!(sink.played.lock().unwrap().len(), 2);
+    let other = LazySink::default();
+    other.play(
+        Arc::new(Pcm {
+            rate: 48_000,
+            channels: 2,
+            samples: vec![0.0; 4],
+        }),
+        1.0,
+    );
+    other.stop();
+    let sink2 = Arc::new(FakeSink {
+        played: Mutex::new(Vec::new()),
+    });
+    other.open(sink2.clone());
+    assert!(sink2.played.lock().unwrap().is_empty());
+}

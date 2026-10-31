@@ -22,10 +22,20 @@ pub struct Connection {
     pub closed: watch::Receiver<bool>,
 }
 
-/// The engine's listening socket. Dropping it removes the socket file.
+/// The engine's listening socket. Dropping it removes the socket file,
+/// unless another engine has since bound the same path.
 pub struct EngineServer {
     listener: UnixListener,
     path: PathBuf,
+    /// The socket file's `(dev, ino)` as bound.
+    identity: Option<(u64, u64)>,
+}
+
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
 }
 
 impl EngineServer {
@@ -53,6 +63,7 @@ impl EngineServer {
         Ok(EngineServer {
             listener,
             path: path.to_path_buf(),
+            identity: file_identity(path),
         })
     }
 
@@ -70,7 +81,10 @@ impl EngineServer {
 
 impl Drop for EngineServer {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        // Removing by path alone would take a newer engine's socket with it.
+        if self.identity.is_some() && file_identity(&self.path) == self.identity {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 

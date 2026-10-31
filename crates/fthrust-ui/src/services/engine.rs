@@ -36,6 +36,20 @@ pub const SILENCE_S: f64 = 3.0;
 pub const RESTART_GAP_S: f64 = 1.0;
 /// Retry a deferred restart this often while a save runs.
 pub const RESTART_DEFER_S: f64 = 0.5;
+/// A crashed or hung engine is restarted after this long...
+pub const AUTO_RESTART_DELAY_S: f64 = 2.0;
+/// ...at most this many times...
+pub const AUTO_RESTART_LIMIT: usize = 3;
+/// ...within this window; after that it stays stopped until the user
+/// restarts it.
+pub const AUTO_RESTART_WINDOW_S: f64 = 600.0;
+/// A connected engine silent this long is taken as hung and restarted.
+pub const HANG_RESTART_S: f64 = 15.0;
+/// How long a graceful stop waits for the engine to exit before SIGTERM.
+pub const KILL_GRACE_S: f64 = 2.0;
+/// The same with a clip save in flight: the engine finishes the save first
+/// (it waits up to 60 s for it), so it gets that long plus a margin.
+pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +58,11 @@ pub enum Input {
     Start(EngineConfig),
     /// Stop the engine.
     Stop,
+    /// The app is quitting: no more restarts, but the engine keeps running
+    /// for the shutdown steps that still need it (stopping a recording).
+    /// A logout signals the engine too, and its exit must not be answered
+    /// with a fresh engine mid-quit.
+    Quitting,
     /// Restart with a new configuration.
     Restart {
         /// The configuration.
@@ -126,6 +145,8 @@ pub enum Effect {
     Kill {
         /// Ask nicely first.
         graceful: bool,
+        /// Seconds to wait for a graceful exit before SIGTERM.
+        grace_s: f64,
     },
     /// Spawn again after this many seconds.
     StartAfter(f64),
@@ -159,6 +180,13 @@ pub struct Supervisor {
     restart_at: Option<f64>,
     defer_restart_until: Option<f64>,
     deferred_restart: Option<(EngineConfig, bool, bool)>,
+    /// A restart asked for after the running one already configured its
+    /// process; it runs once that apply settles.
+    queued_restart: Option<(EngineConfig, bool, bool)>,
+    /// When the engine was last restarted on its own (crash or hang).
+    auto_restarts: Vec<f64>,
+    /// The app is quitting: nothing starts the engine again.
+    final_stop: bool,
     applying: bool,
     apply_deadline: Option<f64>,
     last_event_at: f64,
@@ -200,6 +228,9 @@ impl Supervisor {
             restart_at: None,
             defer_restart_until: None,
             deferred_restart: None,
+            queued_restart: None,
+            auto_restarts: Vec::new(),
+            final_stop: false,
             applying: false,
             apply_deadline: None,
             last_event_at: 0.0,
@@ -220,6 +251,11 @@ impl Supervisor {
     /// The save service reports whether a save is in flight.
     pub fn set_save_busy(&mut self, busy: bool) {
         self.save_busy = busy;
+    }
+
+    /// Whether a clip save is in flight.
+    pub fn save_busy(&self) -> bool {
+        self.save_busy
     }
 
     /// The recording service reports whether a recording is not idle.
@@ -334,6 +370,9 @@ impl Supervisor {
     }
 
     fn begin_start(&mut self, config: EngineConfig, out: &mut Vec<Effect>, now: f64) {
+        if self.final_stop {
+            return;
+        }
         self.generation += 1;
         self.process_generation = Some(self.generation);
         self.exit_code = None;
@@ -351,6 +390,30 @@ impl Supervisor {
             self.status(out, "CONNECTING", StatusStyle::Idle);
         }
         out.push(Effect::Spawn);
+    }
+
+    /// Nothing starts the engine again: every armed restart is dropped.
+    fn no_more_starts(&mut self, out: &mut Vec<Effect>) {
+        self.final_stop = true;
+        self.restart_at = None;
+        self.defer_restart_until = None;
+        self.deferred_restart = None;
+        self.queued_restart = None;
+        self.finish_apply(out);
+    }
+
+    /// Enters `Stopping` and asks the driver to stop the process. Saves and
+    /// recordings asked for from here on would reach an engine that is
+    /// going away, so the pages learn at once that it is gone (they used to
+    /// admit a save, show its success card, then fail it).
+    fn begin_stop(&mut self, out: &mut Vec<Effect>, graceful: bool, grace_s: f64) {
+        let was_connected = self.is_connected();
+        self.phase = Phase::Stopping;
+        self.generation += 1;
+        out.push(Effect::Kill { graceful, grace_s });
+        if was_connected {
+            out.push(Effect::Ui(Event::EngineConnected(false)));
+        }
     }
 
     fn finish_apply(&mut self, out: &mut Vec<Effect>) {
@@ -372,6 +435,9 @@ impl Supervisor {
         self.snapshot = Some(self.health.observe(false, 0, 0, 0, now));
         self.status(out, "ENGINE STOPPED", StatusStyle::Warning);
         out.push(Effect::Ui(Event::EngineConnected(false)));
+        out.push(Effect::Ui(Event::Health(
+            self.health.observe(false, 0, 0, 0, now),
+        )));
         self.error(
             out,
             "ENGINE STOPPED",
@@ -382,6 +448,53 @@ impl Supervisor {
             false,
             Some((RecoveryKind::EngineLineage, "Error 006")),
         );
+        self.schedule_auto_restart(out, now);
+    }
+
+    /// The reference left a crashed engine stopped until the user pressed
+    /// RESTART ENGINE, so capture silently ended mid-game. It now comes back
+    /// on its own a few times; the error bar still says what happened.
+    fn schedule_auto_restart(&mut self, out: &mut Vec<Effect>, now: f64) {
+        if !self.auto_restart_allowed(now) {
+            return;
+        }
+        self.auto_restarts.push(now);
+        self.restart_at = Some(now + AUTO_RESTART_DELAY_S);
+        out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
+    }
+
+    /// Whether an automatic restart is still in the budget.
+    fn auto_restart_allowed(&mut self, now: f64) -> bool {
+        self.auto_restarts
+            .retain(|t| now - t < AUTO_RESTART_WINDOW_S);
+        !self.final_stop && self.config.is_some() && self.auto_restarts.len() < AUTO_RESTART_LIMIT
+    }
+
+    /// When the supervisor next has something to do on its own (a timer);
+    /// `None` when only inputs can change anything.
+    pub fn next_deadline(&self) -> Option<f64> {
+        let mut at: Vec<f64> = Vec::new();
+        // A restart waits for the old process to be gone: due while it is
+        // still stopping, it must not make the loop spin.
+        if self.phase == Phase::Stopped {
+            at.extend(self.restart_at);
+        }
+        at.extend(self.defer_restart_until);
+        at.extend(self.apply_deadline);
+        if let Phase::Connecting { since } = self.phase {
+            at.push(since + HANDSHAKE_S);
+        }
+        if self.is_connected() {
+            at.push(
+                self.last_event_at
+                    + if self.silence_reported {
+                        HANG_RESTART_S
+                    } else {
+                        SILENCE_S
+                    },
+            );
+        }
+        at.into_iter().reduce(f64::min)
     }
 
     /// Feeds one input; returns the effects.
@@ -393,11 +506,19 @@ impl Supervisor {
                     self.begin_start(config, &mut out, now);
                 }
             }
+            Input::Quitting => self.no_more_starts(&mut out),
             Input::Stop => {
+                // Quitting: nothing may start the engine again (an armed
+                // restart used to spawn a new engine after the stop).
+                self.no_more_starts(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
-                    self.phase = Phase::Stopping;
-                    self.generation += 1;
-                    out.push(Effect::Kill { graceful: true });
+                    // Quitting mid-save: let the engine finish the clip.
+                    let grace_s = if self.save_busy {
+                        SAVE_EXIT_GRACE_S
+                    } else {
+                        KILL_GRACE_S
+                    };
+                    self.begin_stop(&mut out, true, grace_s);
                 }
             }
             Input::Restart {
@@ -405,6 +526,9 @@ impl Supervisor {
                 allow_recording_prepare,
                 explicit,
             } => {
+                if self.final_stop {
+                    return out;
+                }
                 if self.recording && !(allow_recording_prepare && self.recording_preparing) {
                     self.error(
                         &mut out,
@@ -424,13 +548,30 @@ impl Supervisor {
                 self.applying = true;
                 if self.save_busy {
                     self.status(&mut out, self.pending_text(), StatusStyle::Idle);
+                    // The newest settings win; an explicit ask stays explicit.
+                    let explicit = explicit || self.deferred_restart.as_ref().is_some_and(|d| d.2);
                     if self.deferred_restart.is_none() {
-                        self.deferred_restart = Some((config, allow_recording_prepare, explicit));
                         self.defer_restart_until = Some(now + RESTART_DEFER_S);
                     }
+                    self.deferred_restart = Some((config, allow_recording_prepare, explicit));
                     return out;
                 }
                 if self.restart_pending {
+                    // A restart is under way. Until the new process has been
+                    // configured, it simply starts with the newest settings;
+                    // after that, they need one more restart once this one
+                    // settles (both used to be dropped).
+                    if self.pending_launch.is_some() {
+                        let explicit =
+                            explicit || self.queued_restart.as_ref().is_some_and(|q| q.2);
+                        self.queued_restart = Some((config, allow_recording_prepare, explicit));
+                    } else {
+                        // The tracker must hold what Configure will send, or
+                        // the old settings are reported as active.
+                        self.tracker.request(config.capture.clone());
+                        let _ = self.tracker.begin_apply();
+                        self.config = Some(config);
+                    }
                     return out;
                 }
                 self.restart_pending = true;
@@ -443,9 +584,7 @@ impl Supervisor {
                         out.push(Effect::StartAfter(RESTART_GAP_S));
                     }
                     _ => {
-                        self.phase = Phase::Stopping;
-                        self.generation += 1;
-                        out.push(Effect::Kill { graceful: true });
+                        self.begin_stop(&mut out, true, KILL_GRACE_S);
                         self.restart_at = Some(now + RESTART_GAP_S);
                         out.push(Effect::StartAfter(RESTART_GAP_S));
                     }
@@ -469,6 +608,15 @@ impl Supervisor {
                     self.phase = Phase::Connecting { since: now };
                     self.last_event_at = now;
                     out.push(Effect::Connect);
+                } else if matches!(self.phase, Phase::Stopping | Phase::Stopped) {
+                    // A stop arrived while the process was still being
+                    // spawned: the kill found no child then, so the process
+                    // that just appeared would run unseen.
+                    self.phase = Phase::Stopping;
+                    out.push(Effect::Kill {
+                        graceful: false,
+                        grace_s: 0.0,
+                    });
                 }
             }
             Input::SpawnFailed { detail, missing } => {
@@ -553,9 +701,7 @@ impl Supervisor {
                     Some((RecoveryKind::EngineLineage, public)),
                 );
                 if !matches!(self.phase, Phase::Stopped) {
-                    self.phase = Phase::Stopping;
-                    self.generation += 1;
-                    out.push(Effect::Kill { graceful: true });
+                    self.begin_stop(&mut out, true, KILL_GRACE_S);
                 }
             }
             Input::Configured { warnings } => {
@@ -715,6 +861,19 @@ impl Supervisor {
                 out.append(&mut more);
             }
         }
+        if !self.restart_pending
+            && let Some((config, allow, explicit)) = self.queued_restart.take()
+        {
+            let mut more = self.handle(
+                Input::Restart {
+                    config,
+                    allow_recording_prepare: allow,
+                    explicit,
+                },
+                now,
+            );
+            out.append(&mut more);
+        }
         if let Phase::Connecting { since } = self.phase
             && now - since >= HANDSHAKE_S
         {
@@ -729,7 +888,10 @@ impl Supervisor {
             let mut more = self.handle(Input::StartupError { code, detail }, now);
             out.append(&mut more);
             if !out.iter().any(|e| matches!(e, Effect::Kill { .. })) {
-                out.push(Effect::Kill { graceful: false });
+                out.push(Effect::Kill {
+                    graceful: false,
+                    grace_s: KILL_GRACE_S,
+                });
             }
         }
         if let Some(deadline) = self.apply_deadline
@@ -752,9 +914,32 @@ impl Supervisor {
         }
         if self.is_connected() && now - self.last_event_at >= SILENCE_S && !self.silence_reported {
             self.silence_reported = true;
-            self.snapshot = Some(self.health.observe(false, 0, 0, 0, now));
+            let snapshot = self.health.observe(false, 0, 0, 0, now);
+            self.snapshot = Some(snapshot.clone());
+            // Save admission reads the health the UI was last sent: without
+            // this, saves were still admitted to a silent engine.
+            out.push(Effect::Ui(Event::Health(snapshot)));
             self.status(&mut out, "DISCONNECTED", StatusStyle::Warning);
             self.advance_incidents(&mut out, false, 0, HealthState::Stopped, now);
+        }
+        if self.is_connected()
+            && self.silence_reported
+            && now - self.last_event_at >= HANG_RESTART_S
+        {
+            tracing::warn!("engine silent for {HANG_RESTART_S} s; stopping it");
+            let detail = if self.auto_restart_allowed(now) {
+                "The capture engine stopped answering; it is being restarted."
+            } else {
+                "The capture engine stopped answering and was stopped. Clips cannot be saved until it is restarted."
+            };
+            self.engine_gone(&mut out, detail.into(), now);
+            // engine_gone marked it stopped; the process is still there.
+            self.phase = Phase::Stopping;
+            self.generation += 1;
+            out.push(Effect::Kill {
+                graceful: false,
+                grace_s: KILL_GRACE_S,
+            });
         }
         out
     }
@@ -853,10 +1038,8 @@ pub fn discover_engine(exe_dir: Option<&Path>) -> Option<PathBuf> {
 /// connects, forwards IPC events and executes effects.
 pub struct EngineDriver {
     inputs: Sender<Input>,
-    child: Arc<Mutex<Option<tokio::process::Child>>>,
     pid: Arc<Mutex<Option<u32>>>,
     supervisor: Arc<Mutex<Supervisor>>,
-    handle: tokio::runtime::Handle,
 }
 
 struct DriverCtx {
@@ -906,7 +1089,16 @@ impl EngineDriver {
             .name("fthrust-engine-supervisor".into())
             .spawn(move || {
                 loop {
-                    let input = match rx.recv_timeout(Duration::from_millis(100)) {
+                    // Sleep until the next timer (at most a second), not a
+                    // fixed 100 ms: an idle supervisor used to wake 10 times
+                    // a second for as long as the app ran.
+                    let now = ctx.start_epoch.elapsed().as_secs_f64();
+                    let wait = sv
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.next_deadline())
+                        .map_or(1.0, |at| (at - now).clamp(0.01, 1.0));
+                    let input = match rx.recv_timeout(Duration::from_secs_f64(wait)) {
                         Ok(i) => i,
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Input::Tick,
                         Err(_) => break,
@@ -924,10 +1116,8 @@ impl EngineDriver {
             .expect("spawn engine supervisor");
         EngineDriver {
             inputs: tx,
-            child,
             pid,
             supervisor,
-            handle,
         }
     }
 
@@ -951,25 +1141,49 @@ impl EngineDriver {
         }
     }
 
-    /// Stops the engine and the driver.
+    /// Stops the engine and waits until its process is gone. The stop
+    /// itself (a graceful `Shutdown`, SIGTERM, then SIGKILL) runs in the
+    /// supervisor's kill task; waiting here keeps the runtime alive until
+    /// it is done, so a save in flight is finished rather than cut off by
+    /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
+        let save_busy = self
+            .supervisor
+            .lock()
+            .map(|s| s.save_busy())
+            .unwrap_or(false);
         let _ = self.inputs.send(Input::Stop);
-        let child = self.child.clone();
-        let handle = self.handle.clone();
-        std::thread::sleep(Duration::from_millis(200));
-        handle.block_on(async move {
-            let taken = child.lock().ok().and_then(|mut c| c.take());
-            if let Some(mut c) = taken {
-                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
-                let _ = c.start_kill();
-                let _ = tokio::time::timeout(Duration::from_millis(500), c.wait()).await;
-            }
-        });
+        // The kill task's own bound: the graceful wait it was given, then
+        // 1 s after SIGTERM and 0.5 s after SIGKILL, plus some slack.
+        let grace = if save_busy {
+            SAVE_EXIT_GRACE_S
+        } else {
+            KILL_GRACE_S
+        };
+        let deadline = Instant::now() + Duration::from_secs_f64(grace + 3.0);
+        // The supervisor picks the Stop up within one loop turn; give it
+        // that long before trusting "no process" to mean "already gone".
+        std::thread::sleep(Duration::from_millis(150));
+        while self.process_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if self.process_running() {
+            tracing::warn!("engine still running after the shutdown wait; killing it");
+            self.kill_process();
+        }
+    }
+
+    /// Whether an engine process is still running.
+    pub fn process_running(&self) -> bool {
+        self.pid.lock().map(|p| p.is_some()).unwrap_or(false)
     }
 }
 
 fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
     match effect {
+        // Health arrives about once a second for as long as the app runs and
+        // changes nothing on screen by itself.
+        Effect::Ui(ev @ Event::Health(_)) => ctx.outbox.send_quiet(ev),
         Effect::Ui(ev) => ctx.outbox.send(ev),
         Effect::Spawn => spawn_engine(ctx),
         Effect::Connect => connect_engine(ctx),
@@ -979,7 +1193,7 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
                 tracing::warn!("engine command dropped: not connected");
             }
         }
-        Effect::Kill { graceful } => kill_engine(ctx, graceful),
+        Effect::Kill { graceful, grace_s } => kill_engine(ctx, graceful, grace_s),
         Effect::StartAfter(_) => {}
     }
 }
@@ -987,11 +1201,15 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
 fn spawn_engine(ctx: &Arc<DriverCtx>) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
-        let _ = std::fs::remove_file(&c.socket);
+        retire_stale_engine_shown(&c.socket, &c.outbox).await;
         if let Some(parent) = c.socket.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let mut cmd = tokio::process::Command::new(&c.engine);
+        // Its own process group: Ctrl+C or a hangup in the terminal the app
+        // was started from goes to the app, which stops the engine in order.
+        // If the app dies, the engine still sees its stdin close and exits.
+        cmd.process_group(0);
         cmd.arg("--socket")
             .arg(&c.socket)
             .stdin(std::process::Stdio::piped())
@@ -1008,7 +1226,6 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                     let inputs = c.inputs.clone();
                     let log = c.log.clone();
                     c.handle.spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
                         let mut writer = fthrust_core::diagnostics::logging::RotatingWriter::open(
                             &log,
                             2 * 1024 * 1024,
@@ -1016,19 +1233,15 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                             false,
                         )
                         .ok();
-                        let mut lines = tokio::io::BufReader::new(stderr).lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
+                        pump_stderr(stderr, |line| {
                             if let Some(w) = writer.as_mut() {
-                                let _ = w.write_line(&line);
+                                let _ = w.write_line(line);
                             }
-                            if let Some(rest) = line.strip_prefix("FTHR_STARTUP_ERROR: ") {
-                                let (code, detail) = rest.split_once(": ").unwrap_or((rest, ""));
-                                let _ = inputs.send(Input::StartupError {
-                                    code: code.trim().to_owned(),
-                                    detail: detail.trim().chars().take(1000).collect(),
-                                });
+                            if let Some(input) = startup_error_line(line) {
+                                let _ = inputs.send(input);
                             }
-                        }
+                        })
+                        .await;
                     });
                 }
                 if let Ok(mut p) = c.pid.lock() {
@@ -1043,7 +1256,7 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                 let watcher = c.clone();
                 c.handle.spawn(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        tokio::time::sleep(Duration::from_millis(250)).await;
                         let status = {
                             let Ok(mut slot) = watcher.child.lock() else {
                                 break;
@@ -1127,6 +1340,12 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                             IpcEvent::Configured { warnings } => Input::Configured { warnings },
                                             IpcEvent::Status(s) => Input::Status(*s),
                                             IpcEvent::Heartbeat => Input::Heartbeat,
+                                            // Hundreds per save, and nothing
+                                            // on screen follows them.
+                                            p @ IpcEvent::SaveProgress { .. } => {
+                                                outbox.send_quiet(Event::Engine(p));
+                                                continue;
+                                            }
                                             other => {
                                                 outbox.send(Event::Engine(other));
                                                 continue;
@@ -1161,6 +1380,123 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
     });
 }
 
+/// How long an engine left over from an earlier session gets to let go of
+/// the socket: the engine's own wait for a save in flight, plus a margin.
+pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(65);
+
+/// An engine left over from an earlier session (the UI died mid-save, say)
+/// may still own the socket. The UI used to unlink the socket and start a
+/// second engine beside it, both capturing. Now it asks the old one to
+/// stop if it still serves clients, then waits until the socket refuses
+/// connections or the process is gone (an engine finishing a save no
+/// longer accepts clients, so it gets the time its save needs), and only
+/// then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
+/// peer credentials, which a connection still waiting in the backlog has
+/// too. A socket file nobody listens on is left for the new engine, which
+/// replaces it.
+pub async fn retire_stale_engine(socket: &Path) {
+    retire_stale_engine_within(socket, STALE_ENGINE_EXIT).await;
+}
+
+/// [`retire_stale_engine`], showing a status while it waits (it can take
+/// a minute when the old engine is finishing a save).
+async fn retire_stale_engine_shown(socket: &Path, outbox: &Outbox) {
+    let probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(socket),
+    );
+    if !matches!(probe.await, Ok(Ok(_))) {
+        return;
+    }
+    outbox.send(Event::Status {
+        text: "WAITING FOR THE PREVIOUS ENGINE".into(),
+        style: StatusStyle::Idle,
+    });
+    retire_stale_engine(socket).await;
+}
+
+/// [`retire_stale_engine`] with the wait bound given (tests).
+pub async fn retire_stale_engine_within(socket: &Path, bound: Duration) {
+    let connect = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(socket),
+    );
+    let Ok(Ok(probe)) = connect.await else {
+        return;
+    };
+    let pid = probe
+        .peer_cred()
+        .ok()
+        .and_then(|c| c.pid())
+        .filter(|p| *p > 0 && *p as u32 != std::process::id());
+    drop(probe);
+    tracing::warn!(
+        ?pid,
+        "an engine from an earlier session still owns the socket; stopping it"
+    );
+    let hello = tokio::time::timeout(Duration::from_secs(1), EngineClient::connect(socket));
+    if let Ok(Ok(client)) = hello.await {
+        let _ = client.send(Command::Shutdown).await;
+    }
+    let alive = |pid: Option<i32>| {
+        pid.is_none_or(|p| nix::sys::signal::kill(nix::unistd::Pid::from_raw(p), None).is_ok())
+    };
+    let let_go = tokio::time::timeout(bound, async {
+        loop {
+            if !alive(pid) || tokio::net::UnixStream::connect(socket).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let Some(pid) = pid.filter(|_| !let_go) else {
+        return;
+    };
+    let target = nix::unistd::Pid::from_raw(pid);
+    let _ = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM);
+    let gone = tokio::time::timeout(Duration::from_secs(2), async {
+        while alive(Some(pid)) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .is_ok();
+    if !gone {
+        let _ = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGKILL);
+    }
+}
+
+/// Reads the engine's stderr to the end, a line at a time. Bytes that are
+/// not UTF-8 are replaced rather than ending the read: a reader that stopped
+/// closed the pipe, and the engine's next `eprintln!` then died on EPIPE.
+pub async fn pump_stderr(stderr: impl tokio::io::AsyncRead + Unpin, mut on_line: impl FnMut(&str)) {
+    use tokio::io::AsyncBufReadExt;
+    let mut reader = tokio::io::BufReader::new(stderr);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                on_line(line.trim_end_matches(['\n', '\r']));
+            }
+        }
+    }
+}
+
+/// An `FTHR_STARTUP_ERROR: CODE: detail` line as a supervisor input.
+pub fn startup_error_line(line: &str) -> Option<Input> {
+    let rest = line.strip_prefix("FTHR_STARTUP_ERROR: ")?;
+    let (code, detail) = rest.split_once(": ").unwrap_or((rest, ""));
+    Some(Input::StartupError {
+        code: code.trim().to_owned(),
+        detail: detail.trim().chars().take(1000).collect(),
+    })
+}
+
 /// Queues `cmd` for the connected client; `false` when not connected.
 fn queue_command(ctx: &Arc<DriverCtx>, cmd: Command) -> bool {
     ctx.commands
@@ -1170,7 +1506,7 @@ fn queue_command(ctx: &Arc<DriverCtx>, cmd: Command) -> bool {
         .unwrap_or(false)
 }
 
-fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
+fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool, grace_s: f64) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
         if graceful {
@@ -1181,10 +1517,8 @@ fn kill_engine(ctx: &Arc<DriverCtx>, graceful: bool) {
             return;
         };
         let pid = child.id();
-        let mut done = graceful
-            && tokio::time::timeout(Duration::from_secs(2), child.wait())
-                .await
-                .is_ok();
+        let grace = Duration::from_secs_f64(grace_s.max(0.0));
+        let mut done = graceful && tokio::time::timeout(grace, child.wait()).await.is_ok();
         if !done && let Some(pid) = pid {
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid as i32),

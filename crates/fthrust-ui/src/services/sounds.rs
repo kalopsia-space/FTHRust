@@ -91,6 +91,53 @@ pub trait Sink: Send + Sync {
     fn stop(&self);
 }
 
+/// Plays through the PipeWire sink once it has opened. The newest cue
+/// asked for before then (the startup cue, typically) plays when it opens.
+#[derive(Default)]
+pub struct LazySink {
+    inner: std::sync::OnceLock<Arc<dyn Sink>>,
+    pending: Mutex<Option<(Arc<Pcm>, f32)>>,
+}
+
+impl LazySink {
+    /// Takes the opened sink and plays the cue that was waiting for it.
+    pub fn open(&self, sink: Arc<dyn Sink>) {
+        let sink = self.inner.get_or_init(|| sink);
+        let waiting = self.pending.lock().ok().and_then(|mut p| p.take());
+        if let Some((pcm, gain)) = waiting {
+            sink.play(pcm, gain);
+        }
+    }
+}
+
+impl Sink for LazySink {
+    fn play(&self, pcm: Arc<Pcm>, gain: f32) {
+        match self.inner.get() {
+            Some(s) => s.play(pcm, gain),
+            None => {
+                if let Ok(mut p) = self.pending.lock() {
+                    *p = Some((pcm, gain));
+                }
+                // The sink may have opened in between.
+                if let Some(s) = self.inner.get()
+                    && let Some((pcm, gain)) = self.pending.lock().ok().and_then(|mut p| p.take())
+                {
+                    s.play(pcm, gain);
+                }
+            }
+        }
+    }
+
+    fn stop(&self) {
+        if let Ok(mut p) = self.pending.lock() {
+            *p = None;
+        }
+        if let Some(s) = self.inner.get() {
+            s.stop();
+        }
+    }
+}
+
 /// A sink that drops everything (PipeWire unavailable).
 pub struct NullSink;
 
@@ -119,16 +166,22 @@ impl SoundPlayer {
         }
     }
 
-    /// A player over PipeWire (or a silent one when PipeWire is unavailable).
+    /// A player over PipeWire (silent while PipeWire is unavailable). The
+    /// stream opens on its own thread: opening it here blocked the UI thread
+    /// for up to 5 s at startup when PipeWire was slow.
     pub fn start(assets: PathBuf) -> Self {
-        let sink: Arc<dyn Sink> = match pipewire_sink::PipeWireSink::start() {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                tracing::warn!(error = %e, "notification sounds unavailable");
-                Arc::new(NullSink)
-            }
-        };
-        Self::with_sink(sink, assets)
+        let lazy = Arc::new(LazySink::default());
+        let slot = lazy.clone();
+        let spawned = std::thread::Builder::new()
+            .name("fthrust-sound-start".into())
+            .spawn(move || match pipewire_sink::PipeWireSink::start() {
+                Ok(s) => slot.open(Arc::new(s)),
+                Err(e) => tracing::warn!(error = %e, "notification sounds unavailable"),
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "notification sounds unavailable");
+        }
+        Self::with_sink(lazy, assets)
     }
 
     fn decode(&self, path: &Path) -> Option<Arc<Pcm>> {
@@ -261,7 +314,11 @@ mod pipewire_sink {
                     thread: Some(thread),
                 }),
                 Ok(Err(e)) => Err(e),
-                Err(_) => Err("PipeWire did not answer".into()),
+                Err(_) => {
+                    // Don't leave the stream thread behind if it connects late.
+                    let _ = tx.send(Msg::Quit);
+                    Err("PipeWire did not answer".into())
+                }
             }
         }
     }

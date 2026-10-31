@@ -239,18 +239,21 @@ fn export_presets_list_builtins_first_and_describe() {
 fn settings_presets_save_load_delete_roundtrip() {
     let (_tmp, mut s) = state(serde_json::json!({"clip_length": 45, "framerate": 120}));
     assert_eq!(
-        general::settings_preset_names(&s),
+        general::settings_preset_names(&mut s),
         vec!["— no presets —".to_owned()]
     );
     general::save_settings_preset(&mut s, "Fast");
-    assert_eq!(general::settings_preset_names(&s), vec!["Fast".to_owned()]);
+    assert_eq!(
+        general::settings_preset_names(&mut s),
+        vec!["Fast".to_owned()]
+    );
     s.set_setting("clip_length", serde_json::json!(15));
     assert!(general::load_settings_preset(&mut s, "Fast"));
     assert_eq!(s.settings.get_i64("clip_length"), Some(45));
     assert!(s.restart_pending);
     assert!(general::delete_settings_preset(&mut s, "Fast"));
     assert_eq!(
-        general::settings_preset_names(&s),
+        general::settings_preset_names(&mut s),
         vec!["— no presets —".to_owned()]
     );
 }
@@ -305,4 +308,60 @@ fn clip_tab_writes_settings() {
         "row #1 is the first folder"
     );
     let _ = settings::CONTENT_INSET;
+}
+
+/// Audit 2026-10-31 tier 1 #12: USE DEFAULT commits the default folder
+/// (it used to remove the key, so saves failed until a restart and the
+/// legacy migration then picked `~/FTHR_Clips`).
+#[test]
+fn use_default_commits_the_default_clips_folder() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let custom = s.paths.root().join("elsewhere");
+    s.settings.set(
+        "clips_directory",
+        serde_json::json!(custom.to_string_lossy()),
+    );
+    s.settings.set(
+        "recording_directory",
+        serde_json::json!(custom.join("Recordings").to_string_lossy()),
+    );
+    settings::clip::use_default_clips_directory(&mut s);
+    let default = s.paths.default_clips_directory();
+    assert_eq!(s.settings.clips_directory().unwrap(), default);
+    assert_eq!(
+        s.settings.recording_directory().unwrap(),
+        default.join("Recordings"),
+        "a derived recording folder follows"
+    );
+    assert!(s.clips_directory_changed);
+    assert!(default.is_dir());
+    // It is on disk, so the next start keeps it.
+    let reloaded = AppState::load(s.paths.clone()).unwrap();
+    assert_eq!(reloaded.settings.clips_directory().unwrap(), default);
+}
+
+/// Audit 2026-10-31: a dragged slider writes settings.json once it settles,
+/// not once per step.
+#[test]
+fn dragged_values_are_saved_once_they_settle() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let file = s.paths.settings_file();
+    let on_disk = |f: &std::path::Path| {
+        std::fs::read_to_string(f)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("mic_volume").and_then(serde_json::Value::as_i64))
+    };
+    for v in [101, 120, 150] {
+        s.set_setting_live("mic_volume", serde_json::json!(v));
+        s.flush_saves(false);
+    }
+    assert_eq!(s.settings.get_i64("mic_volume"), Some(150));
+    assert_ne!(on_disk(&file), Some(150), "not written mid-drag");
+    std::thread::sleep(fthrust_ui::state::SAVE_SETTLE + std::time::Duration::from_millis(50));
+    s.flush_saves(false);
+    assert_eq!(on_disk(&file), Some(150), "written once settled");
+    s.set_setting_live("mic_volume", serde_json::json!(80));
+    s.flush_saves(true);
+    assert_eq!(on_disk(&file), Some(80), "exit writes whatever is pending");
 }
