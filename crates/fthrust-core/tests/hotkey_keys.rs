@@ -10,7 +10,8 @@
 //! (`exclam`...) that only matches when it is typed without Shift. The popup
 //! records it as the key it sits on when Shift is held
 //! ([`unshifted_key_name`]), and the writers and the portal trigger bind a
-//! chord stored the old way (`Ctrl+Shift+Exclamationmark`) on that key too.
+//! chord stored the old way (`Ctrl+Shift+Exclamationmark`, or the Qt app's
+//! `Ctrl+Shift+!`) on that key too.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -455,8 +456,69 @@ fn a_chord_stored_with_the_shifted_symbol_is_bound_on_its_base_key() {
 }
 
 #[test]
+fn a_qt_style_chord_with_the_symbol_itself_is_bound_on_its_base_key() {
+    // The Qt app wrote the character to hotkeys.json (`Ctrl+Shift+!`), and
+    // normalising keeps it. Its keysym (`exclam`) never fires on Hyprland.
+    for (symbol, egui_name, base_name, base_sym) in [
+        ("!", "Exclamationmark", "1", "1"),
+        ("?", "Questionmark", "Slash", "slash"),
+        (":", "Colon", "Semicolon", "semicolon"),
+        ("|", "Pipe", "Backslash", "backslash"),
+        ("{", "OpenCurlyBracket", "OpenBracket", "bracketleft"),
+        ("}", "CloseCurlyBracket", "CloseBracket", "bracketright"),
+    ] {
+        let mut b = HotkeyBindings::defaults();
+        b.set_keyboard("save_clip", &format!("Ctrl+Shift+{symbol}"));
+        let stored = b.get("save_clip").unwrap().to_owned();
+        assert_eq!(stored, format!("Ctrl+Shift+{symbol}"), "kept as written");
+        let hypr = hyprland_spelling(base_sym);
+
+        assert_eq!(
+            to_hyprland_bind(&stored),
+            ("CTRL SHIFT".to_owned(), hypr.clone()),
+            "{symbol}"
+        );
+        assert_eq!(
+            bind_line("save_clip", &stored, Path::new(EXE), Path::new(SOCK)),
+            format!("bind = CTRL SHIFT, {hypr}, exec, \"{EXE}\" --hotkey save_clip"),
+            "{symbol}"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let lua_path = dir.path().join("keybinds.lua");
+        write_lua_block(&lua_path, &b, Path::new(EXE), Path::new(SOCK)).unwrap();
+        let lua = std::fs::read_to_string(&lua_path).unwrap();
+        let lua_bind = format!("hl.bind(\"CTRL + SHIFT + {hypr}\", ");
+        assert!(
+            lua.lines()
+                .any(|l| l.starts_with(&lua_bind) && l.contains("save_clip")),
+            "{symbol} in the Lua file: {lua}"
+        );
+        assert_eq!(
+            to_portal_trigger(&stored),
+            format!("CTRL+SHIFT+{base_sym}"),
+            "{symbol}"
+        );
+        // The same chord as the one the popup records now, and as the one an
+        // earlier build stored with egui's name for the symbol.
+        for other in [base_name, egui_name] {
+            let other = format!("Ctrl+Shift+{other}");
+            assert!(same_chord(&stored, &other), "{stored} = {other}");
+            assert!(same_chord(&other, &stored), "{other} = {stored}");
+        }
+    }
+    // Without Shift among the modifiers the character is its own key.
+    assert_eq!(to_portal_trigger("Ctrl+!"), "CTRL+exclam");
+    assert_eq!(to_hyprland_bind("Ctrl+!").1, "exclam");
+    assert!(!same_chord("Ctrl+!", "Ctrl+1"));
+    // Other shifted characters are passed on as they are.
+    assert_eq!(to_portal_trigger("Ctrl+Shift+@"), "CTRL+SHIFT+at");
+}
+
+#[test]
 fn chords_are_compared_by_their_keys_not_their_spelling() {
     for (a, b) in [
+        ("Ctrl+Shift+!", "Ctrl+Shift+1"),
+        ("Shift+?", "Shift+Questionmark"),
         ("Ctrl+Shift+Exclamationmark", "Ctrl+Shift+1"),
         ("Shift+Questionmark", "shift+slash"),
         ("Alt+Shift+Plus", "Alt+Shift+Equals"),

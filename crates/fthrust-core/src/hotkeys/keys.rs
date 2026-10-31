@@ -194,7 +194,10 @@ pub(crate) fn same_key(a: &str, b: &str) -> bool {
 }
 
 /// The punctuation egui reports as a key of its own when it is typed with
-/// Shift held on a US-style layout, and the key it sits on (as egui names it).
+/// Shift held on a US-style layout, and the key it sits on (as egui names it),
+/// then the same symbols as the characters themselves, which is how the Qt
+/// app wrote them to `hotkeys.json` (`Ctrl+Shift+!`). `+` is not among the
+/// characters: it separates the parts of a chord.
 const SHIFTED_ON: &[(&str, &str)] = &[
     ("exclamationmark", "1"),
     ("questionmark", "Slash"),
@@ -203,13 +206,20 @@ const SHIFTED_ON: &[(&str, &str)] = &[
     ("opencurlybracket", "OpenBracket"),
     ("closecurlybracket", "CloseBracket"),
     ("plus", "Equals"),
+    ("!", "1"),
+    ("?", "Slash"),
+    (":", "Semicolon"),
+    ("|", "Backslash"),
+    ("{", "OpenBracket"),
+    ("}", "CloseBracket"),
 ];
 
 /// The key a shifted symbol is typed on, by egui's names: `Exclamationmark`
-/// is `1` with Shift, `Questionmark` is `Slash`, `Colon` is `Semicolon`,
-/// `Pipe` is `Backslash`, the curly brackets are the square ones and `Plus`
-/// is `Equals` (the US layout; other layouts put these elsewhere, and
-/// `None` is returned for every key that is not one of them).
+/// (or `!`) is `1` with Shift, `Questionmark` (`?`) is `Slash`, `Colon` (`:`)
+/// is `Semicolon`, `Pipe` (`|`) is `Backslash`, the curly brackets (`{`, `}`)
+/// are the square ones and `Plus` is `Equals` (the US layout; other layouts
+/// put these elsewhere, and `None` is returned for every key that is not one
+/// of them).
 ///
 /// A compositor binds a key by what it types with no modifier held, so
 /// `Shift+Exclamationmark` (keysym `exclam`) never fires on Hyprland while
@@ -225,8 +235,9 @@ pub(crate) fn unshifted_base(name: &str) -> Option<&'static str> {
 
 /// The key a chord is bound on: with Shift among its modifiers a shifted
 /// symbol is bound on the key it is typed on ([`unshifted_base`]), so a chord
-/// an earlier version stored as `Ctrl+Shift+Exclamationmark` is written as
-/// `Ctrl+Shift+1` and fires; any other key is as it was given.
+/// an earlier version stored as `Ctrl+Shift+Exclamationmark`, or the Qt app as
+/// `Ctrl+Shift+!`, is written as `Ctrl+Shift+1` and fires; any other key is as
+/// it was given.
 pub(crate) fn bound_key(key: &str, shift: bool) -> &str {
     if shift {
         unshifted_base(key).unwrap_or(key)

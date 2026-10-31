@@ -304,8 +304,10 @@ pub fn same_chord(a: &str, b: &str) -> bool {
 /// `Equals`); `None` for every other key, which is recorded as it is. A
 /// compositor matches a bind on the unshifted key, so `Shift+1` fires where
 /// `Shift+Exclamationmark` (keysym `exclam`) never does. A chord stored that
-/// way before the popup recorded the base key is written as the base key by
-/// [`to_portal_trigger`] and [`hyprland::to_hyprland_bind`], so it fires too.
+/// way before the popup recorded the base key (or with the character itself,
+/// `Shift+!`, as the Qt app wrote it) is written as the base key by
+/// [`to_portal_trigger`] and [`hyprland::to_hyprland_bind`], so it fires too;
+/// those characters give the same answer here.
 pub fn unshifted_key_name(name: &str) -> Option<&'static str> {
     keys::unshifted_base(name)
 }
