@@ -611,6 +611,58 @@ fn a_truncated_export_fails_instead_of_replacing_anything() {
 }
 
 #[test]
+fn a_long_export_short_by_more_than_a_frame_fails() {
+    // 0.8 s short of 50 s: within the old 0.5 s + 1% allowance (1.0 s).
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "fifty.mp4", 50, 0) else {
+        return;
+    };
+    let out = tmp.path().join("short.mp4");
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=49.2[v]",
+        50.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("s long"), "{}", r.detail);
+    assert!(!out.exists());
+}
+
+#[test]
+fn an_export_whose_audio_stops_early_fails() {
+    use fthrust_core::export::graph::{AudioOut, GraphPlan, MapRef, VideoOut};
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "talk.mp4", 2, 1) else {
+        return;
+    };
+    let out = tmp.path().join("silent_end.mp4");
+    let j = Job {
+        expected_duration_s: 2.0,
+        copy_metadata: false,
+        ..rewrite_job(
+            &src,
+            out.clone(),
+            GraphPlan {
+                seek_s: None,
+                duration_s: None,
+                filter_graph: Some("[0:v]null[v];[0:a:0]atrim=duration=0.5[a]".into()),
+                video_map: MapRef::Label("v".into()),
+                audio_map: Some(MapRef::Label("a".into())),
+                video: VideoOut::Encode,
+                audio: AudioOut::Encode { kbps: 128 },
+                audio_filter: None,
+                shortest: false,
+            },
+        )
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("audio"), "{}", r.detail);
+    assert!(!out.exists());
+}
+
+#[test]
 fn an_export_never_needs_more_than_the_clip_has() {
     // Finalize asks for the requested clip length, which a replay buffer
     // holding less than that does not reach.

@@ -267,40 +267,88 @@ fn finish(job: &Job, staged: &Path, cancel: &AtomicBool) -> ExportResult {
     ExportResult::new(ExportState::Completed, "")
 }
 
-/// Seconds of `path`: its video stream's length, else the container's.
-fn duration_s(path: &Path) -> Option<f64> {
+/// Stream lengths of a media file, in seconds.
+struct Lengths {
+    /// The video stream's, else the container's.
+    video: Option<f64>,
+    /// The longest audio stream's (else the container's); `None` without
+    /// audio.
+    audio: Option<f64>,
+    /// One video frame.
+    frame: f64,
+}
+
+fn lengths(path: &Path) -> Option<Lengths> {
     use ffmpeg_next as ff;
     let ictx = ff::format::input(&path).ok()?;
-    let video = ictx.streams().best(ff::media::Type::Video).and_then(|s| {
+    let secs = |s: &ff::format::stream::Stream<'_>| {
         let tb = s.time_base();
         (s.duration() > 0 && tb.denominator() > 0)
             .then(|| s.duration() as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))
-    });
+    };
     let container =
         (ictx.duration() > 0).then(|| ictx.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE));
-    video.or(container)
+    let best = ictx.streams().best(ff::media::Type::Video);
+    let frame = best
+        .as_ref()
+        .map(|s| s.avg_frame_rate())
+        .filter(|r| r.numerator() > 0 && r.denominator() > 0)
+        .map_or(1.0 / 30.0, |r| {
+            f64::from(r.denominator()) / f64::from(r.numerator())
+        });
+    let audio_streams: Vec<_> = ictx
+        .streams()
+        .filter(|s| s.parameters().medium() == ff::media::Type::Audio)
+        .collect();
+    let audio = (!audio_streams.is_empty()).then(|| {
+        audio_streams
+            .iter()
+            .filter_map(secs)
+            .reduce(f64::max)
+            .or(container)
+    });
+    Some(Lengths {
+        video: best.as_ref().and_then(secs).or(container),
+        audio: audio.flatten(),
+        frame,
+    })
 }
 
-/// Fails an output that ends well before the length it should have, so a
-/// truncated export never replaces anything. That length is the job's,
-/// capped at what the source has from the seek point on: a replay buffer
+/// Fails an output that ends early, so a truncated export never replaces
+/// anything. Its video, and its audio when it has any, must each last the
+/// job's length less half a second and a frame (rounding), capped at what
+/// the source's video or audio has from the seek point on: a replay buffer
 /// holding less than a save asked for makes a shorter clip, whose rewrite
-/// is still whole. Half a second plus 1% covers frame and audio rounding.
+/// is still whole.
 fn check_duration(job: &Job, staged: &Path) -> Result<(), String> {
-    let mut required = job.expected_duration_s;
-    if let Some(source) = duration_s(&job.source) {
-        required = required.min(source - job.plan.seek_s.unwrap_or(0.0));
-    }
-    if required <= 0.0 {
+    let expected = job.expected_duration_s;
+    if expected <= 0.0 {
         return Ok(());
     }
-    let Some(got) = duration_s(staged) else {
+    let Some(out) = lengths(staged) else {
         return Ok(());
     };
-    if got + 0.5 + required * 0.01 < required {
+    let source = lengths(&job.source);
+    let seek = job.plan.seek_s.unwrap_or(0.0);
+    let required =
+        |source_len: Option<f64>| source_len.map_or(expected, |s| expected.min(s - seek));
+    let slack = 0.5 + out.frame;
+    let need = required(source.as_ref().and_then(|s| s.video));
+    if let Some(got) = out.video
+        && need > 0.0
+        && got + slack < need
+    {
         return Err(format!(
-            "Export is {got:.1} s long but should be {required:.1} s"
+            "Export is {got:.1} s long but should be {need:.1} s"
         ));
+    }
+    if let Some(got) = out.audio {
+        let need = required(source.as_ref().and_then(|s| s.audio.or(s.video)));
+        if need > 0.0 && got + slack < need {
+            return Err(format!(
+                "Export's audio is {got:.1} s long but should be {need:.1} s"
+            ));
+        }
     }
     Ok(())
 }
