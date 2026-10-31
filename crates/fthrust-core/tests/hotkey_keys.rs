@@ -7,9 +7,10 @@
 //! Parsing is not firing: a compositor binds a key by what it types with no
 //! modifier held. Shifted punctuation (`Exclamationmark`, `Questionmark`,
 //! `Colon`, `Pipe`, the curly brackets, `Plus`) therefore has a keysym here
-//! (`exclam`...) that only matches when it is typed without Shift, so the
-//! popup records it as the key it sits on when Shift is held
-//! ([`unshifted_key_name`], tested at the end of this file).
+//! (`exclam`...) that only matches when it is typed without Shift. The popup
+//! records it as the key it sits on when Shift is held
+//! ([`unshifted_key_name`]), and the writers and the portal trigger bind a
+//! chord stored the old way (`Ctrl+Shift+Exclamationmark`) on that key too.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -18,7 +19,9 @@ use egui::Key;
 use fthrust_core::hotkeys::hyprland::{
     bind_actions, bind_line, to_hyprland_bind, write_lua_block, write_managed_conf,
 };
-use fthrust_core::hotkeys::{HotkeyBindings, same_chord, to_portal_trigger, unshifted_key_name};
+use fthrust_core::hotkeys::{
+    HotkeyBindings, normalize_keyboard_combo, same_chord, to_portal_trigger, unshifted_key_name,
+};
 
 const SOCK: &str = "/run/user/1000/fthrust/hotkey.sock";
 const EXE: &str = "/opt/fthrust/bin/fthrust";
@@ -178,6 +181,13 @@ fn keysym(key: Key) -> Option<&'static str> {
     })
 }
 
+/// The keysym a `Ctrl+Shift+<key>` chord is bound on: the key's own, except
+/// for a shifted symbol, which a compositor only matches on the key it is
+/// typed on.
+fn bound_keysym(key: Key) -> Option<&'static str> {
+    keysym(expected_base(key).unwrap_or(key))
+}
+
 /// What the Hyprland writers print for a keysym: letters upper-cased, as the
 /// reference did.
 fn hyprland_spelling(sym: &str) -> String {
@@ -231,7 +241,7 @@ fn hyprland_bind_and_portal_trigger_use_the_keysym() {
         let stored = b.get("save_clip").unwrap().to_owned();
         let (mods, hypr) = to_hyprland_bind(&stored);
         let portal = to_portal_trigger(&stored);
-        match keysym(key) {
+        match bound_keysym(key) {
             Some(sym) => {
                 assert_eq!(mods, "CTRL SHIFT", "{key:?} stored as {stored}");
                 assert_eq!(hypr, hyprland_spelling(sym), "{key:?} stored as {stored}");
@@ -263,7 +273,7 @@ fn the_conf_and_the_lua_file_bind_every_key_that_has_a_keysym() {
 
     for (key, action) in &actions {
         let command = format!("\"{EXE}\" --hotkey {action}");
-        match keysym(*key) {
+        match bound_keysym(*key) {
             Some(sym) => {
                 let hypr = hyprland_spelling(sym);
                 assert!(bound.contains(action), "{key:?} is bound");
@@ -366,17 +376,15 @@ fn shifted_punctuation_is_recorded_as_the_key_it_is_typed_on() {
                 let name = recorded.unwrap_or_else(|| panic!("{key:?} has a base key"));
                 // egui itself accepts the recorded name, as the key it should be.
                 assert_eq!(Key::from_name(name), Some(base), "{key:?} -> {name}");
-                // And what the compositor is told is the unshifted key.
+                // And what the compositor is told is the unshifted key, not
+                // the shifted symbol's own keysym.
                 let mut b = HotkeyBindings::defaults();
                 b.set_keyboard("save_clip", &format!("Ctrl+Shift+{name}"));
                 let stored = b.get("save_clip").unwrap().to_owned();
                 let (mods, hypr) = to_hyprland_bind(&stored);
                 assert_eq!(mods, "CTRL SHIFT");
-                let shifted = to_hyprland_bind(&format!("Ctrl+Shift+{}", key.name())).1;
-                assert_ne!(
-                    hypr, shifted,
-                    "{key:?}: the base key is not the shifted keysym"
-                );
+                assert_eq!(hypr, hyprland_spelling(keysym(base).unwrap()), "{key:?}");
+                assert_ne!(hypr, hyprland_spelling(keysym(key).unwrap()), "{key:?}");
             }
             None => assert_eq!(recorded, None, "{key:?} is recorded as it is"),
         }
@@ -392,8 +400,66 @@ fn shifted_punctuation_is_recorded_as_the_key_it_is_typed_on() {
 }
 
 #[test]
+fn a_chord_stored_with_the_shifted_symbol_is_bound_on_its_base_key() {
+    // What an earlier version stored for Ctrl+Shift+1 was
+    // `Ctrl+Shift+Exclamationmark`; `exclam` never fires on Hyprland.
+    assert_eq!(
+        to_hyprland_bind("Ctrl+Shift+Exclamationmark"),
+        ("CTRL SHIFT".to_owned(), "1".to_owned())
+    );
+    assert_eq!(
+        to_portal_trigger("Ctrl+Shift+Exclamationmark"),
+        "CTRL+SHIFT+1"
+    );
+    assert_eq!(
+        to_hyprland_bind("Shift+Questionmark"),
+        ("SHIFT".to_owned(), "slash".to_owned())
+    );
+    assert_eq!(to_portal_trigger("Alt+Shift+Plus"), "ALT+SHIFT+equal");
+    // Every shifted symbol comes out as the chord the popup records now.
+    for &key in Key::ALL {
+        let Some(base) = expected_base(key) else {
+            continue;
+        };
+        let old = format!("Ctrl+Alt+Shift+{}", key.name());
+        let new = format!("Ctrl+Alt+Shift+{}", base.name());
+        assert_eq!(to_hyprland_bind(&old), to_hyprland_bind(&new), "{key:?}");
+        assert_eq!(to_portal_trigger(&old), to_portal_trigger(&new), "{key:?}");
+        // The file the compositor reads has the bound key.
+        let mut b = HotkeyBindings::defaults();
+        b.set_keyboard("save_clip", &old);
+        let line = bind_line(
+            "save_clip",
+            b.get("save_clip").unwrap(),
+            Path::new(EXE),
+            Path::new(SOCK),
+        );
+        let hypr = hyprland_spelling(keysym(base).unwrap());
+        assert_eq!(
+            line,
+            format!("bind = CTRL ALT SHIFT, {hypr}, exec, \"{EXE}\" --hotkey save_clip"),
+            "{key:?}"
+        );
+    }
+    // The desktop reports back the key the trigger asked for: that is the
+    // chord stored, not a different one the desktop kept.
+    let stored = "Ctrl+Shift+Exclamationmark";
+    let reported = normalize_keyboard_combo(&to_portal_trigger(stored)).unwrap();
+    assert_eq!(reported, "Ctrl+Shift+1");
+    assert!(same_chord(&reported, stored));
+    // Without Shift among the modifiers nothing changes: `exclam` is a key of
+    // its own on layouts that have one.
+    assert_eq!(to_portal_trigger("Ctrl+Exclamationmark"), "CTRL+exclam");
+    assert_eq!(to_hyprland_bind("Ctrl+Exclamationmark").1, "exclam");
+    assert!(!same_chord("Ctrl+Exclamationmark", "Ctrl+1"));
+}
+
+#[test]
 fn chords_are_compared_by_their_keys_not_their_spelling() {
     for (a, b) in [
+        ("Ctrl+Shift+Exclamationmark", "Ctrl+Shift+1"),
+        ("Shift+Questionmark", "shift+slash"),
+        ("Alt+Shift+Plus", "Alt+Shift+Equals"),
         ("Ctrl+Pageup", "Ctrl+Page Up"),
         ("Ctrl+Pageup", "Ctrl+PgUp"),
         ("Ctrl+Pageup", "Ctrl+Prior"),
@@ -412,6 +478,8 @@ fn chords_are_compared_by_their_keys_not_their_spelling() {
         ("Ctrl+F5", "Ctrl+F6"),
         ("Ctrl+F5", "Alt+F5"),
         ("Ctrl+Shift+S", "Ctrl+S"),
+        ("Ctrl+Shift+Exclamationmark", "Ctrl+Shift+2"),
+        ("Ctrl+Exclamationmark", "Ctrl+1"),
         ("Ctrl+Pageup", "Ctrl+Pagedown"),
         ("F9", ""),
         ("Ctrl+F9", "F9"),

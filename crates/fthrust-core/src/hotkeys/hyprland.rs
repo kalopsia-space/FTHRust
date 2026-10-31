@@ -31,7 +31,9 @@ pub fn managed_conf(home: &Path) -> PathBuf {
     hypr_dir(home).join("fthr-hotkeys.conf")
 }
 
-/// `_to_hyprland_bind`: `Ctrl+Shift+S` → `("CTRL SHIFT", "S")`.
+/// `_to_hyprland_bind`: `Ctrl+Shift+S` → `("CTRL SHIFT", "S")`. With Shift
+/// held a shifted symbol is bound on the key it is typed on, which is what
+/// Hyprland matches: `Ctrl+Shift+Exclamationmark` → `("CTRL SHIFT", "1")`.
 pub fn to_hyprland_bind(combo: &str) -> (String, String) {
     let parts: Vec<&str> = combo.split('+').collect();
     if parts.len() == 1 {
@@ -40,12 +42,16 @@ pub fn to_hyprland_bind(combo: &str) -> (String, String) {
         }
         return (String::new(), hypr_key(parts[0]));
     }
-    let mods = parts[..parts.len() - 1]
+    let modifiers = &parts[..parts.len() - 1];
+    let mods = modifiers
         .iter()
         .map(|p| p.to_uppercase())
         .collect::<Vec<_>>()
         .join(" ");
-    let last = parts[parts.len() - 1];
+    let shift = modifiers
+        .iter()
+        .any(|p| p.trim().eq_ignore_ascii_case("shift"));
+    let last = keys::bound_key(parts[parts.len() - 1], shift);
     (mods, hypr_key(last))
 }
 

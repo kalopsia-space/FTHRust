@@ -266,7 +266,9 @@ fn normalize_controller_combo(input: &str) -> String {
 /// the same key, the key compared as a key (by its keysym) and not by how it
 /// is spelled. `Ctrl+Pageup` (what the hotkey popup stores), `Ctrl+Page Up`,
 /// `Ctrl+PgUp` and `Ctrl+Prior` are one chord, and a desktop that describes
-/// its trigger in its own words has not changed it.
+/// its trigger in its own words has not changed it. With Shift among the
+/// modifiers a shifted symbol is the key it is typed on, as the writers bind
+/// it: `Ctrl+Shift+Exclamationmark` and `Ctrl+Shift+1` are one chord.
 pub fn same_chord(a: &str, b: &str) -> bool {
     fn split(combo: &str) -> (BTreeSet<&'static str>, String) {
         let mut mods = BTreeSet::new();
@@ -288,7 +290,11 @@ pub fn same_chord(a: &str, b: &str) -> bool {
     }
     let (mods_a, key_a) = split(a);
     let (mods_b, key_b) = split(b);
-    mods_a == mods_b && keys::same_key(&key_a, &key_b)
+    // The key a chord is bound on, as the writers bind it: with Shift,
+    // `Ctrl+Shift+Exclamationmark` and `Ctrl+Shift+1` are one chord.
+    let key_a = keys::bound_key(&key_a, mods_a.contains("Shift"));
+    let key_b = keys::bound_key(&key_b, mods_b.contains("Shift"));
+    mods_a == mods_b && keys::same_key(key_a, key_b)
 }
 
 /// The key to record when the key egui calls `name` was pressed with Shift
@@ -297,7 +303,9 @@ pub fn same_chord(a: &str, b: &str) -> bool {
 /// (`1`, `Slash`, `Semicolon`, `Backslash`, `OpenBracket`, `CloseBracket`,
 /// `Equals`); `None` for every other key, which is recorded as it is. A
 /// compositor matches a bind on the unshifted key, so `Shift+1` fires where
-/// `Shift+Exclamationmark` (keysym `exclam`) never does.
+/// `Shift+Exclamationmark` (keysym `exclam`) never does. A chord stored that
+/// way before the popup recorded the base key is written as the base key by
+/// [`to_portal_trigger`] and [`hyprland::to_hyprland_bind`], so it fires too.
 pub fn unshifted_key_name(name: &str) -> Option<&'static str> {
     keys::unshifted_base(name)
 }
@@ -305,18 +313,25 @@ pub fn unshifted_key_name(name: &str) -> Option<&'static str> {
 /// Converts an FTHR combo such as `Ctrl+Shift+S` to the freedesktop
 /// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`). Keys are
 /// spelled as xkb keysym names (`Page Up`, `PageUp` and `Pageup` all give
-/// `Prior`); one with no keysym is passed through as it was typed.
+/// `Prior`); one with no keysym is passed through as it was typed. With Shift
+/// held a shifted symbol goes out as the key it is typed on
+/// (`Ctrl+Shift+Exclamationmark` → `CTRL+SHIFT+1`), the one a desktop matches.
 pub fn to_portal_trigger(combo: &str) -> String {
-    combo
+    let parts: Vec<&str> = combo
         .split('+')
         .map(str::trim)
         .filter(|p| !p.is_empty())
+        .collect();
+    let shift = parts.contains(&"Shift");
+    parts
+        .into_iter()
         .map(|part| match part {
             "Ctrl" => "CTRL".to_string(),
             "Alt" => "ALT".to_string(),
             "Shift" => "SHIFT".to_string(),
             "Win" => "LOGO".to_string(),
-            _ => keys::keysym(part).map_or_else(|| part.to_string(), Cow::into_owned),
+            _ => keys::keysym(keys::bound_key(part, shift))
+                .map_or_else(|| part.to_string(), Cow::into_owned),
         })
         .collect::<Vec<_>>()
         .join("+")

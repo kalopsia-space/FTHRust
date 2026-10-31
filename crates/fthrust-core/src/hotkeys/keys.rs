@@ -213,13 +213,26 @@ const SHIFTED_ON: &[(&str, &str)] = &[
 ///
 /// A compositor binds a key by what it types with no modifier held, so
 /// `Shift+Exclamationmark` (keysym `exclam`) never fires on Hyprland while
-/// `Shift+1` does. The hotkey popup records the base key when Shift is held.
+/// `Shift+1` does. The hotkey popup records the base key when Shift is held,
+/// and [`bound_key`] applies the same rule to a chord stored before it did.
 pub(crate) fn unshifted_base(name: &str) -> Option<&'static str> {
     let name = canonical(name);
     SHIFTED_ON
         .iter()
         .find(|(shifted, _)| *shifted == name)
         .map(|(_, base)| *base)
+}
+
+/// The key a chord is bound on: with Shift among its modifiers a shifted
+/// symbol is bound on the key it is typed on ([`unshifted_base`]), so a chord
+/// an earlier version stored as `Ctrl+Shift+Exclamationmark` is written as
+/// `Ctrl+Shift+1` and fires; any other key is as it was given.
+pub(crate) fn bound_key(key: &str, shift: bool) -> &str {
+    if shift {
+        unshifted_base(key).unwrap_or(key)
+    } else {
+        key
+    }
 }
 
 /// The key part of a combo (`Ctrl+Shift+S` → `S`).
