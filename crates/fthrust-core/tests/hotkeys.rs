@@ -215,3 +215,31 @@ fn portal_cleared_round_trip_sorted() {
     );
     assert_eq!(load_portal_cleared(&p).unwrap(), set);
 }
+
+/// Final review of the audit fixes: a hotkeys.json that could not be read at
+/// startup is not replaced by the defaults the app then uses, even once it
+/// can be read again (the UI saves on its own, for portal triggers).
+#[test]
+fn an_unreadable_hotkeys_file_is_not_replaced() {
+    let (_t, p) = setup();
+    // A directory in its place: reading fails with an I/O error.
+    std::fs::create_dir_all(p.hotkeys_file()).unwrap();
+    let (b, _) = HotkeyBindings::load(&p).unwrap();
+    assert_eq!(b, HotkeyBindings::defaults());
+    assert!(b.startup_issue().unwrap().contains("could not be read"));
+    std::fs::remove_dir(p.hotkeys_file()).unwrap();
+    std::fs::write(p.hotkeys_file(), r#"{"save_clip": "F10"}"#).unwrap();
+    let err = b.save(&p).unwrap_err();
+    assert!(
+        matches!(err, fthrust_core::CoreError::Protected { .. }),
+        "{err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(p.hotkeys_file()).unwrap(),
+        r#"{"save_clip": "F10"}"#
+    );
+    // A file that reads fine saves as before.
+    let (b, _) = HotkeyBindings::load(&p).unwrap();
+    assert!(b.startup_issue().is_none());
+    b.save(&p).unwrap();
+}
