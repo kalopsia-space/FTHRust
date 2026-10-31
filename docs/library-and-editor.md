@@ -18,7 +18,7 @@ The **Clips** page shows everything in your clips folder, grouped by day, newest
 - **Click a clip** to open it in the editor.
 - **Hover a card and press F2** to rename it. A renamed clip keeps its tag, description and saved editor draft, and a parked editor for it follows the new name. A clip can't be renamed or deleted while one of its exports or shares is queued or running; the app says so and leaves it alone.
 - **Right-click** for *Open in editor*, *Show in file manager*, *Copy path*, *Upload*, *Open uploaded link* and *Delete clip*.
-- The **share button** on a card uploads the clip, or copies its link if it's already uploaded. It needs the [uploader](uploads.md) to be enabled. If a clip counts as uploaded but the server gave no link to copy, the button stays grey and its tooltip says so.
+- The **share button** on a card uploads the clip, or copies its link if it's already uploaded. It needs the [uploader](uploads.md) to be enabled.
 - The **bin button** deletes the clip after asking. Deleting is permanent; there's no trash.
 
 The filter in the top right switches between **All clips**, **Clips only**, **Screenshots** and **Imported clips**. Sort by **Newest** or **Oldest**.

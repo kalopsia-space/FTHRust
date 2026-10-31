@@ -104,6 +104,15 @@ pub fn share_action(d: &CardData) -> Option<ShareAction> {
             enabled: false,
             link: false,
         },
+        // Uploaded, but no link came back (or none was kept): there is nothing
+        // to copy, and a press is the way to the "already uploaded" notice that
+        // offers to upload again.
+        None if d.uploaded => ShareAction {
+            label: "Upload clip",
+            tooltip: "Uploaded, but no link came back. Press to upload again.",
+            enabled: d.ready && !d.uploading,
+            link: false,
+        },
         None => ShareAction {
             label: "Upload clip",
             tooltip: "Upload clip",
