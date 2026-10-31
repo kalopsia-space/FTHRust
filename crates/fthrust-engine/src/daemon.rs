@@ -580,11 +580,14 @@ pub async fn serve_until(
             }
         }
     };
+    // No new client is served from here on: close the listener (and remove
+    // the socket file) now, so a relaunched UI's new engine can bind while
+    // this one finishes its save. The connected client keeps its own socket.
+    drop(server);
     shut_down(service, client.as_ref(), &mut internal_rx).await;
     if let Some(conn) = client.take() {
         flush(conn).await;
     }
-    drop(server);
     Ok(code)
 }
 

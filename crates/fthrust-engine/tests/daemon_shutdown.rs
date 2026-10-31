@@ -285,3 +285,46 @@ async fn a_panicking_configure_is_reported_and_ends_the_engine() {
     let code = finished(&d, Duration::from_secs(10)).await.unwrap();
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_engine_can_start_while_the_old_one_finishes_its_save() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // When the UI dies the engine leaves its loop and finishes the save in
+    // flight (up to a minute). Its listener stayed bound all that time
+    // without accepting, so the relaunched UI's new engine connected into
+    // its backlog and failed with AddrInUse.
+    let d = start(Arc::new(SlowAudio {
+        inner: SyntheticAudio::new(),
+        delay: Duration::from_secs(5),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 3,
+            path: d.tmp.path().join("last.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 3 })
+    })
+    .await;
+    drop(client);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    d.stops.send(Stop::ParentGone).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(d.done.try_recv().is_err(), "still finishing the save");
+    let next = fthrust_ipc::transport::EngineServer::bind(&d.socket)
+        .await
+        .expect("a new engine can bind the socket");
+    drop(next);
+    // SIGTERM still ends the old engine's wait.
+    let signalled = Instant::now();
+    d.stops.send(Stop::Signal).await.unwrap();
+    finished(&d, Duration::from_secs(4)).await.unwrap();
+    assert!(signalled.elapsed() < Duration::from_secs(4));
+}
