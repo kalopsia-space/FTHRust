@@ -11,7 +11,7 @@ use fthrust_wayland::frame::BgraFrame;
 pub struct ContentMetrics {
     /// Samples taken so far.
     pub sequence: u32,
-    /// Consecutive suspicious samples.
+    /// Consecutive suspicious (black-like or uniform) samples.
     pub streak: u32,
     /// Luma mean of this sample.
     pub luma_mean: f32,
@@ -27,6 +27,7 @@ pub struct ContentWatchdog {
     frames: u64,
     sequence: u32,
     tracker: ContentSuspicionTracker,
+    streak: u32,
 }
 
 impl ContentWatchdog {
@@ -42,6 +43,7 @@ impl ContentWatchdog {
             frames: 0,
             sequence: 0,
             tracker: ContentSuspicionTracker::new(),
+            streak: 0,
         }
     }
 
@@ -88,10 +90,18 @@ impl ContentWatchdog {
         let sample =
             sample_bgra_grid(data, width, height, stride, Self::COLUMNS, Self::ROWS).ok()?;
         let suspect = self.tracker.observe(&sample);
+        // The reference publishes the run of suspicious samples; the
+        // tracker's repeat count (identical samples) also grows on a
+        // perfectly normal static desktop.
+        self.streak = if sample.black_like || sample.uniform {
+            self.streak.saturating_add(1)
+        } else {
+            0
+        };
         self.sequence = self.sequence.wrapping_add(1);
         Some(ContentMetrics {
             sequence: self.sequence,
-            streak: self.tracker.repeat_count(),
+            streak: self.streak,
             luma_mean: sample.luma_mean as f32,
             luma_variance: sample.luma_variance as f32,
             suspect,
@@ -122,5 +132,34 @@ mod tests {
         let via_frame = a.observe(&frame).expect("sample");
         let via_raw = b.observe_raw(&data, w, h, w * 4).expect("sample");
         assert_eq!(via_frame, via_raw);
+    }
+
+    fn solid(w: usize, h: usize, grey: u8) -> Vec<u8> {
+        vec![grey; w * 4 * h]
+    }
+
+    fn gradient(w: usize, h: usize) -> Vec<u8> {
+        (0..w * 4 * h)
+            .map(|i| (i / 4 % w * 255 / w) as u8)
+            .collect()
+    }
+
+    #[test]
+    fn the_streak_counts_suspicious_samples_not_identical_ones() {
+        let (w, h) = (64usize, 36usize);
+        let mut dog = ContentWatchdog::new(1);
+        // A static, normal picture: every sample is the same, none suspect.
+        let desktop = gradient(w, h);
+        for _ in 0..5 {
+            let m = dog.observe_raw(&desktop, w, h, w * 4).unwrap();
+            assert_eq!(m.streak, 0, "{m:?}");
+        }
+        let black = solid(w, h, 0);
+        for expected in 1..=3 {
+            let m = dog.observe_raw(&black, w, h, w * 4).unwrap();
+            assert_eq!(m.streak, expected, "{m:?}");
+        }
+        let m = dog.observe_raw(&desktop, w, h, w * 4).unwrap();
+        assert_eq!(m.streak, 0, "a normal sample ends the streak");
     }
 }
