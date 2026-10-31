@@ -88,7 +88,8 @@ impl CaptureSurfaces {
                 "dmabuf targets: count must be 1 to {POOL_SURFACES}, got {count}"
             )));
         }
-        let pool = device.pool_on(width, height, ffi::AVPixelFormat::AV_PIX_FMT_BGR0)?;
+        // Exactly the surfaces exported: nothing else draws from this pool.
+        let pool = device.pool_on(width, height, ffi::AVPixelFormat::AV_PIX_FMT_BGR0, count)?;
         let mut surfaces = Vec::with_capacity(count);
         let mut images = Vec::with_capacity(count);
         for _ in 0..count {
@@ -432,6 +433,19 @@ mod tests {
                 sample_bgra_grid(&grid, columns, rows, columns * 4, columns, rows).unwrap();
             assert_eq!(whole, sparse, "{w}x{h}");
         }
+    }
+
+    #[test]
+    fn the_pool_holds_only_the_exported_surfaces() {
+        if !super::super::hw::vaapi_available() {
+            return eprintln!("skipping: no VA-API device");
+        }
+        let device = VaapiFrames::create(64, 64).unwrap();
+        let surfaces = CaptureSurfaces::new(&device, 320, 180, 2).unwrap();
+        // Both surfaces are exported: the pool has no third to hand out,
+        // so it costs no video memory beyond them.
+        let mut extra = OwnedFrame::empty().unwrap();
+        assert!(surfaces.pool.get_surface(&mut extra).is_err());
     }
 
     #[test]

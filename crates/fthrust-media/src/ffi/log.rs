@@ -3,6 +3,9 @@
 
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_int, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use ffmpeg_next::ffi;
 
@@ -54,13 +57,77 @@ fn effective_level(level: c_int, fmt: &CStr) -> c_int {
     }
 }
 
+/// How long after a line is sent on its repeats are only counted. A
+/// repeat after that sends the count and the line again, so a message
+/// that recurs now and then always shows, and a flood shows once a second.
+const REPEAT_WINDOW: Duration = Duration::from_secs(1);
+
 /// Per thread: FFmpeg writes some lines in pieces and repeats others.
 #[derive(Default)]
 struct Lines {
     partial: String,
-    /// The last line sent on, and its level.
-    last: Option<(c_int, String)>,
+    /// The last line sent on, its level, and when.
+    last: Option<(c_int, String, Instant)>,
+    /// Repeats of it counted since.
     repeats: usize,
+}
+
+impl Lines {
+    /// Sends the count of the repeats not shown, if any.
+    fn report_repeats(&mut self) {
+        if let Some((level, ..)) = &self.last
+            && self.repeats > 0
+        {
+            let note = format!("(the last message repeated {} more times)", self.repeats);
+            emit(*level, &note);
+        }
+        self.repeats = 0;
+    }
+}
+
+impl Drop for Lines {
+    /// A thread that exits still reports the repeats it counted, through
+    /// [`ORPHANED`]: logging from a thread local's destructor could hit
+    /// the subscriber's own thread locals after they are gone, which
+    /// panics and aborts the process.
+    fn drop(&mut self) {
+        let Some((level, line, _)) = &self.last else {
+            return;
+        };
+        if self.repeats == 0 {
+            return;
+        }
+        let mut orphaned = ORPHANED.lock().unwrap_or_else(PoisonError::into_inner);
+        if orphaned.len() < MAX_ORPHANED {
+            orphaned.push((
+                *level,
+                format!(
+                    "(repeated {} more times before its thread ended: {line})",
+                    self.repeats
+                ),
+            ));
+            HAS_ORPHANED.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// Repeat counts of threads that ended before sending them; the next
+/// message, from any thread, sends them first.
+static ORPHANED: Mutex<Vec<(c_int, String)>> = Mutex::new(Vec::new());
+/// Whether [`ORPHANED`] may hold anything, checked without locking.
+static HAS_ORPHANED: AtomicBool = AtomicBool::new(false);
+/// The most counts [`ORPHANED`] keeps while nothing logs.
+const MAX_ORPHANED: usize = 32;
+
+/// Sends the repeat counts of threads that have ended.
+fn send_orphaned() {
+    if !HAS_ORPHANED.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    let notes = std::mem::take(&mut *ORPHANED.lock().unwrap_or_else(PoisonError::into_inner));
+    for (level, note) in notes {
+        emit(level, &note);
+    }
 }
 
 thread_local! {
@@ -88,6 +155,7 @@ unsafe fn handle(avcl: *mut c_void, level: c_int, fmt: *const c_char, vl: VaList
     if level > unsafe { ffi::av_log_get_level() } {
         return;
     }
+    send_orphaned();
     let mut buf = [0 as c_char; 1024];
     // No "[name @ 0x…]" prefix: the name is added below, without the address.
     let mut print_prefix: c_int = 0;
@@ -132,19 +200,18 @@ unsafe fn handle(avcl: *mut c_void, level: c_int, fmt: *const c_char, vl: VaList
             Some(name) => format!("[{name}] {text}"),
             None => text.to_owned(),
         };
-        if lines.last.as_ref() == Some(&(level, line.clone())) {
+        let now = Instant::now();
+        if let Some((last_level, last, sent)) = &lines.last
+            && *last_level == level
+            && *last == line
+            && now.duration_since(*sent) < REPEAT_WINDOW
+        {
             lines.repeats += 1;
             return;
         }
-        if let Some((last_level, _)) = lines.last
-            && lines.repeats > 0
-        {
-            let note = format!("(the last message repeated {} more times)", lines.repeats);
-            emit(last_level, &note);
-        }
-        lines.repeats = 0;
+        lines.report_repeats();
         emit(level, &line);
-        lines.last = Some((level, line));
+        lines.last = Some((level, line, now));
     });
 }
 

@@ -443,9 +443,11 @@ mod tests {
     fn software_encoders_open_with_automatic_threads() {
         crate::init().unwrap();
         let mut opened = 0;
-        // The wrappers that pass `thread_count` on to the library. libx264
-        // defaults to automatic threads on its own; the others run on one
-        // thread unless told otherwise.
+        // The wrappers that pass `thread_count` on to the library. libx264's
+        // own codec defaults are already automatic threads with thread_type
+        // 0, which keeps tune=zerolatency's sliced threads (a thread_type of
+        // slice|frame would turn on frame threads, which hold frames back);
+        // the others run on one thread unless told otherwise.
         for name in [
             "libopenh264",
             "libx264",

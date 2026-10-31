@@ -513,8 +513,9 @@ impl Encoder {
     }
 
     /// Whether the encoder's own NV12 upload pool and the GPU converter's
-    /// BGRX upload pool have been created (tests): neither is while
-    /// capture writes into dmabuf surfaces.
+    /// BGRX upload pool exist (tests). Neither does while capture writes
+    /// into dmabuf surfaces: shared-memory frames encoded before the first
+    /// surface frame create the converter's, and that frame drops it.
     #[doc(hidden)]
     pub fn upload_pools_created(&self) -> (bool, bool) {
         self.raw.upload_pools_created()
@@ -615,7 +616,12 @@ impl Encoder {
         }
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        if self.raw.converter_source_size() != Some(surfaces.size()) {
+        // A converter built for uploads (shared-memory frames encoded
+        // before the first surface frame, as zero copy's warm-up does)
+        // goes too, with its upload pool, rather than staying for the run.
+        if self.raw.converter_source_size() != Some(surfaces.size())
+            || self.raw.converter_takes_uploads()
+        {
             self.raw.bind_converter_to(surfaces.surface(index))?;
             self.gpu_proven = false;
         }
