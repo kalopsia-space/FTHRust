@@ -175,6 +175,43 @@ fn a_diagnostics_session_that_cannot_start_leaves_the_app_without_one() {
     assert!(fthrust_ui::dialogs::diagnostic_report::export(&mut s).is_err());
 }
 
+#[test]
+fn startup_notices_are_not_swallowed_by_the_error_notification_setting() {
+    use fthrust_ui::shell::error_bar::Level;
+    let tmp = tempfile::tempdir().unwrap();
+    // A damaged theme.json is something the stores report at startup.
+    let paths = fthrust_core::FthrPaths::new(tmp.path());
+    std::fs::create_dir_all(paths.theme_dir()).unwrap();
+    std::fs::write(paths.theme_file(), "{not json").unwrap();
+    let mut s = AppState::for_tests(
+        tmp.path(),
+        serde_json::json!({"error_notifications_enabled": false}),
+    );
+    assert!(
+        !s.error_bar.enabled,
+        "the user turned error notifications off"
+    );
+    assert!(
+        s.theme
+            .startup_issues()
+            .iter()
+            .any(|m| m.contains("theme.json was damaged"))
+    );
+    fthrust_ui::services::diagnostics::report_startup_issues(&mut s);
+    let shown = s.error_bar.current().expect("the notice is shown anyway");
+    assert_eq!(shown.title, "STARTUP PROBLEM");
+    assert!(
+        shown.detail.contains("theme.json was damaged"),
+        "{}",
+        shown.detail
+    );
+    // Ordinary errors still follow the setting.
+    assert!(
+        !s.error_bar
+            .push_error("X", "y", Level::Error, Vec::new(), None, false)
+    );
+}
+
 fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {

@@ -6,7 +6,6 @@ use fthrust_core::diagnostics::logging::{
     LogGuard, default_env_filter, init_crash_log, init_logging,
 };
 use fthrust_core::window_geometry::{Rect, Screen};
-use fthrust_ui::shell::error_bar::Level;
 use fthrust_ui::state::AppState;
 
 /// Starts the file log (`~/.fthr/logs/fthr.log`, mirrored to stderr; `RUST_LOG`
@@ -29,38 +28,6 @@ fn start_logging(paths: &FthrPaths) -> Option<LogGuard> {
         tracing::warn!("no crash log: {e}");
     }
     guard
-}
-
-/// Tells the log, the diagnostics session and the user what the settings and
-/// theme stores could not do while loading (an unreadable or damaged file, a
-/// migration or folder that could not be written). The app carries on with
-/// what it has: a full disk must not keep the user from opening it to make
-/// room.
-fn report_startup_issues(state: &mut AppState) {
-    let issues: Vec<String> = state
-        .settings
-        .startup_issues()
-        .iter()
-        .chain(state.theme.startup_issues())
-        .cloned()
-        .collect();
-    for (i, issue) in issues.iter().enumerate() {
-        tracing::error!("{issue}");
-        fthrust_ui::services::diagnostics::emit(
-            state,
-            "startup",
-            "store_problem",
-            serde_json::json!({ "detail": issue }),
-        );
-        state.error_bar.push_error(
-            "Startup problem",
-            issue,
-            Level::Warning,
-            Vec::new(),
-            Some(format!("startup-store-{i}")),
-            false,
-        );
-    }
 }
 
 /// Removes what a crash left in the clips and recordings folders (hidden
@@ -142,7 +109,7 @@ fn main() {
         );
     }
     state.diagnostics = fthrust_ui::services::diagnostics::start(&state.paths);
-    report_startup_issues(&mut state);
+    fthrust_ui::services::diagnostics::report_startup_issues(&mut state);
     sweep_stale_partials(&state);
     state.thumb_pool = Some(fthrust_ui::library::thumbs::ThumbPool::start(
         state.paths.thumbnails_dir(),
