@@ -331,7 +331,10 @@ fn renaming_a_clip_in_the_library_moves_its_parked_session_with_it() {
     let renamed = a.with_file_name("renamed.mp4");
     assert!(renamed.exists() && !a.exists());
     assert_eq!(r.s.editor_slots[0].path, renamed, "the session follows");
-    assert_eq!(r.s.editor_sessions[0].stem, "renamed", "and so does its rail button");
+    assert_eq!(
+        r.s.editor_sessions[0].stem, "renamed",
+        "and so does its rail button"
+    );
     assert!(sessions::restore(&mut r.s, 1), "{:?}", r.messages());
     r.settle();
     assert_eq!(r.s.editor.as_ref().unwrap().path, renamed);
@@ -359,17 +362,15 @@ fn deleting_a_clip_in_the_library_closes_its_parked_session() {
 /// A queue whose exports run until they are cancelled.
 fn endless_queue() -> fthrust_ui::services::export::ExportQueue {
     use fthrust_media::export::{ExportResult, ExportState};
-    fthrust_ui::services::export::ExportQueue::with_runner(Arc::new(
-        move |_job, cancel, _, _| {
-            while !cancel.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            ExportResult {
-                state: ExportState::Completed,
-                detail: String::new(),
-            }
-        },
-    ))
+    fthrust_ui::services::export::ExportQueue::with_runner(Arc::new(move |_job, cancel, _, _| {
+        while !cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        ExportResult {
+            state: ExportState::Completed,
+            detail: String::new(),
+        }
+    }))
 }
 
 #[test]

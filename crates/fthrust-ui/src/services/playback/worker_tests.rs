@@ -1,8 +1,8 @@
 //! The video worker driven by sources of the tests' own: one that holds the
 //! worker inside a seek, and counters on what the worker does while idle.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use super::*;

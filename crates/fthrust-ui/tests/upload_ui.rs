@@ -86,7 +86,10 @@ fn an_uploaded_clip_without_a_link_has_no_button_that_does_nothing() {
     let a = share_action(&d).unwrap();
     assert!(!a.enabled);
     assert!(!a.link);
-    assert_eq!(a.tooltip, "Uploaded, but the server returned no link to copy");
+    assert_eq!(
+        a.tooltip,
+        "Uploaded, but the server returned no link to copy"
+    );
     let mut off = d.clone();
     off.upload_enabled = false;
     assert_eq!(

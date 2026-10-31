@@ -506,7 +506,10 @@ fn pause_stops_audio_and_shows_the_paused_frame() {
         Box::new(NullOutput::new(clock.func())),
     );
     svc.play();
-    let shown = *clock.run(&mut svc, 400).last().expect("frames while playing");
+    let shown = *clock
+        .run(&mut svc, 400)
+        .last()
+        .expect("frames while playing");
     svc.pause();
     let paused = svc.position_ms();
     // Time passes; nothing may move.

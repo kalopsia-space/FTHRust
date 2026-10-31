@@ -30,7 +30,8 @@ pub struct ThumbFailures {
 impl ThumbFailures {
     /// Records a failure of `path` as the file was (`fingerprint`) at `now`.
     pub fn insert(&mut self, path: PathBuf, fingerprint: String, now: f64) {
-        self.entries.insert(path, (fingerprint, now + FAILED_RETRY_S));
+        self.entries
+            .insert(path, (fingerprint, now + FAILED_RETRY_S));
     }
 
     /// `path` has a recorded failure (expired or not).

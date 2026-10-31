@@ -95,10 +95,7 @@ fn a_failed_thumbnail_is_tried_again_when_the_file_changes_or_after_a_while() {
         failed.blocks(&path, "10|1", 100.0 + FAILED_RETRY_S - 0.1),
         "still held just before the retry time"
     );
-    assert!(
-        !failed.blocks(&path, "10|1", 100.0 + FAILED_RETRY_S),
-        "due"
-    );
+    assert!(!failed.blocks(&path, "10|1", 100.0 + FAILED_RETRY_S), "due");
     assert!(!failed.contains(&path), "the expired entry is gone");
     failed.insert(path.clone(), "10|1".into(), 200.0);
     assert!(

@@ -391,9 +391,9 @@ fn scan_service_does_not_rescan_while_a_recording_is_written() {
 
 #[test]
 fn watcher_events_that_cannot_change_the_listing_are_ignored() {
+    use fthrust_ui::library::scan::watcher_event_matters;
     use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
     use notify::{Event, EventKind};
-    use fthrust_ui::library::scan::watcher_event_matters;
     let at = |kind: EventKind, path: &str| Event::new(kind).add_path(PathBuf::from(path));
     let data = EventKind::Modify(ModifyKind::Data(DataChange::Any));
     assert!(
@@ -441,7 +441,10 @@ fn watcher_events_that_cannot_change_the_listing_are_ignored() {
     let moved = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
         .add_path(PathBuf::from("/c/Desktop/rec.mp4.partial"))
         .add_path(PathBuf::from("/c/Desktop/rec.mp4"));
-    assert!(watcher_event_matters(&moved), "any path that matters counts");
+    assert!(
+        watcher_event_matters(&moved),
+        "any path that matters counts"
+    );
     assert!(
         watcher_event_matters(&Event::new(data)),
         "an event without a path is not worth the risk"
