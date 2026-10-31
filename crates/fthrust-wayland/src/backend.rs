@@ -115,6 +115,40 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
     }
 }
 
+/// How long the first capture into freshly switched-to dmabuf images may
+/// take before capture goes back to shm. The switch starts a new capture
+/// session, and a session's first capture may not wait for the screen to
+/// change, so only a compositor that cannot fill the images runs this out.
+pub const DMABUF_FIRST_FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The safety net of a switch to dmabuf: armed when the switch starts its
+/// session, cleared by that session's first dmabuf frame. Held requests
+/// after the first frame (a static screen) never trip it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FirstDmabufFrame {
+    waiting_since: Option<std::time::Instant>,
+}
+
+impl FirstDmabufFrame {
+    /// The switch to dmabuf happened at `now`.
+    pub fn arm(&mut self, now: std::time::Instant) {
+        self.waiting_since = Some(now);
+    }
+
+    /// A dmabuf frame arrived, or dmabuf mode ended.
+    pub fn clear(&mut self) {
+        self.waiting_since = None;
+    }
+
+    /// Whether the first dmabuf frame is [`DMABUF_FIRST_FRAME_DEADLINE`]
+    /// late at `now`.
+    pub fn overdue(&self, now: std::time::Instant) -> bool {
+        self.waiting_since.is_some_and(|since| {
+            now.saturating_duration_since(since) >= DMABUF_FIRST_FRAME_DEADLINE
+        })
+    }
+}
+
 /// When a capture call that started at `now` stops waiting for a fresh
 /// frame and repeats the last one, delivered at `last_delivery`.
 ///

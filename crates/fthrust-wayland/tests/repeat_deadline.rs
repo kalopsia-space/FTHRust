@@ -1,6 +1,24 @@
 use std::time::{Duration, Instant};
 
-use fthrust_wayland::backend::repeat_deadline;
+use fthrust_wayland::backend::{DMABUF_FIRST_FRAME_DEADLINE, FirstDmabufFrame, repeat_deadline};
+
+#[test]
+fn only_a_first_dmabuf_frame_that_never_comes_trips_the_safety_net() {
+    let start = Instant::now();
+    let mut net = FirstDmabufFrame::default();
+    assert!(!net.overdue(start + Duration::from_secs(60)), "not armed");
+    net.arm(start);
+    assert!(!net.overdue(start + DMABUF_FIRST_FRAME_DEADLINE - Duration::from_millis(1)));
+    assert!(
+        net.overdue(start + DMABUF_FIRST_FRAME_DEADLINE),
+        "the first frame never came"
+    );
+    // Once the first dmabuf frame came, requests held on a static screen
+    // never take zero copy away, however long the screen stays still.
+    net.arm(start);
+    net.clear();
+    assert!(!net.overdue(start + Duration::from_secs(3600)));
+}
 
 const PERIOD: Duration = Duration::from_micros(16_667);
 

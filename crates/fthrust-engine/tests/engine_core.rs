@@ -14,6 +14,7 @@ use fthrust_engine::backend::{
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
+use fthrust_wayland::backend::DMABUF_FIRST_FRAME_DEADLINE;
 
 fn have_software_h264() -> bool {
     fthrust_media::init().unwrap();
@@ -940,29 +941,59 @@ fn zero_copy_that_is_never_filled_falls_back_without_a_restart() {
     let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
         return eprintln!("skipping: no VA-API device");
     };
-    // The compositor takes the dmabuf images and fills none of them: the
-    // backend repeats its shm frame, then goes back to shm on its own (ext
-    // does after DMABUF_FIRST_FRAME_DEADLINE). The engine frees the
+    // The compositor takes the dmabuf images and completes no capture into
+    // them: the backend repeats its shm frame until the first-frame
+    // deadline, then goes back to shm on its own. The engine frees the
     // surfaces and keeps the generation.
     let mut script = ext_dmabuf(320, 180, c);
-    script.dmabuf_never_filled_for = Some(30);
+    script.dmabuf_never_filled = true;
     let mut h = harness(vaapi_config(), script);
+    let started = Instant::now();
     h.engine.start().unwrap();
     wait_for(&h.engine, Duration::from_secs(10), |s| {
         s.frames_captured >= 5
     });
     assert!(h.engine.zero_copy_in_use(), "zero copy started");
-    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
-        s.frames_captured >= 60
+    let deadline = Instant::now() + DMABUF_FIRST_FRAME_DEADLINE + Duration::from_secs(5);
+    while h.engine.zero_copy_in_use() {
+        assert!(Instant::now() < deadline, "zero copy never fell back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let fell_back_after = started.elapsed();
+    let frames = h.engine.status().frames_captured;
+    let s = wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.frames_captured >= frames + 15
     });
-    let zero_copy = h.engine.zero_copy_in_use();
     h.engine.shutdown();
     assert!(
-        !zero_copy,
-        "the surfaces were kept after the backend left them"
+        fell_back_after >= DMABUF_FIRST_FRAME_DEADLINE,
+        "fell back after {fell_back_after:?}"
     );
     assert_eq!(s.capture_generation, 1, "{s:?}");
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "no reallocation");
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
+fn zero_copy_survives_a_static_screen_past_the_first_frame_deadline() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The app starts on an idle desktop: the screen never changes. The
+    // switch to dmabuf starts a fresh session whose first capture comes
+    // anyway; every later one is held and repeated. Zero copy must stay.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.static_after = Some(0);
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    std::thread::sleep(DMABUF_FIRST_FRAME_DEADLINE + Duration::from_secs(1));
+    let s = h.engine.status();
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(zero_copy, "zero copy was dropped on a static screen: {s:?}");
+    assert!(s.frames_captured >= 100, "{s:?}");
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
     assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
