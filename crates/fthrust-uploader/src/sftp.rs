@@ -90,17 +90,32 @@ fn host_matches(name: &str, field: &str) -> bool {
     })
 }
 
+/// The lines of a file read as bytes. known_hosts is text by convention
+/// only: a comment in Latin-1 or a stray byte must not make the whole file
+/// unreadable.
+fn byte_lines(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
 /// The keys the known_hosts files record for `name`: missing files are
-/// skipped, unparseable lines ignored.
+/// skipped, unparseable lines (and lines that are not UTF-8, which cannot
+/// name a host or hold a key) ignored.
 fn recorded_keys(files: &[PathBuf], name: &str) -> Result<Vec<PublicKey>, String> {
     let mut keys = Vec::new();
     for file in files {
-        let text = match std::fs::read_to_string(file) {
-            Ok(t) => t,
+        let bytes = match std::fs::read(file) {
+            Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return Err(BAD_KNOWN_HOSTS.into()),
         };
-        for line in text.lines() {
+        for line in byte_lines(&bytes) {
+            let Ok(line) = std::str::from_utf8(line) else {
+                continue;
+            };
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('@') {
                 continue;
@@ -162,20 +177,30 @@ fn remember(env: &Env, name: &str, key: &PublicKey) -> Result<(), String> {
     let path = env.paths.uploader_known_hosts_file();
     let openssh = key.to_openssh().map_err(|e| e.to_string())?;
     let kind = key.algorithm().as_str().to_owned();
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines: Vec<String> = existing
-        .lines()
-        .filter(|l| {
-            let mut f = l.split_whitespace();
-            !(f.next() == Some(name) && f.next() == Some(kind.as_str()))
-        })
-        .map(str::to_owned)
-        .collect();
-    lines.push(format!("{name} {openssh}"));
+    // Only a missing file starts a new one; a file that cannot be read is
+    // not ours to overwrite. Lines are kept as the bytes they are.
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let replaced = |line: &[u8]| {
+        let Ok(text) = std::str::from_utf8(line) else {
+            return false;
+        };
+        let mut f = text.split_whitespace();
+        f.next() == Some(name) && f.next() == Some(kind.as_str())
+    };
+    let mut out = Vec::new();
+    for line in byte_lines(&existing).into_iter().filter(|l| !replaced(l)) {
+        out.extend_from_slice(line);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(format!("{name} {openssh}\n").as_bytes());
     let dir = path.parent().ok_or("no folder")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let tmp = dir.join(".known_hosts.tmp");
-    std::fs::write(&tmp, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 

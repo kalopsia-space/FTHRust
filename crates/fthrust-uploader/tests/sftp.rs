@@ -184,6 +184,53 @@ async fn the_key_type_in_known_hosts_is_the_one_asked_for() {
     assert!(msg.contains("host-key mismatch"), "{msg}");
 }
 
+/// known_hosts is a text file by convention only: a comment in Latin-1 or a
+/// stray byte must not take every host's trust down with it.
+#[tokio::test]
+async fn a_known_hosts_file_that_is_not_utf8_still_works() {
+    let server = srv::start(18).await;
+    let h = home(&server, json!({}));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let mut text = b"# caf\xe9 (Latin-1)\n\xff\xfe broken.example ssh-ed25519 AAAA\n".to_vec();
+    text.extend_from_slice(format!("{}\n", server.known_hosts_line()).as_bytes());
+    std::fs::write(ssh.join("known_hosts"), text).unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+}
+
+/// Remembering a verified host rewrites FTHRust's own known_hosts; the lines
+/// it cannot read as text are not its to throw away.
+#[tokio::test]
+async fn remembering_a_host_keeps_the_lines_it_cannot_read_as_text() {
+    let server = srv::start(19).await;
+    let h = home(&server, pinned(&server));
+    std::fs::create_dir_all(h.paths.uploader_dir()).unwrap();
+    std::fs::write(
+        h.paths.uploader_known_hosts_file(),
+        b"keep.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHx\n\xff\xfe odd line\n",
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    let after = std::fs::read(h.paths.uploader_known_hosts_file()).unwrap();
+    let has = |needle: &[u8]| after.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        has(b"keep.example ssh-ed25519 "),
+        "{}",
+        String::from_utf8_lossy(&after)
+    );
+    assert!(
+        has(b"\xff\xfe odd line\n"),
+        "{}",
+        String::from_utf8_lossy(&after)
+    );
+    assert!(
+        has(format!("[127.0.0.1]:{} ssh-ed25519 ", server.port).as_bytes()),
+        "{after:?}"
+    );
+}
+
 #[tokio::test]
 async fn verified_pin_is_remembered() {
     let server = srv::start(6).await;
