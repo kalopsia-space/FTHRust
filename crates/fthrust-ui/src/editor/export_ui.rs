@@ -12,6 +12,7 @@ use fthrust_core::export::normalize_quality;
 use fthrust_core::export::watermark::{WatermarkStyle, ffmpeg_color};
 use fthrust_media::export::{Job, Quality};
 
+use super::Lifecycle;
 use crate::icons::Icon;
 use crate::services::export::ExportQueue;
 use crate::shell::error_bar::Level;
@@ -22,6 +23,12 @@ pub const AUDIO_KBPS: u32 = 320;
 
 /// The empty-edit failure text.
 pub const NO_KEPT: &str = "The edit has no kept segments.";
+
+/// Export or Share before the player reported the clip's length.
+pub const STILL_LOADING: &str = "The clip is still loading. Try again in a moment.";
+
+/// Export or Share of a clip the player could not open.
+pub const NOT_OPENED: &str = "The clip could not be opened.";
 
 /// The `export_quality` setting as a runner quality.
 pub fn quality(state: &AppState) -> Quality {
@@ -63,6 +70,15 @@ pub fn watermark_style(state: &AppState) -> WatermarkStyle {
 /// shorter than 1 ms dropped).
 pub fn spec_for(state: &AppState) -> Result<ExportSpec, String> {
     let e = state.editor.as_ref().ok_or("No clip is open.")?;
+    if !e.duration_known() {
+        // The editor opens before its player: the kept ranges are fractions of
+        // a 1 ms placeholder until the real length arrives.
+        return Err(match e.lifecycle {
+            Lifecycle::Failed => NOT_OPENED,
+            _ => STILL_LOADING,
+        }
+        .into());
+    }
     let duration_s = e.duration_ms() as f64 / 1000.0;
     let ranges_s: Vec<(f64, f64)> = e
         .timeline

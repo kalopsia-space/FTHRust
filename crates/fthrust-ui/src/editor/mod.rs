@@ -397,6 +397,12 @@ impl Editor {
         self.duration_ms
     }
 
+    /// The player has reported the real duration (until then it is the 1 ms
+    /// placeholder, which an export must never take for a clip's length).
+    pub fn duration_known(&self) -> bool {
+        self.duration_ms > 1
+    }
+
     /// Source size (a 1920×1080 placeholder until loaded).
     pub fn source_size(&self) -> (u32, u32) {
         self.src_size
