@@ -1,7 +1,19 @@
 //! Theme zip export and import.
+//!
+//! Importing needs nothing beyond Stored and Deflate entries, which is all the
+//! `zip` crate is built with here.
 
 /// Largest single asset (icon, sound or font) accepted from a theme archive.
 pub const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest total size of the assets of one theme archive. A real theme is a
+/// few megabytes; the limit keeps an archive built to inflate (a zip bomb)
+/// from filling the disk.
+pub const MAX_TOTAL_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+/// Most entries a theme archive may hold, directories and ignored files
+/// included.
+pub const MAX_ENTRIES: usize = 1000;
+/// Largest `theme.json` accepted (a real one is a few kilobytes).
+pub const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
 use super::{ThemeData, ThemeStore};
 use super::{default_capture_card_colors, default_colors, default_fonts, migrate};
@@ -81,14 +93,120 @@ fn add_file(
     Ok(())
 }
 
-fn clear_dir(dir: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let p = entry?.path();
-        if p.is_file() {
-            std::fs::remove_file(p)?;
+/// Reads the whole archive entry `name`, failing when it is longer than
+/// `limit` bytes.
+fn read_entry(zf: &mut zip::ZipArchive<std::fs::File>, name: &str, limit: u64) -> Result<Vec<u8>> {
+    let entry = zf
+        .by_name(name)
+        .map_err(|_| CoreError::Invalid(format!("theme archive is missing {name}")))?;
+    let mut body = Vec::new();
+    entry.take(limit + 1).read_to_end(&mut body)?;
+    if body.len() as u64 > limit {
+        return Err(CoreError::Invalid(format!(
+            "{name} in the theme archive is too large (limit {limit} bytes)"
+        )));
+    }
+    Ok(body)
+}
+
+const FOLDERS: [(Folder, &str); 3] = [
+    (Folder::Icons, "icons"),
+    (Folder::Sounds, "sounds"),
+    (Folder::Fonts, "fonts"),
+];
+
+/// A directory next to the live theme folders that an import fills before
+/// anything live changes. Its `new/<folder>` directories hold the extracted
+/// assets and its `old/` the folders swapped out. It is removed on drop.
+struct Staging {
+    root: PathBuf,
+}
+
+impl Staging {
+    const PREFIX: &'static str = ".import-";
+
+    /// Creates the staging directories and removes the ones a crashed import
+    /// left behind.
+    fn create(theme_dir: &Path) -> Result<Self> {
+        std::fs::create_dir_all(theme_dir)?;
+        if let Ok(entries) = std::fs::read_dir(theme_dir) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(Self::PREFIX)
+                {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        let root = theme_dir.join(format!("{}{}", Self::PREFIX, uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root)?;
+        let staging = Self { root };
+        std::fs::create_dir(staging.root.join("old"))?;
+        for (_, name) in FOLDERS {
+            std::fs::create_dir_all(staging.new_dir(name))?;
+        }
+        Ok(staging)
+    }
+
+    fn new_dir(&self, name: &str) -> PathBuf {
+        self.root.join("new").join(name)
+    }
+
+    fn parked(&self, name: &str) -> PathBuf {
+        self.root.join("old").join(name)
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// The three live folders after an import swapped them for the staged ones;
+/// puts the old ones back unless committed.
+struct Swapped<'a> {
+    staging: &'a Staging,
+    /// `(folder name, live path, whether an old folder was parked)`.
+    done: Vec<(&'static str, PathBuf, bool)>,
+}
+
+impl Swapped<'_> {
+    fn undo(&mut self) {
+        while let Some((name, live, had_old)) = self.done.pop() {
+            let _ = std::fs::remove_dir_all(&live);
+            if had_old {
+                let _ = std::fs::rename(self.staging.parked(name), &live);
+            }
         }
     }
-    Ok(())
+}
+
+/// Moves the staged folders into place, parking the live ones. On failure
+/// every folder is back as it was.
+fn swap_in<'a>(staging: &'a Staging, live: [(&'static str, PathBuf); 3]) -> Result<Swapped<'a>> {
+    let mut swapped = Swapped {
+        staging,
+        done: Vec::new(),
+    };
+    for (name, path) in live {
+        let had_old = std::fs::symlink_metadata(&path).is_ok();
+        if had_old && let Err(e) = std::fs::rename(&path, staging.parked(name)) {
+            swapped.undo();
+            return Err(e.into());
+        }
+        if let Err(e) = std::fs::rename(staging.new_dir(name), &path) {
+            if had_old {
+                let _ = std::fs::rename(staging.parked(name), &path);
+            }
+            swapped.undo();
+            return Err(e.into());
+        }
+        swapped.done.push((name, path, had_old));
+    }
+    Ok(swapped)
 }
 
 impl ThemeStore {
@@ -143,18 +261,27 @@ impl ThemeStore {
 
     /// Replaces the whole theme with the archive at `src`.
     ///
-    /// Each asset inside the archive may be at most [`MAX_ASSET_BYTES`].
+    /// Each asset inside the archive may be at most [`MAX_ASSET_BYTES`], the
+    /// assets together at most [`MAX_TOTAL_ASSET_BYTES`], `theme.json` at most
+    /// [`MAX_CONFIG_BYTES`], and the archive may hold at most [`MAX_ENTRIES`]
+    /// entries; anything over is refused, and a compressed entry is never
+    /// inflated past its limit.
     ///
-    /// The archive is fully read and validated before anything on disk or in
-    /// memory changes; on error the current theme is untouched. Entries other
-    /// than `theme.json` and plain files in `icons/`, `sounds/`, `fonts/` are
-    /// ignored.
+    /// The assets are extracted to a directory next to the live folders and
+    /// swapped in only when the whole archive has been read and validated;
+    /// the current theme and its files are untouched on any error, including
+    /// a failure to write `theme.json` at the end. Entries other than
+    /// `theme.json` and plain files in `icons/`, `sounds/`, `fonts/` are
+    /// ignored (even ones in a compression the build cannot read).
     pub fn import_zip(&mut self, src: &Path) -> Result<()> {
         let mut zf = zip::ZipArchive::new(std::fs::File::open(src)?).map_err(zip_err)?;
-        let mut config = Vec::new();
-        zf.by_name("theme.json")
-            .map_err(|_| CoreError::Invalid("theme archive is missing theme.json".into()))?
-            .read_to_end(&mut config)?;
+        if zf.len() > MAX_ENTRIES {
+            return Err(CoreError::Invalid(format!(
+                "theme archive has too many entries ({}; limit {MAX_ENTRIES})",
+                zf.len()
+            )));
+        }
+        let config = read_entry(&mut zf, "theme.json", MAX_CONFIG_BYTES)?;
         let value: serde_json::Value =
             serde_json::from_slice(&config).map_err(|source| CoreError::Json {
                 path: src.to_path_buf(),
@@ -178,36 +305,44 @@ impl ThemeStore {
                 )));
             }
         }
-        let mut assets: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let staging = Staging::create(&self.paths.theme_dir())?;
         let mut present: [std::collections::BTreeSet<String>; 3] = Default::default();
+        let mut total = 0u64;
         for i in 0..zf.len() {
-            let entry = zf.by_index(i).map_err(zip_err)?;
-            if entry.is_dir() {
-                continue;
-            }
-            let Some((folder, file)) = entry.name().ok().and_then(|n| classify(&n)) else {
-                continue;
+            // Looked at without inflating it: an entry that is ignored is
+            // never decompressed, whatever its compression method.
+            let (folder, file, declared) = {
+                let entry = zf.by_index_raw(i).map_err(zip_err)?;
+                if entry.is_dir() {
+                    continue;
+                }
+                let Some((folder, file)) = entry.name().ok().and_then(|n| classify(&n)) else {
+                    continue;
+                };
+                (folder, file, entry.size())
             };
-            let dir = match folder {
-                Folder::Icons => self.paths.theme_icons_dir(),
-                Folder::Sounds => self.paths.theme_sounds_dir(),
-                Folder::Fonts => self.paths.theme_fonts_dir(),
-            };
-            if entry.size() > MAX_ASSET_BYTES {
+            if declared > MAX_ASSET_BYTES {
                 return Err(CoreError::Invalid(format!(
-                    "theme asset {file} is too large ({} bytes; limit {MAX_ASSET_BYTES})",
-                    entry.size()
+                    "theme asset {file} is too large ({declared} bytes; limit {MAX_ASSET_BYTES})"
                 )));
             }
-            present[folder as usize].insert(file.clone());
-            let mut body = Vec::new();
-            entry.take(MAX_ASSET_BYTES + 1).read_to_end(&mut body)?;
-            if body.len() as u64 > MAX_ASSET_BYTES {
+            let entry = zf.by_index(i).map_err(zip_err)?;
+            let dest = staging.new_dir(FOLDERS[folder as usize].1).join(&file);
+            // The declared size can lie: only what is actually inflated counts.
+            let mut out = std::fs::File::create(&dest)?;
+            let written = std::io::copy(&mut entry.take(MAX_ASSET_BYTES + 1), &mut out)?;
+            if written > MAX_ASSET_BYTES {
                 return Err(CoreError::Invalid(format!(
                     "theme asset {file} is too large (limit {MAX_ASSET_BYTES} bytes)"
                 )));
             }
-            assets.push((dir.join(file), body));
+            total += written;
+            if total > MAX_TOTAL_ASSET_BYTES {
+                return Err(CoreError::Invalid(format!(
+                    "theme assets are too large together (limit {MAX_TOTAL_ASSET_BYTES} bytes)"
+                )));
+            }
+            present[folder as usize].insert(file);
         }
 
         let mut colors = default_colors();
@@ -243,17 +378,20 @@ impl ThemeStore {
             font_files,
         };
 
-        for dir in [
-            self.paths.theme_icons_dir(),
-            self.paths.theme_sounds_dir(),
-            self.paths.theme_fonts_dir(),
-        ] {
-            clear_dir(&dir)?;
+        let mut swapped = swap_in(
+            &staging,
+            [
+                ("icons", self.paths.theme_icons_dir()),
+                ("sounds", self.paths.theme_sounds_dir()),
+                ("fonts", self.paths.theme_fonts_dir()),
+            ],
+        )?;
+        let previous = std::mem::replace(&mut self.data, data);
+        if let Err(e) = self.save() {
+            self.data = previous;
+            swapped.undo();
+            return Err(e);
         }
-        for (dest, body) in assets {
-            std::fs::write(dest, body)?;
-        }
-        self.data = data;
-        self.save()
+        Ok(())
     }
 }

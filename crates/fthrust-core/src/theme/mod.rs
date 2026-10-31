@@ -6,6 +6,7 @@ mod archive;
 mod defaults;
 mod migrate;
 
+pub use archive::{MAX_ASSET_BYTES, MAX_CONFIG_BYTES, MAX_ENTRIES, MAX_TOTAL_ASSET_BYTES};
 pub use defaults::*;
 pub use migrate::BUILTIN_FONT_FAMILIES;
 
