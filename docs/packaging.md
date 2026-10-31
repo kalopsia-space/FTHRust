@@ -140,16 +140,18 @@ tools/gen-notices.sh --check   # what CI runs
 
 1. Bump `version` in the root `Cargo.toml`. It's the only place the version lives.
 2. Add a `## <version>` section to `CHANGES.md` (`## 2.0.0-alpha.3`, optionally followed by a date). It becomes the body of the GitHub release; `packaging/release-notes.sh <tag>` prints it and fails when the section is missing or empty.
-3. Commit, then tag `v<version>` (for example `v2.0.0-alpha.3`) and push the tag.
-4. `.github/workflows/release.yml` takes it from there:
+3. Start the release workflow by hand from the branch you are about to tag (**Actions → release → Run workflow**, or `gh workflow run release.yml --ref <branch>`) and wait for it. It is the pre-tag check: a hand-started run skips the notes and CI jobs and publishes nothing, but it builds the AppImage and fetches the whole source archive, which is where a host that is down, a tag that was moved or a build problem shows up. Do it before the tag, not after.
+4. Commit, then tag `v<version>` (for example `v2.0.0-alpha.3`) and push the tag.
+5. `.github/workflows/release.yml` takes it from there:
    - **notes** checks that the tag matches the workspace version and that `CHANGES.md` has the section, in seconds.
    - **ci** runs the whole [CI](development.md#ci) for the tag's commit. Nothing is built or published unless it is green.
-   - **appimage** (Ubuntu 22.04) builds with `packaging/build-appimage.sh`, writes the FFmpeg source archive, verifies the checksums, signs a build provenance attestation for the AppImage and the tarball, and uploads everything as the `fthrust-appimage-<commit>` artifact, kept for 7 days.
+   - **appimage** (Ubuntu 22.04) builds with `packaging/build-appimage.sh`, verifies the checksums, signs a build provenance attestation for the AppImage and the tarball, and uploads them as the `fthrust-appimage-<commit>` artifact, kept for 7 days.
+   - **source** runs next to **appimage** and needs nothing from it: it writes the FFmpeg source archive (`packaging/archive-ffmpeg-source.sh`) and uploads it as the `fthrust-source-<commit>` artifact. It is a job of its own because it makes about a hundred fetches from a dozen hosts, which can fail for reasons that have nothing to do with the build; **Re-run failed jobs** then repeats only this one (the script retries every fetch up to 10 times first, as BtbN's own build does, and sends the job's token to github.com).
    - **publish** creates the GitHub release for the tag with the AppImage, the tarball, the FFmpeg source archive and their `.sha256` files attached. The body is the `CHANGES.md` section, how to verify a download, and GitHub's compare link. A tag with a `-` in it (`v2.0.0-alpha.1`) is marked as a pre-release.
 
 Anyone can check a download with `sha256sum -c` and `gh attestation verify FTHRust-<version>-x86_64.AppImage --repo kalopsia-space/FTHRust`.
 
-The workflow can also be started by hand (**Actions → release → Run workflow**) to build from any branch without tagging. A hand-started run skips the notes and CI jobs, builds the artifact and publishes nothing.
+The hand-started run of step 3 can also be used on its own to build from any branch without tagging; its artifacts are kept for 7 days.
 
 ## Native install
 

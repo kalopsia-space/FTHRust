@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|depends|links|ffnotice|desktop|deps|profile]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|depends|links|ffnotice|desktop|deps|profile|workflow]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -1005,8 +1005,36 @@ group_desktop() {
     else fail desktop_name_is_the_window_title "launcher Name=$name, window title $title"; fi
 }
 
+# The release workflow's shape, read as text (a real run is the real test): the source archive is a job of its own that
+# publish waits for, it sends the job's token to the archive script, and the package lists match the Dockerfile's.
+group_workflow() {
+    local wf="$ROOT/.github/workflows/release.yml" appimage srcjob publish wf_pkgs df_pkgs
+    appimage="$(sed -n '/^  appimage:/,/^  source:/p' "$wf")"
+    srcjob="$(sed -n '/^  source:/,/^  publish:/p' "$wf")"
+    publish="$(sed -n '/^  publish:/,$p' "$wf")"
+    if grep -q 'archive-ffmpeg-source.sh' <<<"$srcjob" && ! grep -q 'archive-ffmpeg-source.sh' <<<"$appimage"; then pass workflow_source_archive_is_a_job_of_its_own
+    else fail workflow_source_archive_is_a_job_of_its_own "the archive script is not only in the source job"; fi
+    if grep -q 'needs: \[notes, ci\]' <<<"$srcjob" && ! grep -q 'appimage' <<<"$(grep 'needs:' <<<"$srcjob")"; then pass workflow_source_job_does_not_wait_for_the_build
+    else fail workflow_source_job_does_not_wait_for_the_build "$(grep 'needs:' <<<"$srcjob")"; fi
+    if grep -q 'needs: \[notes, appimage, source\]' <<<"$publish" && grep -q 'fthrust-source-' <<<"$publish" && grep -q 'fthrust-appimage-' <<<"$publish"; then pass workflow_publish_waits_for_the_build_and_the_source
+    else fail workflow_publish_waits_for_the_build_and_the_source "$(grep 'needs:' <<<"$publish")"; fi
+    if grep -qF 'ARCHIVE_GITHUB_TOKEN: ${{ github.token }}' <<<"$srcjob"; then pass workflow_source_job_sends_the_job_token_to_the_archive_script
+    else fail workflow_source_job_sends_the_job_token_to_the_archive_script "no ARCHIVE_GITHUB_TOKEN in the source job"; fi
+    if grep -qx '          compression-level: 0' <<<"$srcjob"; then pass workflow_uploads_the_xz_without_compressing_it_again
+    else fail workflow_uploads_the_xz_without_compressing_it_again "no compression-level: 0 in the source job"; fi
+    if grep -q 'apt-get update && sudo apt-get install -y --no-install-recommends subversion' <<<"$srcjob"; then pass workflow_source_job_updates_apt_before_installing_svn
+    else fail workflow_source_job_updates_apt_before_installing_svn "$(grep -n 'apt-get' <<<"$srcjob")"; fi
+    if grep -qx '    timeout-minutes: 30' <<<"$publish"; then pass workflow_publish_has_half_an_hour
+    else fail workflow_publish_has_half_an_hour "$(grep 'timeout' <<<"$publish")"; fi
+    # "Keep in step with packaging/Dockerfile": the same packages, subversion included
+    wf_pkgs="$(grep -m1 'apt-get install -y --no-install-recommends' <<<"$appimage" | sed 's/.*--no-install-recommends //' | tr ' ' '\n' | sed '/^$/d' | sort)"
+    df_pkgs="$(awk '/^RUN apt-get update/ { on = 1 } on { print } on && !/\\$/ { exit }' "$ROOT/packaging/Dockerfile" | sed -e 's/.*--no-install-recommends//' -e 's/&& rm.*//' -e 's/\\//g' | tr -s ' \n' '\n\n' | sed '/^$/d' | sort)"
+    if [ -n "$wf_pkgs" ] && [ "$wf_pkgs" = "$df_pkgs" ] && grep -qx subversion <<<"$wf_pkgs"; then pass workflow_package_list_matches_the_dockerfile
+    else fail workflow_package_list_matches_the_dockerfile "workflow: $(tr '\n' ' ' <<<"$wf_pkgs") / Dockerfile: $(tr '\n' ' ' <<<"$df_pkgs")"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive depends links ffnotice desktop deps profile)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive depends links ffnotice desktop deps profile workflow)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

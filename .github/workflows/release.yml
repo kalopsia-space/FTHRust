@@ -50,8 +50,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
-      # Keep in step with packaging/Dockerfile.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config clang libclang-dev meson ninja-build libwayland-dev libxkbcommon-dev patchelf file jq xz-utils desktop-file-utils squashfs-tools git
+      # Keep in step with packaging/Dockerfile (subversion is for the source archive, which the image can build too).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ca-certificates curl build-essential pkg-config clang libclang-dev meson ninja-build libwayland-dev libxkbcommon-dev patchelf file jq xz-utils desktop-file-utils squashfs-tools git subversion
       - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
       - name: Read the pinned cargo-about version
         id: about
@@ -60,14 +60,6 @@ jobs:
         with:
           tool: cargo-about@${{ steps.about.outputs.version }}
       - run: packaging/build-appimage.sh
-      # The source behind the bundled FFmpeg travels with the release: BtbN's
-      # monthly assets are pruned after about two years, and the libraries compiled
-      # into them (one of them GPL) come with their source. LAME is pinned to a
-      # Subversion revision, which needs svn (the runner image has it; this makes sure).
-      - run: sudo apt-get install -y --no-install-recommends subversion
-      # The archive stages about 3.5 GB of source; the release build's target directory is no longer needed.
-      - run: rm -rf target && df -h /
-      - run: packaging/archive-ffmpeg-source.sh --out "dist/FTHRust-ffmpeg-source-$(jq -r .corresponding_source.ffmpeg.describe packaging/ffmpeg_manifest_linux.json).tar.xz"
       - run: cd dist && sha256sum -c FTHRust-*.sha256
       - name: Attest the build provenance
         if: startsWith(github.ref, 'refs/tags/')
@@ -84,21 +76,56 @@ jobs:
             dist/FTHRust-*.AppImage.sha256
             dist/FTHRust-*.tar.gz
             dist/FTHRust-*.tar.gz.sha256
+          retention-days: 7
+  source:
+    # The source behind the bundled FFmpeg travels with the release: BtbN's monthly assets are pruned after about two
+    # years, and the libraries compiled into them (one of them GPL) come with their source. It needs nothing from the
+    # build, so it is a job of its own: about a hundred fetches from a dozen hosts can fail for reasons that have
+    # nothing to do with the build, and re-running just this job does not repeat the 30 to 40 minutes of it.
+    needs: [notes, ci]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-24.04
+    # Every fetch is tried up to 10 times, each attempt under a longer timeout (packaging/archive-ffmpeg-source.sh).
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # LAME is pinned to a Subversion revision, which needs svn.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends subversion
+      - name: Archive the source
+        env:
+          # Requests to github.com carry the job's token, the way actions/checkout sends it: about a hundred anonymous
+          # fetches from one runner address are what GitHub's rate limits are for.
+          ARCHIVE_GITHUB_TOKEN: ${{ github.token }}
+        run: packaging/archive-ffmpeg-source.sh --out "dist/FTHRust-ffmpeg-source-$(jq -r .corresponding_source.ffmpeg.describe packaging/ffmpeg_manifest_linux.json).tar.xz"
+      - run: cd dist && sha256sum -c FTHRust-*.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fthrust-source-${{ github.sha }}
+          path: |
             dist/FTHRust-ffmpeg-source-*.tar.xz
             dist/FTHRust-ffmpeg-source-*.tar.xz.sha256
+          # The .xz is compressed already.
+          compression-level: 0
           retention-days: 7
   publish:
-    # Tags only: a hand-started run stops at the artifact.
+    # Tags only: a hand-started run stops at the artifacts.
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [notes, appimage]
+    needs: [notes, appimage, source]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Downloads about 0.8 GB of artifacts and uploads them to the release.
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: fthrust-appimage-${{ github.sha }}
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fthrust-source-${{ github.sha }}
           path: dist
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
