@@ -137,7 +137,7 @@ one file field named "clip", with the clip's file name and content type
 
 - A URL without a scheme gets `https://`. Only `http` and `https` are allowed.
 - Redirects are **not** followed. A 3xx response is reported as an error; point the URL at the final address.
-- Any 2xx response is a success. If the body is JSON with a `url` (or `raw_url`) field, or is plain text starting with `http://` or `https://`, that's the link. Otherwise the upload counts as done without a link, and auto-delete is skipped.
+- Any 2xx response is a success. If the body is JSON with a `url` (or `raw_url`) field, or is plain text starting with `http://` or `https://`, that's the link, provided it is a single-line `http://` or `https://` address. Otherwise (no link, or something else such as `queued`) the upload counts as done without a link, the bar says so, and auto-delete is skipped.
 - On an error, an `error`, `message` or `detail` field in a JSON body (or a short plain-text body) is shown to the user, up to 400 characters. HTML error pages are not shown.
 
 **Test connection** sends `HEAD <Server URL>` with the same `Authorization` header. A 2xx answer, or a 405 from a server that doesn't support `HEAD`, counts as reachable.
