@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -102,7 +102,9 @@ fixture() {
     printf '#!/bin/sh\n' > "$d/AppRun"; chmod +x "$d/AppRun"
     cp "$ROOT/packaging/space.kalopsia.fthrust.desktop" "$ROOT/packaging/space.kalopsia.fthrust.png" "$d/"
     ln -s space.kalopsia.fthrust.png "$d/.DirIcon"
-    cp "$ROOT/LICENSE" "$d/"; echo notices > "$d/THIRD_PARTY_NOTICES.md"
+    cp "$ROOT/LICENSE" "$d/"
+    printf 'notices: [LICENSE](LICENSE), [licenses](licenses/), [manifest](packaging/ffmpeg_manifest_linux.json)\n' > "$d/THIRD_PARTY_NOTICES.md"
+    mkdir -p "$d/packaging"; cp "$m" "$d/packaging/"
     cp "$ROOT/assets/fonts/Oswald-Regular.ttf" "$d/usr/bin/assets/fonts/"
     echo "$d"
 }
@@ -142,6 +144,12 @@ group_gate() {
 
     d="$(fixture missing)"; rm "$d/THIRD_PARTY_NOTICES.md"
     gate_expect gate_fails_missing_notices 1 "FAIL files" "$d"
+
+    d="$(fixture nomanifest)"; rm -r "$d/packaging"
+    gate_expect gate_fails_missing_manifest_copy 1 "FAIL files" "$d"
+
+    d="$(fixture dangling)"; printf 'see [text](licenses/ffmpeg/dav1d.txt)\n' > "$d/THIRD_PARTY_NOTICES.md"
+    gate_expect gate_fails_dangling_notice_link 1 "FAIL notice-links" "$d"
 
     d="$(fixture glibc)"
     gate_expect gate_fails_glibc 1 "FAIL glibc" "$d" MAX_GLIBC_OVERRIDE=2.0
@@ -190,6 +198,8 @@ group_install() {
         [ -e "$d$p/$f" ] || missing="$missing $f"
     done
     if [ -z "$missing" ]; then pass install_layout; else fail install_layout "missing:$missing"; fi
+    if out="$("$ROOT/packaging/check-notice-links.sh" --require-links "$d$p/share/licenses/fthrust/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass install_notice_links_resolve
+    else fail install_notice_links_resolve "$out"; fi
     if grep -qx "Exec=$p/bin/fthrust" "$d$p/share/applications/space.kalopsia.fthrust.desktop"; then
         pass install_desktop_exec_absolute
     else fail install_desktop_exec_absolute "$(grep Exec= "$d$p/share/applications/space.kalopsia.fthrust.desktop")"; fi
@@ -316,8 +326,83 @@ group_archive() {
     else fail archive_rejects_a_non_https_repo "$r"; fi
 }
 
+group_links() {
+    local d="$WORK/links" out
+    chk() { "$ROOT/packaging/check-notice-links.sh" --require-links "$@"; }
+    if out="$(chk "$ROOT/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass links_repo_notices_resolve; else fail links_repo_notices_resolve "$out"; fi
+
+    # The tarball used to put the notices at its top with licenses/ only under share/.
+    mkdir -p "$d/top"; cp "$ROOT/THIRD_PARTY_NOTICES.md" "$ROOT/LICENSE" "$d/top/"
+    if out="$(chk "$d/top/THIRD_PARTY_NOTICES.md" 2>&1)"; then fail links_dangle_without_licenses_dir "exit 0"
+    elif grep -q "licenses/" <<<"$out"; then pass links_dangle_without_licenses_dir
+    else fail links_dangle_without_licenses_dir "$out"; fi
+    cp -r "$ROOT/licenses" "$d/top/licenses"
+    if out="$(chk "$d/top/THIRD_PARTY_NOTICES.md" 2>&1)"; then fail links_still_dangle_without_manifest "exit 0"
+    elif grep -q "packaging/ffmpeg_manifest_linux.json" <<<"$out"; then pass links_still_dangle_without_manifest
+    else fail links_still_dangle_without_manifest "$out"; fi
+    mkdir -p "$d/top/packaging"; cp "$ROOT/packaging/ffmpeg_manifest_linux.json" "$d/top/packaging/"
+    if out="$(chk "$d/top/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass links_resolve_with_licenses_and_manifest; else fail links_resolve_with_licenses_and_manifest "$out"; fi
+
+    mkdir -p "$d/misc"
+    printf '[web](https://example.org/x) [mail](mailto:a@b.c) [anchor](#top) [file](here.txt#part)\n## Rust crates\n[nope](missing.txt)\n' > "$d/misc/THIRD_PARTY_NOTICES.md"
+    touch "$d/misc/here.txt"
+    if out="$(chk "$d/misc/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass links_ignore_urls_anchors_and_licence_text; else fail links_ignore_urls_anchors_and_licence_text "$out"; fi
+    printf 'no links here\n' > "$d/misc/THIRD_PARTY_NOTICES.md"
+    if out="$("$ROOT/packaging/check-notice-links.sh" "$d/misc/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass links_none_is_fine_by_default; else fail links_none_is_fine_by_default "$out"; fi
+    if out="$(chk "$d/misc/THIRD_PARTY_NOTICES.md" 2>&1)"; then fail links_none_fails_when_required "exit 0"
+    elif grep -q "no relative links" <<<"$out"; then pass links_none_fails_when_required
+    else fail links_none_fails_when_required "$out"; fi
+    printf '[a](one.txt) [b](two.txt)\n' > "$d/misc/THIRD_PARTY_NOTICES.md"
+    out="$(chk "$d/misc/THIRD_PARTY_NOTICES.md" 2>&1)" && { fail links_report_every_dangling_target "exit 0"; return; }
+    if grep -q "one.txt" <<<"$out" && grep -q "two.txt" <<<"$out"; then pass links_report_every_dangling_target; else fail links_report_every_dangling_target "$out"; fi
+}
+
+group_ffnotice() {
+    local gen="$ROOT/packaging/gen-ffmpeg-notice.py" m="$ROOT/packaging/ffmpeg_manifest_linux.json" out rows want
+    if ! out="$(python3 -I "$gen" 2>&1)"; then fail ffnotice_generates "$out"; return; fi
+    rows="$(grep -c '^| `--enable-' <<<"$out")"
+    want="$(jq -r '.configuration' "$m" | tr ' ' '\n' | grep -c '^--enable-')"
+    # every enabled option is a table row, bar the three that add no code and
+    # the second option of the one library that has two (OpenCORE AMR)
+    if [ "$rows" -ge $((want - 4)) ] && [ "$rows" -le "$want" ]; then pass ffnotice_lists_every_enabled_library
+    else fail ffnotice_lists_every_enabled_library "$rows rows for $want enabled options"; fi
+
+    jq '.configuration += " --enable-libnewthing"' "$m" > "$WORK/ff-new.json"
+    if out="$(python3 -I "$gen" --manifest "$WORK/ff-new.json" 2>&1)"; then fail ffnotice_rejects_an_unlisted_library "exit 0"
+    elif grep -q -- "--enable-libnewthing" <<<"$out"; then pass ffnotice_rejects_an_unlisted_library
+    else fail ffnotice_rejects_an_unlisted_library "$out"; fi
+
+    jq '.configuration |= sub(" --enable-libdav1d"; "")' "$m" > "$WORK/ff-gone.json"
+    if out="$(python3 -I "$gen" --manifest "$WORK/ff-gone.json" 2>&1)"; then fail ffnotice_rejects_a_stale_entry "exit 0"
+    elif grep -q -- "no longer enables" <<<"$out" && grep -q -- "--enable-libdav1d" <<<"$out"; then pass ffnotice_rejects_a_stale_entry
+    else fail ffnotice_rejects_a_stale_entry "$out"; fi
+
+    mkdir -p "$WORK/ff-lic"; cp "$ROOT"/licenses/ffmpeg/*.txt "$WORK/ff-lic/"; rm "$WORK/ff-lic/dav1d.txt"
+    if out="$(python3 -I "$gen" --licenses "$WORK/ff-lic" 2>&1)"; then fail ffnotice_rejects_a_missing_licence_text "exit 0"
+    elif grep -q "licence text missing for dav1d" <<<"$out"; then pass ffnotice_rejects_a_missing_licence_text
+    else fail ffnotice_rejects_a_missing_licence_text "$out"; fi
+
+    cp "$ROOT"/licenses/ffmpeg/*.txt "$WORK/ff-lic/"; echo stray text that belongs to nothing at all, long enough to count as a licence text file for this check > "$WORK/ff-lic/stray.txt"
+    if out="$(python3 -I "$gen" --licenses "$WORK/ff-lic" 2>&1)"; then fail ffnotice_rejects_an_orphan_text "exit 0"
+    elif grep -q "stray.txt belongs to no library" <<<"$out"; then pass ffnotice_rejects_an_orphan_text
+    else fail ffnotice_rejects_an_orphan_text "$out"; fi
+
+    printf 'ffmpeg {{ffmpeg.describe}} sha {{ffmpeg.sha256}}\n<!-- ffmpeg-libraries -->\ntail\n' > "$WORK/tpl.md"
+    out="$(python3 -I "$gen" --template "$WORK/tpl.md" 2>&1)"
+    if grep -q "ffmpeg $(jq -r .version "$m") sha $(jq -r .source.sha256 "$m")" <<<"$out" && grep -q "^### External libraries built into FFmpeg" <<<"$out" && [ "$(tail -1 <<<"$out")" = tail ]; then
+        pass ffnotice_template_fills_placeholders_and_section
+    else fail ffnotice_template_fills_placeholders_and_section "$(head -3 <<<"$out")"; fi
+    printf '{{ffmpeg.bogus}}\n<!-- ffmpeg-libraries -->\n' > "$WORK/tpl-bad.md"
+    if out="$(python3 -I "$gen" --template "$WORK/tpl-bad.md" 2>&1)"; then fail ffnotice_rejects_unknown_placeholders "exit 0"
+    elif grep -q "unknown placeholders" <<<"$out"; then pass ffnotice_rejects_unknown_placeholders
+    else fail ffnotice_rejects_unknown_placeholders "$out"; fi
+    # the committed notices carry the generated section, filled from the manifest
+    if grep -qF "$(jq -r .source.sha256 "$m")" "$ROOT/THIRD_PARTY_NOTICES.md" && grep -q '^### External libraries built into FFmpeg' "$ROOT/THIRD_PARTY_NOTICES.md"; then pass ffnotice_committed_notices_have_the_section
+    else fail ffnotice_committed_notices_have_the_section "run tools/gen-notices.sh"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

@@ -35,7 +35,8 @@ mapfile -t ELVES < <(find -L "$DIR" -type f | while read -r f; do is_elf "$f" &&
 # 1. files
 missing=()
 for f in AppRun space.kalopsia.fthrust.desktop space.kalopsia.fthrust.png .DirIcon \
-         LICENSE THIRD_PARTY_NOTICES.md licenses usr/bin/assets/fonts/Oswald-Regular.ttf; do
+         LICENSE THIRD_PARTY_NOTICES.md licenses packaging/ffmpeg_manifest_linux.json \
+         usr/bin/assets/fonts/Oswald-Regular.ttf; do
     [ -e "$DIR/$f" ] || missing+=("$f")
 done
 for b in "${BINARIES[@]}"; do [ -x "$DIR/usr/bin/$b" ] || missing+=("usr/bin/$b"); done
@@ -117,6 +118,9 @@ done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
 if [ -z "$want" ] || [ "$want" = null ]; then problems+=("the manifest records no configuration"); fi
 [ $scanned -gt 0 ] || problems+=("no FFmpeg libraries found")
 [ ${#problems[@]} -eq 0 ] && pass ffmpeg-config || fail ffmpeg-config "${problems[*]}"
+
+# 7. notice-links: the links in THIRD_PARTY_NOTICES.md resolve inside the package.
+if out="$("$HERE/check-notice-links.sh" --require-links "$DIR/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass notice-links; else fail notice-links "$(tr '\n' ' ' <<<"$out")"; fi
 
 [ $failed -eq 0 ] && { echo "RESULT: PASS"; exit 0; }
 echo "RESULT: FAIL"

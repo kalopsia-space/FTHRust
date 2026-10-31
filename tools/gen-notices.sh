@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Writes THIRD_PARTY_NOTICES.md: packaging/notices/header.md followed by the
-# licences of every Rust crate linked into the shipped binaries.
+# Writes THIRD_PARTY_NOTICES.md: packaging/notices/header.md (with the FFmpeg
+# version, hashes and commits filled in from packaging/ffmpeg_manifest_linux.json
+# and the list of external libraries in FFmpeg generated from its configure line
+# and packaging/ffmpeg_libraries.json, see packaging/gen-ffmpeg-notice.py)
+# followed by the licences of every Rust crate linked into the shipped binaries.
 #
 #   tools/gen-notices.sh [--check] [--out FILE]
 #
@@ -29,7 +32,7 @@ fi
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 {
-    cat "$ROOT/packaging/notices/header.md"
+    python3 -I "$ROOT/packaging/gen-ffmpeg-notice.py" --template "$ROOT/packaging/notices/header.md"
     echo
     (cd "$ROOT" && cargo about generate --locked --offline --fail -c packaging/about.toml packaging/about.hbs)
 } > "$tmp"
