@@ -504,3 +504,46 @@ fn preparing_times_out() {
     assert_eq!(services.recording_state(), RecordState::Idle);
     assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);
 }
+
+/// Audit 2026-10-31 review: a tick that changes what the window shows
+/// repaints, even with no event (the elapsed time stopped updating once
+/// health arrived quietly).
+#[test]
+fn a_ticking_recording_repaints_its_label() {
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    // Runs frames until egui has nothing left to repaint.
+    let settle = |ctx: &egui::Context| {
+        for _ in 0..20 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+            out.textures_delta.clear();
+            if !ctx.has_requested_repaint() {
+                return;
+            }
+        }
+        panic!("egui never settled");
+    };
+    let mut services = Services::start_for_tests(&ctx);
+    connected(&mut services, &mut s);
+    services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
+    s.record_requested = true;
+    services.tick(&mut s);
+    let Command::StartRecording { path, request_id } =
+        services.drain_commands_for_tests().remove(0)
+    else {
+        panic!()
+    };
+    services.inject(Event::Engine(IpcEvent::RecordingStarted {
+        request_id,
+        path,
+    }));
+    services.tick(&mut s);
+    services.tick(&mut s);
+    settle(&ctx);
+    services.tick(&mut s);
+    assert!(!ctx.has_requested_repaint(), "nothing changed: no repaint");
+    services.advance_clock_for_tests(1.0);
+    services.tick(&mut s);
+    assert_eq!(s.record_label, "Stop  00:00:01");
+    assert!(ctx.has_requested_repaint(), "the new time is painted");
+}

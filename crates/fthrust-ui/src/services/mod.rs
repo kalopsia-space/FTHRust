@@ -1117,8 +1117,19 @@ impl Services {
     }
 
     /// Applies pending events to the state, then turns request flags into
-    /// requests.
+    /// requests. Repaints when anything the window shows changed: frequent
+    /// events arrive quietly and timers run on heartbeat ticks (the
+    /// recording's elapsed time, statuses that expire), so neither paints
+    /// by itself.
     pub fn tick(&mut self, state: &mut AppState) {
+        let before = Shown::of(state);
+        self.tick_inner(state);
+        if Shown::of(state) != before {
+            self.outbox.ctx.request_repaint();
+        }
+    }
+
+    fn tick_inner(&mut self, state: &mut AppState) {
         {
             let now = self.now();
             if self.test_commands.is_none() {
@@ -1200,15 +1211,7 @@ impl Services {
                         );
                     }
                 }
-                Event::Toplevels(snapshot) => {
-                    let shown = (state.running_windows.clone(), state.status.clone());
-                    self.on_toplevels(state, snapshot, now);
-                    if (&state.running_windows, &state.status) != (&shown.0, &shown.1)
-                        || !state.pending_cards.is_empty()
-                    {
-                        self.outbox.ctx.request_repaint();
-                    }
-                }
+                Event::Toplevels(snapshot) => self.on_toplevels(state, snapshot, now),
                 Event::GameDetectionAvailability(available) => {
                     state.game_detection_available = available;
                     if !available {
@@ -1678,6 +1681,47 @@ impl Services {
         self.instance.take();
         if let Some(rt) = self.runtime.take() {
             rt.shutdown_timeout(std::time::Duration::from_secs(3));
+        }
+    }
+}
+
+/// What the window shows that the services change (see [`Services::tick`]).
+#[derive(PartialEq)]
+struct Shown {
+    status: StatusText,
+    record: (String, bool, bool),
+    engine: (bool, Option<String>),
+    errors: Vec<(String, String)>,
+    cards: usize,
+    windows: Vec<String>,
+    detection: bool,
+    devices: (usize, usize, Option<usize>),
+}
+
+impl Shown {
+    fn of(state: &AppState) -> Self {
+        Shown {
+            status: state.status.clone(),
+            record: (
+                state.record_label.clone(),
+                state.record_enabled,
+                state.record_active,
+            ),
+            engine: (state.engine_connected, state.active_encoder.clone()),
+            errors: state
+                .error_bar
+                .entries()
+                .iter()
+                .map(|e| (e.title.clone(), e.detail.clone()))
+                .collect(),
+            cards: state.pending_cards.len(),
+            windows: state.running_windows.clone(),
+            detection: state.game_detection_available,
+            devices: (
+                state.audio_devices.len(),
+                state.mic_devices.len(),
+                state.encoder_capabilities.as_ref().map(Vec::len),
+            ),
         }
     }
 }
