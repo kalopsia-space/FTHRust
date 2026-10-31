@@ -529,6 +529,7 @@ impl UploadService {
         if mtime != self.history_mtime {
             self.history_mtime = mtime;
             state.upload_history = History::load(&state.paths);
+            restore_unsaved(state);
         }
     }
 
@@ -734,7 +735,9 @@ impl UploadService {
                 state
                     .upload_history
                     .alias_compressed(&original, &done.key, *size);
+                keep_for_session(state, &original);
             }
+            keep_for_session(state, &done.key);
         }
         if let Some(warning) = &done.reply.warning {
             notice(
@@ -920,6 +923,34 @@ fn notice(
         Some(key),
         dismiss_on_action,
     );
+}
+
+/// Remembers `key`'s entry, as the history has it now, for the rest of the
+/// session: the upload worked, but nothing could write it to the file, and
+/// the entry is the only record of the clip's link.
+fn keep_for_session(state: &mut AppState, key: &Path) {
+    if let Some(entry) = state.upload_history.get(key) {
+        state.upload_unsaved.insert(key.to_path_buf(), entry);
+    }
+}
+
+/// Puts the entries only this session knows back into the history after it was
+/// read from its file again. An entry the file has by now is the file's.
+pub fn restore_unsaved(state: &mut AppState) {
+    state
+        .upload_unsaved
+        .retain(|key, _| !state.upload_history.is_uploaded(key));
+    for (key, entry) in &state.upload_unsaved {
+        state.upload_history.record(key, entry.clone());
+    }
+}
+
+/// The library renamed a clip: an entry only this session knows follows it.
+pub fn unsaved_renamed(state: &mut AppState, old: &Path, new: &Path) {
+    if let Some(entry) = state.upload_unsaved.remove(old) {
+        state.upload_history.rename(old, new);
+        state.upload_unsaved.insert(new.to_path_buf(), entry);
+    }
 }
 
 /// The user asked to upload a clip that is uploaded already but has no link

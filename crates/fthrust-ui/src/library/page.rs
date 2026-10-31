@@ -331,10 +331,17 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);
                 let mut moved = false;
-                match fthrust_core::upload::history::History::update(&state.paths, |h| {
+                let saved = fthrust_core::upload::history::History::update(&state.paths, |h| {
                     moved = h.rename(&old_key, &new_key);
-                }) {
-                    Ok(h) if moved => state.upload_history = h,
+                });
+                // An entry that only this session knows moves by hand.
+                crate::services::upload::unsaved_renamed(state, &old_key, &new_key);
+                match saved {
+                    Ok(h) if moved => {
+                        state.upload_history = h;
+                        // The file's history has no such entries: put them back.
+                        crate::services::upload::restore_unsaved(state);
+                    }
                     Ok(_) => {}
                     Err(e) => state.dialogs.push_message(
                         "Clip renamed",

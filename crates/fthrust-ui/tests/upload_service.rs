@@ -357,6 +357,98 @@ fn an_entry_the_uploader_could_not_save_is_kept() {
     assert!(!r.svc.busy(), "queued again although it was uploaded");
 }
 
+/// An entry that only this session knows (neither the uploader nor the app
+/// could write the history) is the only record of the clip's link: it must
+/// outlive the next reload of the history from its file, which a later upload
+/// that did get through causes, and follow its clip when the library renames
+/// it.
+#[test]
+fn an_entry_only_this_session_knows_survives_reloads_and_renames() {
+    let url = "https://cdn.example/session";
+    let reply = format!(
+        r#"cat >/dev/null; echo '{{"ok":true,"message":"{url}","upload_info":{{"status":"ok","provider":"custom","url":"{url}","raw_url":"{url}"}},"warning":"{url}: uploaded, but the upload history could not be saved (disk full). The clip was kept."}}'"#
+    );
+    let mut r = rig(&reply, json!({}));
+    let clip = r.clip("s.mp4");
+    let key = clip.canonicalize().unwrap();
+    // Nowhere to write the history: the entry lives for this session only.
+    let file = r.state.paths.upload_history_file();
+    std::fs::create_dir_all(&file).unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.state.upload_history.link(&key).unwrap().url, url);
+
+    // The disk recovers and another upload's entry is written: the history
+    // is read from the file again, which knows nothing of this clip.
+    let write_another = |r: &mut Rig, name: &str| {
+        std::thread::sleep(Duration::from_millis(30));
+        let other = r.clip(name).canonicalize().unwrap();
+        let entry = Entry(
+            json!({"status": "ok", "url": "https://cdn.example/other"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        History::update(&r.state.paths, |h| h.record(&other, entry)).unwrap();
+        r.svc.tick(&mut r.state, 5.0);
+        assert!(
+            r.state.upload_history.is_uploaded(&other),
+            "the history was not read again"
+        );
+    };
+    std::fs::remove_dir(&file).unwrap();
+    write_another(&mut r, "o1.mp4");
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        url,
+        "lost with the reload"
+    );
+
+    // Renamed in the library, the entry goes with the clip.
+    r.state
+        .dialogs
+        .results
+        .push(fthrust_ui::state::DialogResult::Answer {
+            tag: format!("rename-clip:{}\u{1f}renamed", clip.display()),
+            yes: true,
+        });
+    fthrust_ui::library::page::consume_results(&mut r.state);
+    let renamed = clip.with_file_name("renamed.mp4");
+    assert!(renamed.exists());
+    let new_key = renamed.canonicalize().unwrap();
+    assert_eq!(
+        r.state.upload_history.link(&new_key).unwrap().url,
+        url,
+        "lost with the rename"
+    );
+    assert!(
+        !r.state.upload_history.is_uploaded(&key),
+        "left under the old name"
+    );
+
+    // And it survives the next reload under its new name.
+    write_another(&mut r, "o2.mp4");
+    assert_eq!(r.state.upload_history.link(&new_key).unwrap().url, url);
+    assert!(!r.state.upload_history.is_uploaded(&key));
+
+    // Once the file has an entry for the clip, the file's is the one that
+    // counts, and nothing is kept back.
+    std::thread::sleep(Duration::from_millis(30));
+    let filed = Entry(
+        json!({"status": "ok", "url": "https://cdn.example/filed"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    History::update(&r.state.paths, |h| h.record(&new_key, filed)).unwrap();
+    r.svc.tick(&mut r.state, 6.0);
+    assert!(r.state.upload_unsaved.is_empty());
+    assert_eq!(
+        r.state.upload_history.link(&new_key).unwrap().url,
+        "https://cdn.example/filed"
+    );
+}
+
 /// A server that took a clip and sent no link leaves a card that offers
 /// "Upload clip" and a history that calls the clip uploaded: pressing the
 /// button used to do nothing at all. Now the bar says why and offers to
