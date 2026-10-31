@@ -64,8 +64,14 @@ impl VideoTexture {
             );
             return;
         }
-        if self.size != Some((frame.width, frame.height)) {
-            self.clear(rs);
+        // A texture belongs to the device it was made on: a render state that
+        // is not the one it is registered with starts it over.
+        let same_renderer = self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| Arc::ptr_eq(r, &rs.renderer));
+        if self.size != Some((frame.width, frame.height)) || !same_renderer {
+            self.clear();
             let texture = rs.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("fthrust-video"),
                 size: wgpu::Extent3d {
@@ -125,10 +131,11 @@ impl VideoTexture {
         );
     }
 
-    /// Frees the texture and unregisters it.
-    pub fn clear(&mut self, rs: &RenderState) {
-        if let Some(id) = self.id.take() {
-            rs.renderer.write().free_texture(&id);
+    /// Frees the texture and unregisters it from the renderer it was
+    /// registered with.
+    pub fn clear(&mut self) {
+        if let (Some(id), Some(renderer)) = (self.id.take(), self.renderer.take()) {
+            renderer.write().free_texture(&id);
         }
         self.texture = None;
         self.view_unorm = None;
@@ -141,8 +148,6 @@ impl Drop for VideoTexture {
     /// renderer kept the frame's GPU memory (8 MB at 1080p, 33 MB at 4K) for
     /// every editor session.
     fn drop(&mut self) {
-        if let (Some(id), Some(renderer)) = (self.id.take(), self.renderer.take()) {
-            renderer.write().free_texture(&id);
-        }
+        self.clear();
     }
 }
