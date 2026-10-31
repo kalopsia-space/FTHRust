@@ -19,7 +19,8 @@
 //! | `ffi` (private) | — | The only `unsafe` in the crate: thin wrappers over FFmpeg APIs ffmpeg-next lacks |
 //!
 //! Every module above the `ffi` row is safe Rust. Call [`init`] once (any
-//! entry point does it for you) before touching FFmpeg.
+//! entry point does it for you) before touching FFmpeg; binaries also call
+//! [`init_ffmpeg_logging`] so FFmpeg's own log goes through `tracing`.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -89,6 +90,27 @@ pub(crate) fn frame_threads(count: usize) -> ffmpeg_next::codec::threading::Conf
         kind: ffmpeg_next::codec::threading::Type::Frame,
         count,
     }
+}
+
+/// The environment variable [`init_ffmpeg_logging`] reads.
+pub const FFMPEG_LOG_ENV: &str = "FTHRUST_FFMPEG_LOG";
+
+/// Routes FFmpeg's log into `tracing`, target `fthrust_media::ffmpeg`, from
+/// warnings up, or from the level `FTHRUST_FFMPEG_LOG` names (`quiet`,
+/// `panic`, `fatal`, `error`, `warning`, `info`, `verbose`, `debug`,
+/// `trace`, or FFmpeg's number for one). Without it FFmpeg prints every
+/// message from info up to stderr itself. The binaries call this once at
+/// startup; the tracing filter still decides what is shown.
+pub fn init_ffmpeg_logging() {
+    let level = match std::env::var(FFMPEG_LOG_ENV) {
+        Err(_) => ffi::log::DEFAULT_LEVEL,
+        Ok(value) => ffi::log::parse_level(&value).unwrap_or_else(|| {
+            // Logging may not be set up yet.
+            eprintln!("{FFMPEG_LOG_ENV}={value} is not an FFmpeg log level; using warning");
+            ffi::log::DEFAULT_LEVEL
+        }),
+    };
+    ffi::log::install(level);
 }
 
 /// Initialises FFmpeg once per process. Safe to call repeatedly.

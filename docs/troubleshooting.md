@@ -106,6 +106,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
   ```
 
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
+- **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through; the log filter above must allow that level too, for example `FTHRUST_LOG=debug`.
 
 ## Diagnostic reports
 
