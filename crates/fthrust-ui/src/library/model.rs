@@ -1,12 +1,13 @@
 //! The library model (`ClipGrid` state): records from the scan, the
 //! filter and sort, day sections, the heading and the empty state.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use fthrust_core::clip_readiness::ClipReadinessRegistry;
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort, apply};
 use time::macros::format_description;
-use time::{OffsetDateTime, UtcOffset};
+use time::{Date, OffsetDateTime, UtcOffset};
 
 /// `_filter_heading`.
 pub fn heading(filter: Filter) -> &'static str {
@@ -23,15 +24,29 @@ fn local_offset() -> UtcOffset {
     *OFFSET.get_or_init(|| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
 }
 
-/// `_section_label_for`: `%a, %b %d` in local time.
-pub fn section_label(mtime_ns: i128) -> String {
-    let when = OffsetDateTime::from_unix_timestamp_nanos(mtime_ns)
+fn local_time(mtime_ns: i128) -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp_nanos(mtime_ns)
         .unwrap_or(OffsetDateTime::UNIX_EPOCH)
-        .to_offset(local_offset());
+        .to_offset(local_offset())
+}
+
+fn label_of(when: OffsetDateTime) -> String {
     when.format(format_description!(
         "[weekday repr:short], [month repr:short] [day]"
     ))
     .unwrap_or_default()
+}
+
+/// `_section_label_for`: `%a, %b %d` in local time.
+pub fn section_label(mtime_ns: i128) -> String {
+    label_of(local_time(mtime_ns))
+}
+
+/// The local calendar day a file belongs to. Sections group by this, not by
+/// the label: the label has no year, so `Fri, Jan 15` of two years would
+/// otherwise be one section.
+pub fn section_date(mtime_ns: i128) -> Date {
+    local_time(mtime_ns).date()
 }
 
 /// `_game_name_from_path`: the parent folder, `Desktop` at the root.
@@ -64,6 +79,8 @@ pub fn title_from_path(path: &Path) -> String {
 pub struct Section {
     /// `Fri, Jan 15`.
     pub label: String,
+    /// The local day (the label without its year ambiguity).
+    pub date: Date,
     /// The newest file's folder name.
     pub game: Option<String>,
     /// Paths in display order.
@@ -145,15 +162,20 @@ impl Library {
             return;
         }
         self.empty = None;
+        let mut by_date: HashMap<Date, usize> = HashMap::new();
         for r in visible {
-            let label = section_label(r.mtime_ns);
-            match self.sections.iter_mut().find(|s| s.label == label) {
-                Some(s) => s.paths.push(r.path.clone()),
-                None => self.sections.push(Section {
-                    label,
-                    game: Some(game_name(&r.path, &self.clips_root)),
-                    paths: vec![r.path.clone()],
-                }),
+            let when = local_time(r.mtime_ns);
+            match by_date.get(&when.date()) {
+                Some(&i) => self.sections[i].paths.push(r.path.clone()),
+                None => {
+                    by_date.insert(when.date(), self.sections.len());
+                    self.sections.push(Section {
+                        label: label_of(when),
+                        date: when.date(),
+                        game: Some(game_name(&r.path, &self.clips_root)),
+                        paths: vec![r.path.clone()],
+                    });
+                }
             }
         }
     }

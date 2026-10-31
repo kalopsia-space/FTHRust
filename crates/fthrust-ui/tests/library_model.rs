@@ -6,7 +6,7 @@ use std::time::Duration;
 use fthrust_core::clip_readiness::ClipReadinessRegistry;
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort};
 use fthrust_ui::library::model::{
-    EmptyState, Library, game_name, heading, section_label, title_from_path,
+    EmptyState, Library, game_name, heading, section_date, section_label, title_from_path,
 };
 use fthrust_ui::library::scan::{ScanEvent, ScanKind, ScanService};
 
@@ -85,6 +85,59 @@ fn sections_group_by_day_and_name_game_folder() {
     lib.rebuild("F12");
     assert_eq!(lib.count, 1);
     assert_eq!(lib.heading_text(), "IMPORTED CLIPS  (1)");
+}
+
+#[test]
+fn the_same_date_in_two_years_is_two_sections() {
+    // Fri, Jan 15 in both years (2021 and 2027 share a calendar).
+    let ns = |at: time::OffsetDateTime| at.unix_timestamp_nanos();
+    let mut lib = Library::new(PathBuf::from("/clips"));
+    lib.records = vec![
+        record(
+            "/clips/Desktop/new_a.mp4",
+            MediaKind::Video,
+            ns(time::macros::datetime!(2027-01-15 12:00 UTC)),
+            false,
+        ),
+        record(
+            "/clips/Desktop/old.mp4",
+            MediaKind::Video,
+            ns(time::macros::datetime!(2021-01-15 12:00 UTC)),
+            false,
+        ),
+        record(
+            "/clips/Desktop/new_b.mp4",
+            MediaKind::Video,
+            ns(time::macros::datetime!(2027-01-15 11:00 UTC)),
+            false,
+        ),
+    ];
+    lib.rebuild("F12");
+    let paths: Vec<usize> = lib.sections.iter().map(|s| s.paths.len()).collect();
+    assert_eq!(paths, vec![2, 1], "one section per full date");
+    assert_ne!(
+        lib.sections[0].date, lib.sections[1].date,
+        "the sections know their year"
+    );
+    assert_eq!(
+        lib.sections[1].date,
+        section_date(ns(time::macros::datetime!(2021-01-15 12:00 UTC)))
+    );
+    assert_eq!(
+        lib.sections[0].label, lib.sections[1].label,
+        "the label stays the reference's `%a, %b %d`, without a year"
+    );
+    assert_eq!(
+        lib.sections[0].paths,
+        vec![
+            PathBuf::from("/clips/Desktop/new_a.mp4"),
+            PathBuf::from("/clips/Desktop/new_b.mp4")
+        ]
+    );
+    assert_eq!(
+        lib.sections[1].paths,
+        vec![PathBuf::from("/clips/Desktop/old.mp4")]
+    );
 }
 
 #[test]
