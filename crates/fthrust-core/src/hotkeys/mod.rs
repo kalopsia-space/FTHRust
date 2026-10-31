@@ -5,10 +5,12 @@
 //! `keyboard` map). [`HotkeyBindings::load`] reads all of them.
 
 pub mod hyprland;
+mod keys;
 
 use crate::error::{CoreError, Result};
 use crate::{FthrPaths, read_json, write_json_atomic};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 const CUSTOM_PREFIX: &str = "save_custom_clip_";
@@ -260,34 +262,10 @@ fn normalize_controller_combo(input: &str) -> String {
     out.join("+")
 }
 
-/// The xkb keysym name of a named key (`Page Up` → `Prior`), shared by the
-/// portal trigger and the Hyprland bind writers.
-pub(crate) fn portal_key(part: &str) -> Option<&'static str> {
-    Some(match part {
-        "Esc" => "Escape",
-        "Enter" => "Return",
-        "Space" => "space",
-        "Tab" => "Tab",
-        "Backspace" => "BackSpace",
-        "Delete" => "Delete",
-        "Insert" => "Insert",
-        "Home" => "Home",
-        "End" => "End",
-        "Page Up" => "Prior",
-        "Page Down" => "Next",
-        "Up" => "Up",
-        "Down" => "Down",
-        "Left" => "Left",
-        "Right" => "Right",
-        "Print" => "Print",
-        "Pause" => "Pause",
-        "Scroll Lock" => "Scroll_Lock",
-        _ => return None,
-    })
-}
-
 /// Converts an FTHR combo such as `Ctrl+Shift+S` to the freedesktop
-/// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`).
+/// shortcuts-spec trigger `CTRL+SHIFT+s` (`Win` becomes `LOGO`). Keys are
+/// spelled as xkb keysym names (`Page Up`, `PageUp` and `Pageup` all give
+/// `Prior`); one with no keysym is passed through as it was typed.
 pub fn to_portal_trigger(combo: &str) -> String {
     combo
         .split('+')
@@ -298,15 +276,7 @@ pub fn to_portal_trigger(combo: &str) -> String {
             "Alt" => "ALT".to_string(),
             "Shift" => "SHIFT".to_string(),
             "Win" => "LOGO".to_string(),
-            _ => {
-                if let Some(k) = portal_key(part) {
-                    k.to_string()
-                } else if part.chars().count() == 1 && part.chars().all(char::is_alphabetic) {
-                    part.to_lowercase()
-                } else {
-                    part.to_string()
-                }
-            }
+            _ => keys::keysym(part).map_or_else(|| part.to_string(), Cow::into_owned),
         })
         .collect::<Vec<_>>()
         .join("+")

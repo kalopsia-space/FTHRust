@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::HotkeyBindings;
+use super::{HotkeyBindings, keys};
 use crate::fsutil;
 
 const SOCKET_ACTIONS: [&str; 6] = [
@@ -49,15 +49,16 @@ pub fn to_hyprland_bind(combo: &str) -> (String, String) {
     (mods, hypr_key(last))
 }
 
-/// Hyprland parses xkb keysym names: single characters upper-cased as the
-/// reference did, named keys through the keysym table (`Page Up` → `Prior`).
+/// Hyprland parses xkb keysym names: letters upper-cased as the reference
+/// did, every other key through the keysym table the portal trigger shares
+/// (`Page Up`, `PageUp` and `Pageup` → `Prior`, `Equals` → `equal`). A key
+/// with no keysym is passed through as it was typed.
 fn hypr_key(key: &str) -> String {
-    if key.chars().count() == 1 {
-        return key.to_uppercase();
+    match keys::keysym(key) {
+        Some(k) if k.chars().count() == 1 => k.to_uppercase(),
+        Some(k) => k.into_owned(),
+        None => key.to_owned(),
     }
-    super::portal_key(key)
-        .map(str::to_owned)
-        .unwrap_or_else(|| key.to_owned())
 }
 
 /// The command a compositor bind runs: `"<client_exe>" --hotkey <action>`.
@@ -76,7 +77,9 @@ pub fn bind_line(action: &str, combo: &str, client_exe: &Path, sock: &Path) -> S
 }
 
 /// `_hyprland_bind_actions`: the six socket actions then the custom clips
-/// by length, keeping only those with a key.
+/// by length, keeping only those with a key. A key with no xkb keysym (`Fn`,
+/// or a name nothing knows) is left out and logged: Hyprland would reject the
+/// line, and in a Lua config a bad bind can take the rest of the file with it.
 pub fn bind_actions(bindings: &HotkeyBindings) -> Vec<String> {
     let mut actions: Vec<String> = SOCKET_ACTIONS.iter().map(|s| s.to_string()).collect();
     for n in bindings.custom_clip_lengths() {
@@ -84,7 +87,16 @@ pub fn bind_actions(bindings: &HotkeyBindings) -> Vec<String> {
     }
     actions
         .into_iter()
-        .filter(|a| bindings.get(a).is_some_and(|k| !k.is_empty()))
+        .filter(|a| {
+            let Some(combo) = bindings.get(a).filter(|k| !k.is_empty()) else {
+                return false;
+            };
+            let bindable = keys::is_bindable(combo);
+            if !bindable {
+                tracing::warn!(action = %a, combo, "the key has no xkb keysym; not written to the Hyprland config");
+            }
+            bindable
+        })
         .collect()
 }
 
@@ -215,9 +227,12 @@ pub fn write_lua_block(
     ];
     for action in bind_actions(bindings) {
         let combo = bindings.get(&action).unwrap_or("");
-        let lua_combo = combo
-            .split('+')
-            .map(|p| p.to_uppercase())
+        // Modifiers upper-cased, the key as its keysym name.
+        let (mods, key) = to_hyprland_bind(combo);
+        let lua_combo = mods
+            .split(' ')
+            .filter(|m| !m.is_empty())
+            .chain(std::iter::once(key.as_str()))
             .collect::<Vec<_>>()
             .join(" + ");
         let command = socket_command(&action, client_exe, sock)
