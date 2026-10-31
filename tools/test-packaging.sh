@@ -432,6 +432,109 @@ EOF
     if out="$(python3 -I "$chk" --manifest "$d/manifest-many.json" --libraries "$d/registry.json" --scripts "$d" 2>&1)"; then fail depends_refuses_scripts_that_do_not_look_like_btbns "exit 0"
     elif grep -q "have a provider script" <<<"$out"; then pass depends_refuses_scripts_that_do_not_look_like_btbns
     else fail depends_refuses_scripts_that_do_not_look_like_btbns "$out"; fi
+
+    # A supporting library whose script no enabled option reaches any more: dropping an FFmpeg option has to fail
+    # here, in the pull request, and not later at the release gate.
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/qux.git"\nSCRIPT_COMMIT="4444444444444444444444444444444444444444"\n' > "$d/scripts.d/50-qux.sh"
+    local qux='{"id": "qux", "name": "qux", "license": "MIT", "url": "https://example.org/qux", "pinned_repo": "https://example.org/qux.git", "pinned_commit": "4444444444444444444444444444444444444444", "text": "qux.txt", "needed_by": ["foo"]}'
+    registry "[$bar, $baz, $qux]" '{}'
+    if out="$(run)"; then fail depends_rejects_a_supporting_library_nothing_needs "exit 0"
+    elif grep -q "qux is in supporting_libraries but no enabled option needs it" <<<"$out" && grep -q "licenses/ffmpeg/qux.txt" <<<"$out"; then pass depends_rejects_a_supporting_library_nothing_needs
+    else fail depends_rejects_a_supporting_library_nothing_needs "$out"; fi
+    registry "[$bar, $baz]" '{}'
+    if out="$(run)"; then pass depends_ignores_a_script_nothing_needs_that_the_registry_lacks; else fail depends_ignores_a_script_nothing_needs_that_the_registry_lacks "$out"; fi
+
+    # BtbN's final script depends on whole directories, so a script's siblings are built with it even when it
+    # declares no dependency on them (libpng, next to libaribb24).
+    mkdir -p "$d/scripts.d/45-pair"
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/main.git"\nSCRIPT_COMMIT="5555555555555555555555555555555555555555"\nffbuild_configure() {\n    echo --enable-libmain\n}\n' > "$d/scripts.d/45-pair/50-main.sh"
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/sib.git"\nSCRIPT_COMMIT="6666666666666666666666666666666666666666"\n' > "$d/scripts.d/45-pair/25-sib.sh"
+    jq -n '{configuration: "--enable-libmain"}' > "$d/manifest-pair.json"
+    pair_registry() { # supporting-json
+        jq -n --argjson extra "$1" \
+            '{ignored_options: {}, not_linked: {},
+              libraries: [{id: "main", name: "main", flags: ["--enable-libmain"], license: "MIT", url: "https://example.org/main", pinned_repo: "https://example.org/main.git", pinned_commit: "5555555555555555555555555555555555555555", text: "main.txt"}],
+              supporting_libraries: $extra}' > "$d/registry-pair.json"
+    }
+    local sib='{"id": "sib", "name": "sib", "license": "MIT", "url": "https://example.org/sib", "pinned_repo": "https://example.org/sib.git", "pinned_commit": "6666666666666666666666666666666666666666", "text": "sib.txt", "needed_by": ["main"]}'
+    pair_registry "[$sib]"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest-pair.json" --libraries "$d/registry-pair.json" --scripts "$d" 2>&1)"; then pass depends_counts_the_siblings_of_a_group_member
+    else fail depends_counts_the_siblings_of_a_group_member "$out"; fi
+    pair_registry "[]"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest-pair.json" --libraries "$d/registry-pair.json" --scripts "$d" 2>&1)"; then fail depends_requires_the_siblings_of_a_group_member "exit 0"
+    elif grep -q "sib (https://example.org/sib) is built for --enable-libmain > pair" <<<"$out"; then pass depends_requires_the_siblings_of_a_group_member
+    else fail depends_requires_the_siblings_of_a_group_member "$out"; fi
+
+    # Every repository a script builds counts, not only SCRIPT_REPO (libiconv clones gnulib, opencl builds the ICD loader).
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/twin.git"\nSCRIPT_COMMIT="7777777777777777777777777777777777777777"\nSCRIPT_REPO2="https://example.org/twin-loader.git"\nSCRIPT_COMMIT2="8888888888888888888888888888888888888888"\nffbuild_configure() {\n    echo --enable-libtwin\n}\n' > "$d/scripts.d/50-twin.sh"
+    jq -n '{configuration: "--enable-libtwin"}' > "$d/manifest-twin.json"
+    twin_registry() { # supporting-json not-linked-json
+        jq -n --argjson extra "$1" --argjson nl "$2" \
+            '{ignored_options: {}, not_linked: $nl,
+              libraries: [{id: "twin", name: "twin", flags: ["--enable-libtwin"], license: "MIT", url: "https://example.org/twin", pinned_repo: "https://example.org/twin.git", pinned_commit: "7777777777777777777777777777777777777777", text: "twin.txt"}],
+              supporting_libraries: $extra}' > "$d/registry-twin.json"
+    }
+    local loader='{"id": "twin-loader", "name": "twin loader", "license": "MIT", "url": "https://example.org/twin-loader", "pinned_repo": "https://example.org/twin-loader.git", "pinned_commit": "8888888888888888888888888888888888888888", "text": "twin-loader.txt", "needed_by": ["twin"]}'
+    twin_run() { python3 -I "$chk" --manifest "$d/manifest-twin.json" --libraries "$d/registry-twin.json" --scripts "$d" 2>&1; }
+    twin_registry "[]" '{}'
+    if out="$(twin_run)"; then fail depends_checks_a_scripts_second_repository "exit 0"
+    elif grep -q "twin (https://example.org/twin-loader) is built for --enable-libtwin" <<<"$out"; then pass depends_checks_a_scripts_second_repository
+    else fail depends_checks_a_scripts_second_repository "$out"; fi
+    twin_registry "[$loader]" '{}'
+    if out="$(twin_run)"; then pass depends_accepts_a_second_repository_in_the_registry; else fail depends_accepts_a_second_repository_in_the_registry "$out"; fi
+    twin_registry "[]" '{"https://example.org/twin-loader.git": "build time only"}'
+    if out="$(twin_run)"; then pass depends_accepts_a_second_repository_recorded_as_not_linked; else fail depends_accepts_a_second_repository_recorded_as_not_linked "$out"; fi
+
+    # Without --scripts the check fetches BtbN's scripts at the commit the manifest pins. The fetch is retried and
+    # has a timeout; here against a local repository, with a git in front of the real one that fails or hangs.
+    local repo="$WORK/btbn-repo" sha stub="$WORK/git-stub" counter="$WORK/git-fetches" real_git
+    real_git="$(command -v git)"
+    mkdir -p "$repo" "$stub"
+    cp -r "$d/scripts.d" "$repo/"
+    git -C "$repo" init -q
+    git -C "$repo" config uploadpack.allowAnySHA1InWant true
+    git -C "$repo" add -A
+    git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -q -m scripts
+    sha="$(git -C "$repo" rev-parse HEAD)"
+    cat > "$stub/git" <<EOF
+#!/bin/sh
+if [ "\$1" = fetch ]; then
+    n=\$(cat "$counter" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$counter"
+    case "\${GIT_STUB:-}" in
+        fail) echo "fatal: simulated network failure" >&2; exit 128 ;;
+        fail-twice) if [ \$n -le 2 ]; then echo "fatal: simulated network failure" >&2; exit 128; fi ;;
+        hang) exec sleep 30 ;;
+    esac
+fi
+exec "$real_git" "\$@"
+EOF
+    chmod +x "$stub/git"
+    jq -n --arg r "$repo" --arg c "$sha" \
+        '{configuration: "--enable-version3 --enable-libfoo", corresponding_source: {build_scripts: {repo: $r, commit: $c}}}' > "$d/manifest-fetch.json"
+    registry "[$bar, $baz]" '{}'
+    fetching() { # stub-mode [env...]: the check without --scripts, with the stubbed git first on PATH
+        local mode="$1"
+        shift
+        rm -f "$counter"
+        env PATH="$stub:$PATH" GIT_STUB="$mode" FFMPEG_DEPENDS_FETCH_DELAY=0 "$@" \
+            python3 -I "$chk" --manifest "$d/manifest-fetch.json" --libraries "$d/registry.json" 2>&1
+    }
+    fetches() { cat "$counter" 2>/dev/null || echo 0; }
+
+    if out="$(fetching ok)" && [ "$(fetches)" = 1 ]; then pass depends_fetches_the_scripts_at_the_pinned_commit
+    else fail depends_fetches_the_scripts_at_the_pinned_commit "$out ($(fetches) fetches)"; fi
+    if out="$(fetching fail-twice)" && [ "$(fetches)" = 3 ]; then pass depends_retries_a_failing_fetch
+    else fail depends_retries_a_failing_fetch "$out ($(fetches) fetches)"; fi
+    if out="$(fetching fail)"; then fail depends_gives_up_after_three_attempts "exit 0"
+    elif [ "$(fetches)" = 3 ] && grep -q "after 3 attempts" <<<"$out" && grep -q "simulated network failure" <<<"$out"; then pass depends_gives_up_after_three_attempts
+    else fail depends_gives_up_after_three_attempts "$out ($(fetches) fetches)"; fi
+    if out="$(fetching hang FFMPEG_DEPENDS_FETCH_TIMEOUT=1)"; then fail depends_times_out_a_hanging_fetch "exit 0"
+    elif [ "$(fetches)" = 3 ] && grep -q "timed out after 1 s" <<<"$out"; then pass depends_times_out_a_hanging_fetch
+    else fail depends_times_out_a_hanging_fetch "$out ($(fetches) fetches)"; fi
+    jq '.corresponding_source.build_scripts.commit = "main"' "$d/manifest-fetch.json" > "$d/manifest-fetch-tag.json"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest-fetch-tag.json" --libraries "$d/registry.json" 2>&1)"; then fail depends_refuses_a_build_scripts_pin_that_is_not_a_commit "exit 0"
+    elif grep -q "40 lowercase hex" <<<"$out"; then pass depends_refuses_a_build_scripts_pin_that_is_not_a_commit
+    else fail depends_refuses_a_build_scripts_pin_that_is_not_a_commit "$out"; fi
 }
 
 group_links() {

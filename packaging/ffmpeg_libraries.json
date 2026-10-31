@@ -1223,6 +1223,7 @@
   ],
   "not_linked": {
     "libglvnd": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
+    "libpciaccess": "BtbN builds it for libdrm's Intel support and turns it into a dlopen stub like libdrm itself; none of it is in the shipped libraries (libdrm is loaded from the system at run time).",
     "libsamplerate": "A dependency of PulseAudio's daemon; BtbN builds only the client library, and no libsamplerate code is in the shipped libraries.",
     "libxau": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
     "libxcursor": "X11 client library built as a dependency of SDL 2's X11 support; none of it is in the shipped libraries (libavdevice loads libX11, libxcb, libXext and libXv from the system at run time).",
@@ -1240,6 +1241,7 @@
     "xcbproto": "X11 protocol descriptions and headers for building the X11 libraries; build time only.",
     "xorg-macros": "Autoconf macros for building the X11 libraries; build time only.",
     "xproto": "X11 protocol descriptions and headers for building the X11 libraries; build time only.",
-    "xtrans": "X11 protocol descriptions and headers for building the X11 libraries; build time only."
+    "xtrans": "X11 protocol descriptions and headers for building the X11 libraries; build time only.",
+    "https://git.savannah.gnu.org/git/gnulib.git": "Source libiconv's autogen.sh imports to build its command-line tool and its optional relocation support; the libiconv library BtbN links (no --enable-relocatable) does not use it, and the shipped libraries show no trace of it."
   }
 }
