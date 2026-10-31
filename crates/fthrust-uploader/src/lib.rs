@@ -54,26 +54,32 @@ pub struct Env {
 }
 
 impl Env {
-    /// The real environment: `$HOME`, the desktop keyring, and the hidden
-    /// test overrides `FTHRUST_UPLOADER_CATBOX_URL` and
-    /// `FTHRUST_UPLOADER_NO_RETRY_DELAY`.
+    /// The real environment: `$HOME` and the desktop keyring. Debug builds
+    /// (the tests, the UI bench) also read the hidden overrides
+    /// `FTHRUST_UPLOADER_CATBOX_URL` and `FTHRUST_UPLOADER_NO_RETRY_DELAY`;
+    /// a release build has no such thing, so no environment variable can
+    /// send its uploads somewhere else.
     pub fn from_process() -> Result<Env, String> {
         let paths = FthrPaths::from_env().map_err(|e| e.to_string())?;
-        let catbox_url =
-            std::env::var("FTHRUST_UPLOADER_CATBOX_URL").unwrap_or_else(|_| CATBOX_URL.into());
-        let retry_delays = if std::env::var_os("FTHRUST_UPLOADER_NO_RETRY_DELAY").is_some() {
-            vec![Duration::ZERO; RETRY_DELAYS.len()]
-        } else {
-            RETRY_DELAYS.to_vec()
-        };
-        Ok(Env {
+        #[allow(unused_mut)]
+        let mut env = Env {
             paths,
-            catbox_url,
-            retry_delays,
+            catbox_url: CATBOX_URL.into(),
+            retry_delays: RETRY_DELAYS.to_vec(),
             deadline: DEADLINE,
             io_timeout: IO_TIMEOUT,
             vault: Box::new(vault::SecretService),
-        })
+        };
+        #[cfg(debug_assertions)]
+        {
+            if let Ok(url) = std::env::var("FTHRUST_UPLOADER_CATBOX_URL") {
+                env.catbox_url = url;
+            }
+            if std::env::var_os("FTHRUST_UPLOADER_NO_RETRY_DELAY").is_some() {
+                env.retry_delays = vec![Duration::ZERO; RETRY_DELAYS.len()];
+            }
+        }
+        Ok(env)
     }
 
     /// A test environment: no retry waits, an in-memory vault.

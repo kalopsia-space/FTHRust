@@ -239,6 +239,93 @@ fn binary_round_trip() {
     assert_eq!(v["message"], json!("Uploader request is not valid JSON."));
 }
 
+/// Runs the binary on a Catbox connection test with the test overrides in its
+/// environment, and returns its reply and whether anything connected to the
+/// address `FTHRUST_UPLOADER_CATBOX_URL` named. (Proxy variables point at a
+/// closed port, so a binary that ignores the override fails fast instead of
+/// reaching the real Catbox.)
+fn catbox_override_run() -> (Value, bool) {
+    let h = enabled_home(json!({"upload_provider": "catbox"}));
+    let mut s = UploaderSettings::load(&h.paths);
+    s.accept_catbox("2026-10-23T00:00:00+00:00");
+    s.save(&h.paths).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/user/api.php", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", dead.local_addr().unwrap());
+    drop(dead);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fthrust-uploader"))
+        .env("HOME", h.dir.path())
+        .env("FTHRUST_UPLOADER_CATBOX_URL", &url)
+        .env("FTHRUST_UPLOADER_NO_RETRY_DELAY", "1")
+        .env("HTTP_PROXY", &proxy)
+        .env("HTTPS_PROXY", &proxy)
+        .env("http_proxy", &proxy)
+        .env("https_proxy", &proxy)
+        .env("NO_PROXY", "127.0.0.1")
+        .env_remove("no_proxy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"action":"test_connection"}"#)
+        .unwrap();
+    // Answer whatever connects, once.
+    let mut connected = false;
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(20) {
+        if let Ok((mut stream, _)) = listener.accept() {
+            connected = true;
+            let mut buf = [0u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            break;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let out = child.wait_with_output().unwrap();
+    let v = serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
+    (v, connected)
+}
+
+/// Debug builds (the tests, the bench) can aim Catbox uploads somewhere
+/// else, and skip the retry waits.
+#[cfg(debug_assertions)]
+#[test]
+fn a_debug_build_honours_the_test_overrides() {
+    let (reply, connected) = catbox_override_run();
+    assert!(
+        connected,
+        "nothing connected to the overridden address: {reply}"
+    );
+    assert_eq!(
+        reply["message"],
+        json!("Catbox reachable (HTTP 200)."),
+        "{reply}"
+    );
+}
+
+/// A release build must not send uploads where an environment variable says:
+/// it reaches the real Catbox, or fails trying (`cargo t --release -p
+/// fthrust-uploader --test contract` runs this one).
+#[cfg(not(debug_assertions))]
+#[test]
+fn a_release_build_ignores_the_test_overrides() {
+    let (reply, connected) = catbox_override_run();
+    assert!(!connected, "the release build used the override: {reply}");
+    assert_eq!(reply["ok"], json!(false), "{reply}");
+}
+
 /// The keyring is reached from inside the uploader's tokio runtime; with
 /// zbus's tokio feature unified in, a blocking call there used to panic.
 #[test]
