@@ -122,9 +122,16 @@ const KEPT_THEME_FILE: &str = "theme.json";
 /// A directory next to the live theme folders that an import fills before
 /// anything live changes. Its `new/<folder>` directories hold the extracted
 /// assets and its `old/` the folders swapped out, with a copy of the
-/// `theme.json` they belong to. It is removed on drop.
+/// `theme.json` they belong to.
+///
+/// It is removed on drop, except when the import did not complete and a
+/// swapped-out folder is still in `old/` (an undo that could not rename it
+/// back): those are the user's files, and the recovery at the next start puts
+/// them back.
 struct Staging {
     root: PathBuf,
+    /// The import completed: `theme.json` has been replaced.
+    committed: bool,
 }
 
 impl Staging {
@@ -145,7 +152,10 @@ impl Staging {
         }
         let root = theme_dir.join(format!("{}{}", Self::PREFIX, uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root)?;
-        let staging = Self { root };
+        let staging = Self {
+            root,
+            committed: false,
+        };
         std::fs::create_dir(staging.root.join("old"))?;
         for (_, name) in FOLDERS {
             std::fs::create_dir_all(staging.new_dir(name))?;
@@ -172,10 +182,38 @@ impl Staging {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Renames the swapped-out folder `name` back to `live`. A failure is
+    /// logged and the folder stays parked.
+    fn put_back(&self, name: &str, live: &Path) {
+        if let Err(e) = std::fs::rename(self.parked(name), live) {
+            tracing::error!("could not put back the theme {name} folder: {e}");
+        }
+    }
+
+    /// Marks the import as complete: everything in the directory, the
+    /// swapped-out folders included, may now be removed.
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+
+    /// Whether a swapped-out folder is still in `old/`.
+    fn holds_parked_folder(&self) -> bool {
+        FOLDERS
+            .iter()
+            .any(|(_, name)| std::fs::symlink_metadata(self.parked(name)).is_ok())
+    }
 }
 
 impl Drop for Staging {
     fn drop(&mut self) {
+        if !self.committed && self.holds_parked_folder() {
+            tracing::error!(
+                "the theme import did not complete and not every old folder could be put back; the rest stays in {} and is put back at the next start",
+                self.root.join("old").display()
+            );
+            return;
+        }
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -291,11 +329,13 @@ struct Swapped<'a> {
 }
 
 impl Swapped<'_> {
+    /// Puts the old folders back. One that cannot be renamed back stays
+    /// parked, and the staging is then not removed (see [`Staging`]).
     fn undo(&mut self) {
         while let Some((name, live, had_old)) = self.done.pop() {
             let _ = std::fs::remove_dir_all(&live);
             if had_old {
-                let _ = std::fs::rename(self.staging.parked(name), &live);
+                self.staging.put_back(name, &live);
             }
         }
     }
@@ -316,7 +356,7 @@ fn swap_in<'a>(staging: &'a Staging, live: [(&'static str, PathBuf); 3]) -> Resu
         }
         if let Err(e) = std::fs::rename(staging.new_dir(name), &path) {
             if had_old {
-                let _ = std::fs::rename(staging.parked(name), &path);
+                staging.put_back(name, &path);
             }
             swapped.undo();
             return Err(e.into());
@@ -424,7 +464,7 @@ impl ThemeStore {
                 )));
             }
         }
-        let staging = Staging::create(&self.paths)?;
+        let mut staging = Staging::create(&self.paths)?;
         let mut present: [std::collections::BTreeSet<String>; 3] = Default::default();
         let mut total = 0u64;
         for i in 0..zf.len() {
@@ -512,6 +552,8 @@ impl ThemeStore {
             swapped.undo();
             return Err(e);
         }
+        // The old folders in the staging are of no use now.
+        staging.commit();
         Ok(())
     }
 }
@@ -621,6 +663,53 @@ mod tests {
         );
         assert!(!paths.theme_icons_dir().join("new.png").exists());
         assert_eq!(staging_dirs(&paths), 1, "only the new import's staging");
+        drop(staging);
+        assert_eq!(staging_dirs(&paths), 0);
+    }
+
+    #[test]
+    fn an_undo_that_cannot_rename_a_folder_back_leaves_it_in_the_staging() {
+        let (_t, paths) = home_with_a_theme();
+        let staging = Staging::create(&paths).unwrap();
+        let root = staging.root.clone();
+        staging.keep_theme_file(&paths.theme_file()).unwrap();
+        // The import parked the icons and then failed ...
+        std::fs::rename(paths.theme_icons_dir(), staging.parked("icons")).unwrap();
+        // ... and the undo cannot rename them back: their place is somewhere
+        // that does not exist.
+        let mut swapped = Swapped {
+            staging: &staging,
+            done: vec![(
+                "icons",
+                paths.theme_dir().join("nowhere").join("icons"),
+                true,
+            )],
+        };
+        swapped.undo();
+        drop(staging);
+
+        assert_eq!(
+            std::fs::read(root.join("old/icons/old")).unwrap(),
+            b"OLD",
+            "the old folder is not deleted with the staging"
+        );
+        // The next start puts it back.
+        let recovery = recover_crashed_import(&paths);
+        assert_eq!(recovery.put_back, ["icons"]);
+        assert_eq!(
+            std::fs::read(paths.theme_icons_dir().join("old")).unwrap(),
+            b"OLD"
+        );
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_completed_import_removes_its_staging_with_the_old_folders() {
+        let (_t, paths) = home_with_a_theme();
+        let mut staging = Staging::create(&paths).unwrap();
+        std::fs::rename(paths.theme_icons_dir(), staging.parked("icons")).unwrap();
+        assert!(staging.holds_parked_folder());
+        staging.commit();
         drop(staging);
         assert_eq!(staging_dirs(&paths), 0);
     }
