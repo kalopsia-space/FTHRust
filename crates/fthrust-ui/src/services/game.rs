@@ -150,7 +150,9 @@ fn run(
         let forced = refresh.swap(false, Ordering::SeqCst);
         if forced || last.as_ref() != Some(&snapshot) {
             last = Some(snapshot.clone());
-            outbox.send(Event::Toplevels(snapshot));
+            // Titles change all the time (a browser tab, a game's FPS
+            // counter); the tick repaints only when the list it shows does.
+            outbox.send_quiet(Event::Toplevels(snapshot));
         }
         match watcher.changes().recv_timeout(POLL) {
             Ok(()) | Err(RecvTimeoutError::Timeout) => {}

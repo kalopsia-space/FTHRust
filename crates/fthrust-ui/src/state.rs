@@ -550,8 +550,6 @@ pub struct AppState {
     pub pending_cards: Vec<crate::services::CardKind>,
     /// Sound cues to play (the sound service drains them).
     pub pending_sounds: Vec<String>,
-    /// Engine events for the recording service (drained each tick).
-    pub pending_engine_events: Vec<fthrust_ipc::Event>,
     /// A screenshot hotkey fired.
     pub screenshot_requested: bool,
     /// The Record button text (`Record`, `Preparing…`, `Stop  hh:mm:ss`, …).
@@ -783,7 +781,6 @@ impl AppState {
             engine_connected: false,
             pending_cards: Vec::new(),
             pending_sounds: Vec::new(),
-            pending_engine_events: Vec::new(),
             screenshot_requested: false,
             record_label: "Record".into(),
             record_active: false,

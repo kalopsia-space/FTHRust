@@ -239,11 +239,19 @@ impl Outbox {
 
     /// Sends an event, wakes the event loop and requests a repaint.
     pub fn send(&self, event: Event) {
+        self.send_quiet(event);
+        self.ctx.request_repaint();
+    }
+
+    /// Sends an event and wakes the event loop, which ticks the services
+    /// without painting. For frequent events that change nothing on screen
+    /// by themselves (health, save progress, window lists); whatever they
+    /// do change asks for its own repaint.
+    pub fn send_quiet(&self, event: Event) {
         let _ = self.tx.send(event);
         if let Some(w) = &self.waker {
             w();
         }
-        self.ctx.request_repaint();
     }
 }
 
@@ -489,6 +497,43 @@ impl Services {
             Err(e) => {
                 tracing::info!(error = %e, "toplevel list unavailable");
                 outbox.send(Event::GameDetectionAvailability(false));
+            }
+        }
+    }
+
+    /// A new toplevel snapshot: game detection and the focus pause.
+    fn on_toplevels(
+        &mut self,
+        state: &mut AppState,
+        snapshot: Vec<fthrust_wayland::toplevels::Toplevel>,
+        now: f64,
+    ) {
+        self.sync_focus_target(state);
+        let was_paused = self.focus.paused();
+        let change = self.focus.observe(&snapshot);
+        let actions = self.game.on_snapshot(state, snapshot, now);
+        self.run_game_actions(state, actions);
+        // Switching sources changes the focus target.
+        self.sync_focus_target(state);
+        match change {
+            Some(focus::FocusChange::Lost) => {
+                self.dispatch(Request::PauseCapture, state);
+                state.status = StatusText {
+                    text: status::FOCUS_PAUSED.into(),
+                    style: StatusStyle::Warning,
+                };
+            }
+            Some(focus::FocusChange::Regained) => {
+                self.dispatch(Request::ResumeCapture, state);
+                state.status = StatusText {
+                    text: "STARTING CAPTURE".into(),
+                    style: StatusStyle::Idle,
+                };
+            }
+            None => {
+                if was_paused && !self.focus.paused() {
+                    self.dispatch(Request::ResumeCapture, state);
+                }
             }
         }
     }
@@ -1064,7 +1109,6 @@ impl Services {
                     self.run_save_actions(state, actions);
                     let actions = self.recording.on_engine_event(&ipc, now);
                     self.run_rec_actions(state, actions);
-                    state.pending_engine_events.push(ipc);
                 }
                 Event::ActiveConfig(c) => self.active_config = c,
                 Event::PortalShortcutsBound(bound) => {
@@ -1091,33 +1135,12 @@ impl Services {
                     }
                 }
                 Event::Toplevels(snapshot) => {
-                    self.sync_focus_target(state);
-                    let was_paused = self.focus.paused();
-                    let change = self.focus.observe(&snapshot);
-                    let actions = self.game.on_snapshot(state, snapshot, now);
-                    self.run_game_actions(state, actions);
-                    // Switching sources changes the focus target.
-                    self.sync_focus_target(state);
-                    match change {
-                        Some(focus::FocusChange::Lost) => {
-                            self.dispatch(Request::PauseCapture, state);
-                            state.status = StatusText {
-                                text: status::FOCUS_PAUSED.into(),
-                                style: StatusStyle::Warning,
-                            };
-                        }
-                        Some(focus::FocusChange::Regained) => {
-                            self.dispatch(Request::ResumeCapture, state);
-                            state.status = StatusText {
-                                text: "STARTING CAPTURE".into(),
-                                style: StatusStyle::Idle,
-                            };
-                        }
-                        None => {
-                            if was_paused && !self.focus.paused() {
-                                self.dispatch(Request::ResumeCapture, state);
-                            }
-                        }
+                    let shown = (state.running_windows.clone(), state.status.clone());
+                    self.on_toplevels(state, snapshot, now);
+                    if (&state.running_windows, &state.status) != (&shown.0, &shown.1)
+                        || !state.pending_cards.is_empty()
+                    {
+                        self.outbox.ctx.request_repaint();
                     }
                 }
                 Event::GameDetectionAvailability(available) => {

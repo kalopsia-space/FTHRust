@@ -166,6 +166,9 @@ pub struct Supervisor {
     restart_at: Option<f64>,
     defer_restart_until: Option<f64>,
     deferred_restart: Option<(EngineConfig, bool, bool)>,
+    /// A restart asked for after the running one already configured its
+    /// process; it runs once that apply settles.
+    queued_restart: Option<(EngineConfig, bool, bool)>,
     applying: bool,
     apply_deadline: Option<f64>,
     last_event_at: f64,
@@ -207,6 +210,7 @@ impl Supervisor {
             restart_at: None,
             defer_restart_until: None,
             deferred_restart: None,
+            queued_restart: None,
             applying: false,
             apply_deadline: None,
             last_event_at: 0.0,
@@ -449,13 +453,24 @@ impl Supervisor {
                 self.applying = true;
                 if self.save_busy {
                     self.status(&mut out, self.pending_text(), StatusStyle::Idle);
+                    // The newest settings win; an explicit ask stays explicit.
+                    let explicit = explicit || self.deferred_restart.as_ref().is_some_and(|d| d.2);
                     if self.deferred_restart.is_none() {
-                        self.deferred_restart = Some((config, allow_recording_prepare, explicit));
                         self.defer_restart_until = Some(now + RESTART_DEFER_S);
                     }
+                    self.deferred_restart = Some((config, allow_recording_prepare, explicit));
                     return out;
                 }
                 if self.restart_pending {
+                    // A restart is under way. Until the new process has been
+                    // configured, it simply starts with the newest settings;
+                    // after that, they need one more restart once this one
+                    // settles (both used to be dropped).
+                    if self.pending_launch.is_some() {
+                        self.queued_restart = Some((config, allow_recording_prepare, explicit));
+                    } else {
+                        self.config = Some(config);
+                    }
                     return out;
                 }
                 self.restart_pending = true;
@@ -736,6 +751,19 @@ impl Supervisor {
                 out.append(&mut more);
             }
         }
+        if !self.restart_pending
+            && let Some((config, allow, explicit)) = self.queued_restart.take()
+        {
+            let mut more = self.handle(
+                Input::Restart {
+                    config,
+                    allow_recording_prepare: allow,
+                    explicit,
+                },
+                now,
+            );
+            out.append(&mut more);
+        }
         if let Phase::Connecting { since } = self.phase
             && now - since >= HANDSHAKE_S
         {
@@ -999,6 +1027,9 @@ impl EngineDriver {
 
 fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
     match effect {
+        // Health arrives about once a second for as long as the app runs and
+        // changes nothing on screen by itself.
+        Effect::Ui(ev @ Event::Health(_)) => ctx.outbox.send_quiet(ev),
         Effect::Ui(ev) => ctx.outbox.send(ev),
         Effect::Spawn => spawn_engine(ctx),
         Effect::Connect => connect_engine(ctx),
@@ -1037,7 +1068,6 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                     let inputs = c.inputs.clone();
                     let log = c.log.clone();
                     c.handle.spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
                         let mut writer = fthrust_core::diagnostics::logging::RotatingWriter::open(
                             &log,
                             2 * 1024 * 1024,
@@ -1045,19 +1075,15 @@ fn spawn_engine(ctx: &Arc<DriverCtx>) {
                             false,
                         )
                         .ok();
-                        let mut lines = tokio::io::BufReader::new(stderr).lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
+                        pump_stderr(stderr, |line| {
                             if let Some(w) = writer.as_mut() {
-                                let _ = w.write_line(&line);
+                                let _ = w.write_line(line);
                             }
-                            if let Some(rest) = line.strip_prefix("FTHR_STARTUP_ERROR: ") {
-                                let (code, detail) = rest.split_once(": ").unwrap_or((rest, ""));
-                                let _ = inputs.send(Input::StartupError {
-                                    code: code.trim().to_owned(),
-                                    detail: detail.trim().chars().take(1000).collect(),
-                                });
+                            if let Some(input) = startup_error_line(line) {
+                                let _ = inputs.send(input);
                             }
-                        }
+                        })
+                        .await;
                     });
                 }
                 if let Ok(mut p) = c.pid.lock() {
@@ -1156,6 +1182,12 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                             IpcEvent::Configured { warnings } => Input::Configured { warnings },
                                             IpcEvent::Status(s) => Input::Status(*s),
                                             IpcEvent::Heartbeat => Input::Heartbeat,
+                                            // Hundreds per save, and nothing
+                                            // on screen follows them.
+                                            p @ IpcEvent::SaveProgress { .. } => {
+                                                outbox.send_quiet(Event::Engine(p));
+                                                continue;
+                                            }
                                             other => {
                                                 outbox.send(Event::Engine(other));
                                                 continue;
@@ -1188,6 +1220,35 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
             }
         }
     });
+}
+
+/// Reads the engine's stderr to the end, a line at a time. Bytes that are
+/// not UTF-8 are replaced rather than ending the read: a reader that stopped
+/// closed the pipe, and the engine's next `eprintln!` then died on EPIPE.
+pub async fn pump_stderr(stderr: impl tokio::io::AsyncRead + Unpin, mut on_line: impl FnMut(&str)) {
+    use tokio::io::AsyncBufReadExt;
+    let mut reader = tokio::io::BufReader::new(stderr);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&buf);
+                on_line(line.trim_end_matches(['\n', '\r']));
+            }
+        }
+    }
+}
+
+/// An `FTHR_STARTUP_ERROR: CODE: detail` line as a supervisor input.
+pub fn startup_error_line(line: &str) -> Option<Input> {
+    let rest = line.strip_prefix("FTHR_STARTUP_ERROR: ")?;
+    let (code, detail) = rest.split_once(": ").unwrap_or((rest, ""));
+    Some(Input::StartupError {
+        code: code.trim().to_owned(),
+        detail: detail.trim().chars().take(1000).collect(),
+    })
 }
 
 /// Queues `cmd` for the connected client; `false` when not connected.

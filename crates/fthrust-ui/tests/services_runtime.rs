@@ -173,3 +173,24 @@ fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
     }
     out
 }
+
+/// Audit 2026-10-31: frequent background events (health, save progress,
+/// window lists) wake the services without repainting the whole UI.
+#[test]
+fn quiet_events_do_not_request_a_repaint() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let ctx = egui::Context::default();
+    let repaints = Arc::new(AtomicUsize::new(0));
+    let seen = repaints.clone();
+    ctx.set_request_repaint_callback(move |_| {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    let outbox = fthrust_ui::services::Outbox::new(tx, ctx.clone());
+    outbox.send_quiet(Event::Sound("clip".into()));
+    assert_eq!(repaints.load(Ordering::SeqCst), 0);
+    assert!(rx.try_recv().is_ok(), "the event is delivered");
+    outbox.send(Event::Sound("clip".into()));
+    assert!(repaints.load(Ordering::SeqCst) > 0);
+}

@@ -690,3 +690,108 @@ fn driver_shutdown_waits_for_the_engine_to_finish() {
     rt.shutdown_timeout(std::time::Duration::from_secs(3));
     assert!(done.is_file(), "the engine ran to completion, not killed");
 }
+
+fn config_fps(fps: u32) -> EngineConfig {
+    let mut c = config();
+    c.capture.fps = fps;
+    c
+}
+
+fn configured_fps(fx: &[Effect]) -> Option<u32> {
+    fx.iter().find_map(|e| match e {
+        Effect::Send(fthrust_ipc::Command::Configure(c)) => Some(c.capture.fps),
+        _ => None,
+    })
+}
+
+fn restart(fps: u32) -> Input {
+    Input::Restart {
+        config: config_fps(fps),
+        allow_recording_prepare: false,
+        explicit: false,
+    }
+}
+
+/// Audit 2026-10-31: settings applied while a restart is pending or
+/// deferred used to be dropped (the first config won).
+#[test]
+fn the_newest_settings_win_while_a_restart_is_deferred() {
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 40, &mut now);
+    sv.set_save_busy(true);
+    sv.handle(restart(90), now);
+    sv.handle(restart(120), now + 0.1);
+    sv.set_save_busy(false);
+    let mut fx = sv.handle(Input::Tick, now + 0.7);
+    // Stopped, then started again after the gap with the newest settings.
+    fx.extend(sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.8));
+    fx.extend(sv.handle(Input::Tick, now + 2.0));
+    fx.extend(sv.handle(Input::Spawned { pid: 41 }, now + 2.1));
+    fx.extend(sv.handle(
+        Input::Hello {
+            pid: 41,
+            version: "x".into(),
+        },
+        now + 2.2,
+    ));
+    assert_eq!(configured_fps(&fx), Some(120), "{fx:?}");
+}
+
+#[test]
+fn settings_applied_during_a_restart_are_not_dropped() {
+    // Before the new process is configured: it starts with the newest.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 50, &mut now);
+    sv.handle(restart(90), now);
+    sv.handle(restart(144), now + 0.1);
+    let mut fx = sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.2);
+    fx.extend(sv.handle(Input::Tick, now + 1.5));
+    fx.extend(sv.handle(Input::Spawned { pid: 51 }, now + 1.6));
+    fx.extend(sv.handle(
+        Input::Hello {
+            pid: 51,
+            version: "x".into(),
+        },
+        now + 1.7,
+    ));
+    assert_eq!(configured_fps(&fx), Some(144), "{fx:?}");
+    // After it was configured: one more restart once the apply settles.
+    sv.handle(restart(165), now + 1.8);
+    let mut frames = 0;
+    let mut t = now + 1.8;
+    let mut fx = Vec::new();
+    for _ in 0..6 {
+        t += 0.5;
+        frames += 30;
+        fx.extend(sv.handle(Input::Status(status(frames, flags::ACTIVE, 1)), t));
+    }
+    fx.extend(sv.handle(Input::Tick, t + 0.1));
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "the queued restart ran: {fx:?}"
+    );
+}
+
+/// The engine's stderr is read to the end even past bytes that aren't
+/// UTF-8 (the reader used to stop, and the engine died on EPIPE).
+#[test]
+fn stderr_reader_survives_bad_bytes() {
+    use fthrust_ui::services::engine::{pump_stderr, startup_error_line};
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let bytes: &[u8] = b"starting\n\xff\xfe broken\nFTHR_STARTUP_ERROR: NO_OUTPUT: none found\n";
+    let mut lines = Vec::new();
+    rt.block_on(pump_stderr(bytes, |l| lines.push(l.to_owned())));
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[1].ends_with(" broken"));
+    match startup_error_line(&lines[2]) {
+        Some(Input::StartupError { code, detail }) => {
+            assert_eq!(code, "NO_OUTPUT");
+            assert_eq!(detail, "none found");
+        }
+        other => panic!("{other:?}"),
+    }
+}
