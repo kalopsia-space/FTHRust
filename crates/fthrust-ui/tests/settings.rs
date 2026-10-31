@@ -306,3 +306,33 @@ fn clip_tab_writes_settings() {
     );
     let _ = settings::CONTENT_INSET;
 }
+
+/// Audit 2026-10-31 tier 1 #12: USE DEFAULT commits the default folder
+/// (it used to remove the key, so saves failed until a restart and the
+/// legacy migration then picked `~/FTHR_Clips`).
+#[test]
+fn use_default_commits_the_default_clips_folder() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let custom = s.paths.root().join("elsewhere");
+    s.settings.set(
+        "clips_directory",
+        serde_json::json!(custom.to_string_lossy()),
+    );
+    s.settings.set(
+        "recording_directory",
+        serde_json::json!(custom.join("Recordings").to_string_lossy()),
+    );
+    settings::clip::use_default_clips_directory(&mut s);
+    let default = s.paths.default_clips_directory();
+    assert_eq!(s.settings.clips_directory().unwrap(), default);
+    assert_eq!(
+        s.settings.recording_directory().unwrap(),
+        default.join("Recordings"),
+        "a derived recording folder follows"
+    );
+    assert!(s.clips_directory_changed);
+    assert!(default.is_dir());
+    // It is on disk, so the next start keeps it.
+    let reloaded = AppState::load(s.paths.clone()).unwrap();
+    assert_eq!(reloaded.settings.clips_directory().unwrap(), default);
+}
