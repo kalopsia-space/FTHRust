@@ -62,6 +62,8 @@ pub fn admission(
 pub struct SaveWorker {
     tx: Sender<SaveRequest>,
     busy: Arc<AtomicBool>,
+    /// Set while an accepted save still reads live capture.
+    live: Arc<AtomicBool>,
     events: Sender<Event>,
 }
 
@@ -70,13 +72,15 @@ impl SaveWorker {
     pub fn spawn(engine: EngineHandle, events: Sender<Event>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded::<SaveRequest>();
         let busy = Arc::new(AtomicBool::new(false));
-        let worker_busy = busy.clone();
+        let live = Arc::new(AtomicBool::new(false));
+        let (worker_busy, worker_live) = (busy.clone(), live.clone());
         let worker_events = events.clone();
         std::thread::Builder::new()
             .name("fthrust-save".into())
             .spawn(move || {
                 for req in rx {
-                    let result = run_save_guarded(&engine, &req, &worker_events);
+                    let result = run_save_guarded(&engine, &req, &worker_events, &worker_live);
+                    worker_live.store(false, Ordering::SeqCst);
                     let _ = worker_events.send(Event::SaveResult {
                         request_id: req.request_id,
                         result,
@@ -86,7 +90,12 @@ impl SaveWorker {
                 }
             })
             .expect("spawn save thread");
-        Self { tx, busy, events }
+        Self {
+            tx,
+            busy,
+            live,
+            events,
+        }
     }
 
     /// Queues a save. Every call is answered by exactly one `SaveResult`:
@@ -100,7 +109,9 @@ impl SaveWorker {
             });
             return;
         }
+        self.live.store(true, Ordering::SeqCst);
         if let Err(crossbeam_channel::SendError(req)) = self.tx.send(req) {
+            self.live.store(false, Ordering::SeqCst);
             self.busy.store(false, Ordering::SeqCst);
             let _ = self.events.send(Event::SaveResult {
                 request_id: req.request_id,
@@ -113,6 +124,14 @@ impl SaveWorker {
     pub fn is_busy(&self) -> bool {
         self.busy.load(Ordering::Relaxed)
     }
+
+    /// Whether an accepted save still needs live capture: its admission
+    /// check, the wait for its last frame, the snapshot and the audio
+    /// windows (each bounded). From then on it only reads what it took, so
+    /// capture can stop under it.
+    pub fn needs_capture(&self) -> bool {
+        self.live.load(Ordering::SeqCst)
+    }
 }
 
 /// [`run_save`] with a panic turned into a failed save, so the worker keeps
@@ -122,10 +141,11 @@ fn run_save_guarded(
     engine: &EngineHandle,
     req: &SaveRequest,
     events: &Sender<Event>,
+    live: &AtomicBool,
 ) -> Result<SavedClip, String> {
     let partial = fthrust_media::transactional_save::temporary_path_for(&req.path);
     let partial_existed = partial.exists();
-    let run = std::panic::AssertUnwindSafe(|| run_save(engine, req, events));
+    let run = std::panic::AssertUnwindSafe(|| run_save(engine, req, events, live));
     match std::panic::catch_unwind(run) {
         Ok(result) => result,
         Err(panic) => {
@@ -172,6 +192,7 @@ fn run_save(
     engine: &EngineHandle,
     req: &SaveRequest,
     events: &Sender<Event>,
+    live: &AtomicBool,
 ) -> Result<SavedClip, String> {
     let status = engine.status();
     let config = engine.config();
@@ -243,6 +264,8 @@ fn run_save(
             _ => errors.push(format!("{title}: the audio source is not capturing")),
         }
     }
+    // Everything live is taken: the rest only reads the snapshot and PCM.
+    live.store(false, Ordering::SeqCst);
     let tracks: Vec<ClipAudio<'_>> = tracks_data
         .iter()
         .map(|(title, samples)| ClipAudio {

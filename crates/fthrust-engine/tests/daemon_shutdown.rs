@@ -46,6 +46,31 @@ impl AudioProvider for SlowAudio {
     }
 }
 
+/// Slow synthetic audio that notes when the engine stops it.
+struct NotingAudio {
+    inner: SlowAudio,
+    stopped: Arc<Mutex<Option<Instant>>>,
+}
+
+impl AudioProvider for NotingAudio {
+    fn start(&self, cfg: &AudioConfig) -> Vec<(String, String)> {
+        self.inner.start(cfg)
+    }
+    fn window(&self, kind: AudioSourceKind, end_ns: i64, duration_ms: u32) -> Option<Vec<f32>> {
+        self.inner.window(kind, end_ns, duration_ms)
+    }
+    fn status(&self) -> AudioStatus {
+        self.inner.status()
+    }
+    fn stop(&self) {
+        self.stopped
+            .lock()
+            .unwrap()
+            .get_or_insert_with(Instant::now);
+        self.inner.stop()
+    }
+}
+
 /// Audio whose start panics, taking the configure job down with it.
 struct PanickingAudio;
 
@@ -316,15 +341,80 @@ async fn a_new_engine_can_start_while_the_old_one_finishes_its_save() {
     drop(client);
     tokio::time::sleep(Duration::from_millis(300)).await;
     d.stops.send(Stop::ParentGone).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The listener closes once capture has stopped, well before the save
+    // is done.
+    let gone = Instant::now();
+    let next = loop {
+        match fthrust_ipc::transport::EngineServer::bind(&d.socket).await {
+            Ok(server) => break server,
+            Err(e) => {
+                assert!(
+                    gone.elapsed() < Duration::from_secs(4),
+                    "a new engine still cannot bind: {e}"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
     assert!(d.done.try_recv().is_err(), "still finishing the save");
-    let next = fthrust_ipc::transport::EngineServer::bind(&d.socket)
-        .await
-        .expect("a new engine can bind the socket");
     drop(next);
     // SIGTERM still ends the old engine's wait.
     let signalled = Instant::now();
     d.stops.send(Stop::Signal).await.unwrap();
     finished(&d, Duration::from_secs(4)).await.unwrap();
     assert!(signalled.elapsed() < Duration::from_secs(4));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capture_stops_before_the_engine_waits_for_a_save() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The save only needs what the ring already holds. An engine finishing
+    // a long save (up to a minute) kept capturing the screen meanwhile,
+    // next to the new engine a relaunched UI started.
+    let stopped = Arc::new(Mutex::new(None));
+    let d = start(Arc::new(NotingAudio {
+        inner: SlowAudio {
+            inner: SyntheticAudio::new(),
+            delay: Duration::from_secs(3),
+        },
+        stopped: stopped.clone(),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 4,
+            path: d.tmp.path().join("long.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 4 })
+    })
+    .await;
+    let asked = Instant::now();
+    client.send(Command::Shutdown).await.unwrap();
+    let e = next_event(&mut client, Duration::from_secs(30), |e| {
+        matches!(e, Event::SaveResult { request_id: 4, .. })
+    })
+    .await;
+    let answered = Instant::now();
+    assert!(
+        matches!(e, Event::SaveResult { result: Ok(_), .. }),
+        "{e:?}"
+    );
+    let stopped = stopped.lock().unwrap().expect("capture was stopped");
+    assert!(
+        stopped < answered,
+        "capture stopped only after the save had finished"
+    );
+    assert!(
+        stopped.duration_since(asked) < Duration::from_secs(4),
+        "capture stopped {:?} after the shutdown",
+        stopped.duration_since(asked)
+    );
+    finished(&d, Duration::from_secs(10)).await.unwrap();
 }

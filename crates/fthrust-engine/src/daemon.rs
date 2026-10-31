@@ -23,6 +23,9 @@ use crate::save::{RecordWorker, SaveRequest, SaveWorker, panic_message};
 pub const HEARTBEAT: Duration = Duration::from_millis(500);
 /// Longest a shutdown waits for a save in flight.
 pub const SHUTDOWN_SAVE_WAIT: Duration = Duration::from_secs(60);
+/// Longest a shutdown lets a save just accepted read live capture (its
+/// own waits are shorter) before capture stops under it.
+pub const SHUTDOWN_CAPTURE_WAIT: Duration = Duration::from_secs(2);
 /// Longest a shutdown waits for capture, audio and a recording to stop.
 pub const SHUTDOWN_STOP_WAIT: Duration = Duration::from_secs(15);
 /// Longest a shutdown waits for its last events to reach the client.
@@ -350,13 +353,30 @@ impl Service {
         Some(ExitCode::from(1))
     }
 
-    fn shutdown(&mut self) {
-        if let Some(r) = &self.record {
-            r.shutdown();
-        }
-        if let Some(e) = self.engine.as_mut() {
-            e.shutdown();
-        }
+    /// Hands a recording, capture and audio to a task that stops them, in
+    /// that order (the recording keeps its tail while frames still come).
+    /// A configure job still running is let finish so its engine is
+    /// stopped too.
+    fn stop_capture(&mut self) -> tokio::task::JoinHandle<()> {
+        let record = self.record.take();
+        let mut engine = self.engine.take();
+        let configuring = self.configuring.take();
+        tokio::spawn(async move {
+            if let Some(job) = configuring
+                && let Ok(outcome) = job.await
+            {
+                engine = Some(outcome.engine);
+            }
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Some(r) = record {
+                    r.shutdown();
+                }
+                if let Some(mut e) = engine {
+                    e.shutdown();
+                }
+            })
+            .await;
+        })
     }
 }
 
@@ -577,26 +597,70 @@ pub async fn serve_until(
             }
         }
     };
-    // No new client is served from here on: close the listener (and remove
-    // the socket file) now, so a relaunched UI's new engine can bind while
-    // this one finishes its save. The connected client keeps its own socket.
-    drop(server);
-    shut_down(service, client.as_ref(), &mut internal_rx).await;
+    shut_down(service, server, client.as_ref(), &mut internal_rx).await;
     if let Some(conn) = client.take() {
         flush(conn).await;
     }
     Ok(code)
 }
 
-/// The bounded shutdown: the save in flight, then capture, audio and a
-/// recording, each with its own limit. A signal during either wait cuts it
-/// short.
+/// The bounded shutdown, in order: let a save just accepted take what it
+/// needs from live capture; stop a recording, capture and audio, so this
+/// engine never captures next to the one a relaunched UI starts; stop
+/// listening, so that engine can bind; then let the save finish. Each step
+/// has its own limit, and another signal skips what is left.
 async fn shut_down(
     mut service: Service,
+    server: EngineServer,
     client: Option<&Connection>,
     internal_rx: &mut mpsc::Receiver<Internal>,
 ) {
-    // A save in flight finishes first (bounded like the UI's completion
+    let mut cut = false;
+    let deadline = Instant::now() + SHUTDOWN_CAPTURE_WAIT;
+    while !cut
+        && service.save.as_ref().is_some_and(SaveWorker::needs_capture)
+        && Instant::now() < deadline
+    {
+        match tokio::time::timeout(Duration::from_millis(20), internal_rx.recv()).await {
+            Ok(Some(Internal::Worker(e))) => {
+                service.on_worker(&e);
+                deliver(client, e, deadline).await;
+            }
+            Ok(Some(Internal::Stop(Stop::Signal))) => cut = true,
+            Ok(Some(_)) | Err(_) => {}
+            Ok(None) => break,
+        }
+    }
+    // A cut leaves the stop task running; the runtime's own shutdown bounds it.
+    let mut stopping = service.stop_capture();
+    let deadline = Instant::now() + SHUTDOWN_STOP_WAIT;
+    while !cut {
+        tokio::select! {
+            _ = &mut stopping => break,
+            internal = internal_rx.recv() => match internal {
+                Some(Internal::Worker(e)) => {
+                    service.on_worker(&e);
+                    deliver(client, e, deadline).await;
+                }
+                Some(Internal::Stop(Stop::Signal)) => cut = true,
+                Some(_) => {}
+                None => break,
+            },
+            () = tokio::time::sleep_until(deadline) => {
+                tracing::warn!("capture did not stop within {SHUTDOWN_STOP_WAIT:?}; going on");
+                break;
+            }
+        }
+    }
+    // No new client is served from here on: close the listener (and remove
+    // the socket file), so a relaunched UI's new engine can bind while this
+    // one finishes its save. The connected client keeps its own socket.
+    drop(server);
+    if cut {
+        tracing::warn!("signal received again; not waiting any longer");
+        return;
+    }
+    // The save in flight finishes (bounded like the UI's completion
     // timeout), and its result still reaches the client. The wait is for
     // the result itself: the save thread clears its busy flag right after
     // sending it, while the event may still be crossing the forwarder.
@@ -609,7 +673,7 @@ async fn shut_down(
             }
             Ok(Some(Internal::Stop(Stop::Signal))) => {
                 tracing::warn!("signal received again; not waiting for the clip save");
-                break;
+                return;
             }
             Ok(Some(_)) => {}
             Ok(None) => break,
@@ -617,38 +681,6 @@ async fn shut_down(
                 tracing::warn!(
                     "the clip save did not finish within {SHUTDOWN_SAVE_WAIT:?}; shutting down without it"
                 );
-                break;
-            }
-        }
-    }
-    // Capture, audio and a recording stop on a blocking thread, so a stuck
-    // driver or disk cannot keep the process alive; a recording's last
-    // events still go out. A configure job still running is let finish so
-    // its engine is shut down too.
-    let deadline = Instant::now() + SHUTDOWN_STOP_WAIT;
-    let stopping = async move {
-        if let Some(job) = service.configuring.take()
-            && let Ok(outcome) = job.await
-        {
-            service.engine = Some(outcome.engine);
-        }
-        let _ = tokio::task::spawn_blocking(move || service.shutdown()).await;
-    };
-    tokio::pin!(stopping);
-    loop {
-        tokio::select! {
-            () = &mut stopping => break,
-            internal = internal_rx.recv() => match internal {
-                Some(Internal::Worker(e)) => deliver(client, e, deadline).await,
-                Some(Internal::Stop(Stop::Signal)) => {
-                    tracing::warn!("signal received again; not waiting for capture to stop");
-                    return;
-                }
-                Some(_) => {}
-                None => break,
-            },
-            () = tokio::time::sleep_until(deadline) => {
-                tracing::warn!("capture did not stop within {SHUTDOWN_STOP_WAIT:?}; exiting anyway");
                 return;
             }
         }
