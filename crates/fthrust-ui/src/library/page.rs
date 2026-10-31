@@ -408,7 +408,6 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let t = state.tokens.clone();
     let rect = ui.max_rect();
     ui.painter().rect_filled(rect, 0.0, t.color(Color::Bg));
-    drain_thumbnails(ui.ctx(), state);
     consume_results(state);
     if state.library_dirty {
         let key = screenshot_key(state);

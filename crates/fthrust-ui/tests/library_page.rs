@@ -1,6 +1,8 @@
 //! Plan 5 Task 7: the Clips page (`ClipGrid`).
 
 mod common;
+#[path = "../../fthrust-media/tests/support/mod.rs"]
+mod support;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -576,6 +578,47 @@ fn scrolling_away_drops_the_queued_thumbnail_jobs_of_the_old_rows() {
         jobs <= built,
         "{jobs} jobs queued for {built} built cards: the old rows' jobs stayed"
     );
+}
+
+#[test]
+fn thumbnails_that_finish_while_another_page_shows_are_taken_at_once() {
+    use fthrust_ui::library::thumbs::ThumbPool;
+    let (tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    let clip = root.join("Desktop/clip.mp4");
+    if support::write_test_clip(&clip, 1, false).is_none() {
+        return;
+    }
+    s.library.upsert(&clip, false);
+    s.library_dirty = true;
+    s.thumb_pool = Some(ThumbPool::start(tmp.path().join("cache")));
+    let tokens = s.tokens.clone();
+    let textured = std::rc::Rc::new(std::cell::Cell::new(false));
+    let seen = textured.clone();
+    let mut left = false;
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        // The page that asked for the thumbnail is left in the frame that asked.
+        if !left && s.thumb_requested.contains(&clip) {
+            s.page = Page::Settings;
+            left = true;
+        }
+        seen.set(s.thumb_textures.contains(&clip));
+    });
+    h.run_steps(3);
+    // The worker finishes a few tens of milliseconds later, on the Settings page.
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while !textured.get() && Instant::now() < deadline {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(h);
+    assert!(
+        textured.get(),
+        "the finished thumbnail (and its 0.9 MB of pixels) waited for the Clips page"
+    );
+    assert_eq!(s.page, Page::Settings);
 }
 
 #[test]
