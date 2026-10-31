@@ -17,13 +17,22 @@ SEED=""
 # a run that is meant to be published uses the defaults. Each goes through bench.sh's prepare_bench_dir, so a
 # directory that is absent, empty or marked as made by this script or the bench (.uidrive-bench) is cleared and
 # used, and a symlink, one owned by someone else, or one holding anything else is refused untouched. Whatever
-# was prepared is removed again when the script ends, failed or not.
+# was prepared is removed again when the script ends, with one exception: when the run failed after the bench
+# started, the bench directory stays (its logs/ and shots/ are what explains the failure) and its name is printed;
+# the next run clears it, since it carries the marker.
 # shellcheck source=bench.sh
 source "$HERE/bench.sh"
 prepared=()
 cleanup() {
-  local d
-  for d in "${prepared[@]}"; do [ -z "$d" ] || rm -rf -- "$d"; done
+  local rc=$? d
+  for d in "${prepared[@]}"; do
+    [ -n "$d" ] || continue
+    if [ $rc -ne 0 ] && [ "$d" = "${DOCS_BENCH:-}" ] && [ -n "$(find "$d" -mindepth 1 ! -name "$MARKER" -print -quit)" ]; then
+      echo "docs-shots: the run failed (status $rc); $d keeps the bench's logs/ and shots/" >&2
+      continue
+    fi
+    rm -rf -- "$d"
+  done
   return 0
 }
 trap cleanup EXIT

@@ -83,7 +83,9 @@ copies the named shots over. It works in `/tmp/fthrust-docs` and
 the app's, Settings the clips folder), so the names stay fixed. Both follow the
 bench directory rules (an absent, empty or earlier-bench directory is cleared;
 a symlink, someone else's or any other directory is refused untouched), and
-both are removed when the script ends, failed or not.
+both are removed when the script ends. When the run fails after the bench
+started, the bench directory stays, with its `logs/` and `shots/`, and the
+script prints its name; the next run clears it.
 
 ## Reading a failure
 

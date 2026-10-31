@@ -177,6 +177,50 @@ docs_shots_cleans_up_when_it_fails_midway() {
   need "the seed folder, which is not ours, left alone" test -d "$WORK/docs-seed"
 }
 
+# A copy of docs-shots.sh in a small fake repository: a cargo that succeeds, two fake binaries, and a bench.sh that has the
+# real prepare_bench_dir and, run as a command, leaves a log and a shot behind and exits with FAKE_BENCH_EXIT. That is the
+# part of the script that matters here: what is left when the bench itself fails, and what when it works.
+docs_shots_fake_repo() { # DIR
+  local fake=$1
+  mkdir -p "$fake/tools/uidrive/scenarios" "$fake/target/debug" "$fake/docs" "$fake/bin" "$fake/seed"
+  cp "$HERE/docs-shots.sh" "$fake/tools/uidrive/"
+  : > "$fake/tools/uidrive/scenarios/docs_shots.sh"
+  printf '#!/bin/sh\n' > "$fake/target/debug/fthrust"
+  cp "$fake/target/debug/fthrust" "$fake/target/debug/fthrust-engine"
+  printf '#!/bin/sh\nexit 0\n' > "$fake/bin/cargo"
+  {
+    echo 'MARKER=.uidrive-bench'
+    echo 'die() { echo "bench: $*" >&2; exit 1; }'
+    sed -n '/^prepare_bench_dir() {/,/^}/p' "$HERE/bench.sh"
+    echo 'if [ "${BASH_SOURCE[0]}" = "$0" ]; then'
+    echo '  mkdir -p "$BENCH_DIR/logs" "$BENCH_DIR/shots"; echo "app log" > "$BENCH_DIR/logs/app.log"; echo png > "$BENCH_DIR/shots/001-hotkeys.png"'
+    echo '  exit "${FAKE_BENCH_EXIT:-0}"'
+    echo 'fi'
+  } > "$fake/tools/uidrive/bench.sh"
+  chmod +x "$fake/tools/uidrive/bench.sh" "$fake/tools/uidrive/docs-shots.sh" "$fake/bin/cargo"
+}
+
+docs_shots_keeps_the_bench_directory_when_the_bench_fails() {
+  local fake=$WORK/fake-docs-fail out rc
+  docs_shots_fake_repo "$fake"
+  out=$(PATH="$fake/bin:$PATH" FAKE_BENCH_EXIT=3 DOCS_SHOTS_DIR="$fake/work" DOCS_SHOTS_BENCH="$fake/bench" \
+    "$fake/tools/uidrive/docs-shots.sh" --seed "$fake/seed" 2>&1)
+  rc=$?
+  need "the bench's own exit status (got $rc: $out)" test "$rc" = 3
+  need "the bench's log kept" test "$(cat "$fake/bench/logs/app.log")" = "app log"
+  need "the bench's shot kept" test -f "$fake/bench/shots/001-hotkeys.png"
+  need "the directory named in the message (got: $out)" grep -q "$fake/bench keeps the bench's logs/ and shots/" <<<"$out"
+  need "the app directory, which holds the seed copy and the app, removed" test ! -e "$fake/work"
+  need "no screenshot copied over docs/images" test -z "$(ls "$fake/docs" 2>/dev/null)"
+  # the next run clears what was kept (it carries the marker) and leaves nothing behind when it works
+  out=$(PATH="$fake/bin:$PATH" FAKE_BENCH_EXIT=0 DOCS_SHOTS_DIR="$fake/work" DOCS_SHOTS_BENCH="$fake/bench" \
+    "$fake/tools/uidrive/docs-shots.sh" --seed "$fake/seed" 2>&1)
+  rc=$?
+  need "the second run to work (got $rc: $out)" test "$rc" = 0
+  need "the shot copied over under its published name" test -f "$fake/docs/images/hotkeys.png"
+  need "both directories removed after a good run" test ! -e "$fake/bench" -a ! -e "$fake/work"
+}
+
 bench_dir_creates_a_missing_directory() {
   export BENCH_DIR=$WORK/new/deeper
   prepare_bench_dir
@@ -244,6 +288,7 @@ for t in \
   docs_shots_refuses_symlinks_and_other_users_directories \
   docs_shots_keeps_the_fixed_directory_names \
   docs_shots_cleans_up_when_it_fails_midway \
+  docs_shots_keeps_the_bench_directory_when_the_bench_fails \
   bench_dir_strips_every_trailing_slash \
   bench_dir_refuses_dot_dot \
   bench_dir_refuses_root_relative_and_symlinks \
