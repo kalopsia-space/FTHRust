@@ -171,6 +171,9 @@ mod quit_signals {
                             std::process::exit(1);
                         }
                         asked = true;
+                        // At once: a probe killed by the same signal must
+                        // not be cached as a dead encoder.
+                        crate::services::set_quitting();
                         let _ = proxy.send_event(Wake::Quit);
                     }
                 });
@@ -419,6 +422,7 @@ impl ApplicationHandler<Wake> for Runner {
         match event {
             WindowEvent::CloseRequested => {
                 tracing::info!("window close requested by the compositor");
+                crate::services::set_quitting();
                 el.exit();
             }
             WindowEvent::Resized(size) => {

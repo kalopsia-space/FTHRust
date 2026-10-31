@@ -163,6 +163,19 @@ fn run(
                 Err(_) => break,
             }
         };
+        // Checked before a new card builds its surface on a dead device.
+        if gpu.device_lost() {
+            surface = None;
+            gpu.reset();
+            ctx = fresh_ctx(&tokens);
+            // The card on screen went with the device: say it another way.
+            if model.is_live() {
+                model.hide();
+                if let Some(c) = last_content.take() {
+                    notify(&mut notify_rt, &c);
+                }
+            }
+        }
         match cmd {
             Some(Cmd::Shutdown) => break,
             Some(Cmd::Tokens(t)) => {
@@ -234,18 +247,6 @@ fn run(
                 }
             }
             None => {}
-        }
-        if gpu.device_lost() {
-            surface = None;
-            gpu.reset();
-            ctx = fresh_ctx(&tokens);
-            // The card on screen went with the device: say it another way.
-            if model.is_live() {
-                model.hide();
-                if let Some(c) = last_content.take() {
-                    notify(&mut notify_rt, &c);
-                }
-            }
         }
         if !model.is_live() {
             continue;

@@ -237,7 +237,9 @@ pub fn quitting() -> bool {
     QUITTING.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_quitting() {
+/// Marks the app as quitting (the first quit signal or the window closing,
+/// before the shutdown steps run).
+pub fn set_quitting() {
     QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
