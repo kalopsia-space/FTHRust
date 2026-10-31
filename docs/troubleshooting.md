@@ -63,7 +63,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | 003 | ENGINE NOT FOUND | `fthrust-engine` is missing from next to the app. Re-download the AppImage. |
 | 004 | ENGINE NOT RESPONDING | The engine stopped answering. FTHRust offers **RESTART ENGINE**. |
 | 005 | ENGINE COULD NOT START | Often no usable encoder. See [above](#no-hardware-encoder-or-engine-could-not-start). |
-| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. |
+| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. A restart FTHRust makes on its own never brings up the screen-sharing dialog: if the portal would have to ask again, capture stops with **CAPTURE FAILED** instead. |
 | 007 | MANUAL RECORDING FAILED | A recording stopped with an error, for example when writing fell more than 8 seconds behind capture. |
 | 008 | RECORDING COULD NOT START | Often too little disk space (512 MB is needed). |
 | 009 | RECORDING COULD NOT STOP | The recording didn't finish cleanly. |

@@ -77,10 +77,12 @@ pub trait CaptureBackend: Send {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenReason {
     /// The capture the user started (the app starting, a settings change,
-    /// a restart): the portal may show its dialog.
+    /// RESTART ENGINE): the portal may show its dialog.
     Start,
-    /// An automatic recovery: the portal may only restore its saved
-    /// session, never show its dialog.
+    /// An automatic recovery: a re-open after a failed generation, or the
+    /// first open of an engine the app restarted on its own
+    /// (`EngineConfig::automatic_start`). The portal may only restore its
+    /// saved session, never show its dialog.
     Recovery,
 }
 

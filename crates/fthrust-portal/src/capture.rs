@@ -1,7 +1,7 @@
 //! A running ScreenCast capture: the portal session plus its negotiated
 //! PipeWire stream, opened with the reference's restore-token rule
 //! (`RunPortalStartupWithRetry`) for a start the user asked for, and
-//! restore-only for an automatic re-open.
+//! restore-only for an automatic open.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -23,13 +23,13 @@ pub const RESTORE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Whether an open may bring up the portal's dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
-    /// A start the user asked for (the app starting, a settings change, a
-    /// restart): the dialog comes up when there is no saved choice or the
-    /// portal rejects it, and a restored session whose stream never
+    /// A start the user asked for (the app starting, a settings change,
+    /// RESTART ENGINE): the dialog comes up when there is no saved choice
+    /// or the portal rejects it, and a restored session whose stream never
     /// settles a format is retried once without its token.
     Allowed,
-    /// An automatic re-open (recovery): only the saved session is
-    /// restored. Without a saved token, or when the portal does not restore
+    /// An automatic open (recovery, or an engine the app restarted on its
+    /// own after a crash or hang): only the saved session is restored. Without a saved token, or when the portal does not restore
     /// it within [`RESTORE_TIMEOUT`], the open fails with
     /// [`PortalFailure::NeedsDialog`]; the token is never forgotten.
     Forbidden,

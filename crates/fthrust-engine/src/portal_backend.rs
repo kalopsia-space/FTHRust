@@ -62,7 +62,8 @@ fn failure(e: PortalFailure) -> BackendFailure {
 }
 
 /// Opens a portal session and its stream: with the user's dialog when the
-/// user started capture, restore-only when recovery re-opens it.
+/// user started capture, restore-only for an automatic open (see
+/// [`OpenReason`]).
 pub fn open(
     paths: Option<&FthrPaths>,
     cfg: &CaptureConfig,

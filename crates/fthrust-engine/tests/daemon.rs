@@ -81,6 +81,7 @@ fn config() -> EngineConfig {
         },
         max_buffer_mb: 0,
         backend_override: Some(BackendKind::Synthetic),
+        automatic_start: false,
     }
 }
 

@@ -183,6 +183,10 @@ pub struct Supervisor {
     restart_pending: bool,
     restart_requested: bool,
     restart_at: Option<f64>,
+    /// The armed `restart_at` is the supervisor's own (after a crash or a
+    /// hang), not one the user asked for: the engine it starts is told so,
+    /// and never brings up the portal's dialog.
+    restart_is_automatic: bool,
     defer_restart_until: Option<f64>,
     deferred_restart: Option<(EngineConfig, bool, bool)>,
     /// A restart asked for after the running one already configured its
@@ -231,6 +235,7 @@ impl Supervisor {
             restart_pending: false,
             restart_requested: false,
             restart_at: None,
+            restart_is_automatic: false,
             defer_restart_until: None,
             deferred_restart: None,
             queued_restart: None,
@@ -386,10 +391,20 @@ impl Supervisor {
         }));
     }
 
-    fn begin_start(&mut self, config: EngineConfig, out: &mut Vec<Effect>, now: f64) {
+    /// Starts an engine; `automatic` when the supervisor does it on its own
+    /// (only its crash or hang restart), never for a start the user asked
+    /// for.
+    fn begin_start(
+        &mut self,
+        mut config: EngineConfig,
+        automatic: bool,
+        out: &mut Vec<Effect>,
+        now: f64,
+    ) {
         if self.final_stop {
             return;
         }
+        config.automatic_start = automatic;
         self.generation += 1;
         self.process_generation = Some(self.generation);
         self.exit_code = None;
@@ -413,6 +428,7 @@ impl Supervisor {
     fn no_more_starts(&mut self, out: &mut Vec<Effect>) {
         self.final_stop = true;
         self.restart_at = None;
+        self.restart_is_automatic = false;
         self.defer_restart_until = None;
         self.deferred_restart = None;
         self.queued_restart = None;
@@ -477,6 +493,7 @@ impl Supervisor {
         }
         self.auto_restarts.push(now);
         self.restart_at = Some(now + AUTO_RESTART_DELAY_S);
+        self.restart_is_automatic = true;
         out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
     }
 
@@ -520,7 +537,7 @@ impl Supervisor {
         match input {
             Input::Start(config) => {
                 if matches!(self.phase, Phase::Stopped) {
-                    self.begin_start(config, &mut out, now);
+                    self.begin_start(config, false, &mut out, now);
                 }
             }
             Input::Quitting => self.no_more_starts(&mut out),
@@ -592,6 +609,8 @@ impl Supervisor {
                 self.apply_deadline = Some(now + APPLY_TIMEOUT_S);
                 self.status(&mut out, self.pending_text(), StatusStyle::Idle);
                 self.config = Some(config);
+                // The user's restart replaces an automatic one still armed.
+                self.restart_is_automatic = false;
                 match self.phase {
                     Phase::Stopped => {
                         self.restart_at = Some(now + RESTART_GAP_S);
@@ -861,7 +880,8 @@ impl Supervisor {
             && let Some(config) = self.config.clone()
         {
             self.restart_at = None;
-            self.begin_start(config, &mut out, now);
+            let automatic = std::mem::take(&mut self.restart_is_automatic);
+            self.begin_start(config, automatic, &mut out, now);
         }
         if let Some(until) = self.defer_restart_until
             && now >= until
@@ -1029,6 +1049,7 @@ pub fn engine_config(state: &AppState) -> Result<EngineConfig, String> {
         capture,
         max_buffer_mb,
         backend_override,
+        automatic_start: false,
     })
 }
 

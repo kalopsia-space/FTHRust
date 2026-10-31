@@ -16,6 +16,7 @@ fn config() -> EngineConfig {
         capture: CaptureConfig::from_settings(&s.settings).unwrap(),
         max_buffer_mb: 256,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -1133,4 +1134,123 @@ fn a_stop_with_a_recording_finishing_gets_the_recordings_grace() {
         )),
         "{fx:?}"
     );
+}
+
+/// Whether the `Configure` among `fx` says the start was automatic.
+fn configured_automatic(fx: &[Effect]) -> Option<bool> {
+    fx.iter().find_map(|e| match e {
+        Effect::Send(fthrust_ipc::Command::Configure(c)) => Some(c.automatic_start),
+        _ => None,
+    })
+}
+
+/// Lets the armed restart start a process at `now` and returns whether its
+/// `Configure` says the start was automatic.
+fn configure_of_next_start(sv: &mut Supervisor, pid: u32, now: f64) -> Option<bool> {
+    let fx = sv.handle(Input::Tick, now);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    sv.handle(Input::Spawned { pid }, now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid,
+            version: "x".into(),
+        },
+        now,
+    );
+    configured_automatic(&fx)
+}
+
+/// An engine the app restarts on its own after a crash or a hang is told
+/// so (it then never brings up the portal's dialog); every start the user
+/// asked for is not, whatever the config it was given says.
+#[test]
+fn only_the_restart_after_a_crash_or_hang_is_automatic() {
+    use fthrust_ui::services::engine::{AUTO_RESTART_DELAY_S, HANG_RESTART_S, RESTART_GAP_S};
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    // The app's own start, even with a config that claims otherwise.
+    let mut first = config();
+    first.automatic_start = true;
+    sv.handle(Input::Start(first), now);
+    sv.handle(Input::Spawned { pid: 1 }, now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        now,
+    );
+    assert_eq!(configured_automatic(&fx), Some(false), "the app's start");
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // A crash: the supervisor's restart is automatic.
+    now += 1.0;
+    sv.handle(Input::ProcessExited { code: Some(139) }, now);
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 2, now),
+        Some(true),
+        "the restart after a crash"
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // RESTART ENGINE: the user's.
+    now += 1.0;
+    sv.handle(
+        Input::Restart {
+            config: config(),
+            allow_recording_prepare: false,
+            explicit: true,
+        },
+        now,
+    );
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+    now += RESTART_GAP_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 3, now),
+        Some(false),
+        "RESTART ENGINE"
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // A hang: stopped, then restarted on its own.
+    now += HANG_RESTART_S + 0.1;
+    let fx = sv.handle(Input::Tick, now);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+    sv.handle(Input::ProcessExited { code: None }, now + 0.1);
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 4, now),
+        Some(true),
+        "the restart after a hang"
+    );
+}
+
+/// RESTART ENGINE pressed while the automatic restart after a crash is
+/// still waiting makes the next start the user's.
+#[test]
+fn restart_engine_over_a_waiting_automatic_restart_is_the_users() {
+    use fthrust_ui::services::engine::AUTO_RESTART_DELAY_S;
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 20, &mut now);
+    now += 1.0;
+    let fx = sv.handle(Input::ProcessExited { code: Some(139) }, now);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::StartAfter(_))),
+        "{fx:?}"
+    );
+    sv.handle(
+        Input::Restart {
+            config: config(),
+            allow_recording_prepare: false,
+            explicit: true,
+        },
+        now + 0.1,
+    );
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(configure_of_next_start(&mut sv, 21, now), Some(false));
 }
