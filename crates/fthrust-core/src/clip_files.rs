@@ -294,10 +294,30 @@ pub fn mp4_is_finished(path: &Path) -> io::Result<bool> {
     })
 }
 
+/// Where a finished `.partial` went.
+enum Kept {
+    /// It now has this name.
+    Published(PathBuf),
+    /// It was already there: the `.partial` was a second name for the clip
+    /// published under this one (a link whose unlink failed), and is gone.
+    AlreadyPublished(PathBuf),
+}
+
+/// Whether `a` and `b` name one file (device and inode), not following
+/// symlinks: a symlink to the `.partial` is not a copy of the clip.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
 /// Gives a finished clip left as `.partial` its own name, or
 /// `<stem> (recovered).<ext>` (then `(recovered 2)` …) when that is taken.
-/// Never replaces a file; returns where the clip now is.
-fn publish_finished(partial: &Path) -> io::Result<PathBuf> {
+/// Never replaces a file. When its own name is already the same file, only
+/// the `.partial` name goes.
+fn publish_finished(partial: &Path) -> io::Result<Kept> {
     let name = partial
         .file_name()
         .and_then(|n| n.to_str())
@@ -305,6 +325,10 @@ fn publish_finished(partial: &Path) -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a .partial name"))?;
     // The walk matched the suffix case-insensitively; it is ASCII.
     let own = partial.with_file_name(&name[..name.len() - ".partial".len()]);
+    if same_file(partial, &own) {
+        std::fs::remove_file(partial)?;
+        return Ok(Kept::AlreadyPublished(own));
+    }
     let stem = own
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -323,7 +347,7 @@ fn publish_finished(partial: &Path) -> io::Result<PathBuf> {
     });
     for candidate in std::iter::once(own.clone()).chain(recovered) {
         match rename_no_replace(partial, &candidate) {
-            Ok(()) => return Ok(candidate),
+            Ok(()) => return Ok(Kept::Published(candidate)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e),
         }
@@ -453,15 +477,23 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
                 Ok(false) => {}
                 Ok(true) => {
                     match publish_finished(&path) {
-                        Ok(to) => tracing::info!(
+                        Ok(Kept::Published(to)) => tracing::info!(
                             from = %path.display(),
                             to = %to.display(),
                             "published a finished clip left as .partial"
                         ),
+                        Ok(Kept::AlreadyPublished(to)) => {
+                            *removed += 1;
+                            tracing::info!(
+                                from = %path.display(),
+                                to = %to.display(),
+                                "removed a second name of a published clip"
+                            );
+                        }
                         Err(e) => tracing::warn!(
                             path = %path.display(),
                             error = %e,
-                            "a finished clip stays as .partial: it could not be renamed"
+                            "a finished clip stays as .partial"
                         ),
                     }
                     continue;
@@ -498,7 +530,9 @@ fn walk(dir: &Path, now: SystemTime, max_age: Duration, removed: &mut usize) {
 /// directories. A finished clip or recording is never removed: one left as
 /// `.partial` (its MP4 whole, see [`mp4_is_finished`]) is published under
 /// its own name, or as `<stem> (recovered).mp4` when that is taken, and
-/// stays as it is if renaming fails. Returns the number removed.
+/// stays as it is if renaming fails. A `.partial` that is only a second
+/// name for its published clip (a link whose unlink failed) loses that
+/// name. Returns the number removed, second names included.
 pub fn cleanup_stale_partials(root: &Path, now: SystemTime, max_age: Duration) -> Result<usize> {
     let mut removed = 0;
     if root.is_dir() {
@@ -624,6 +658,44 @@ mod tests {
             .join("desktop_clip_from_31Oct2026_20-00-00 (recovered).mp4");
         assert_eq!(std::fs::read(&recovered).unwrap(), finished_clip());
         assert!(!partial.exists());
+    }
+
+    #[test]
+    fn a_second_name_for_a_published_clip_is_removed_not_recovered() {
+        // A link that published the clip, then an unlink that failed.
+        let d = tempfile::tempdir().unwrap();
+        let published = d.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+        std::fs::write(&published, finished_clip()).unwrap();
+        let partial = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::hard_link(&published, &partial).unwrap();
+        assert_eq!(sweep(d.path()), 1);
+        assert!(!partial.exists());
+        assert_eq!(std::fs::read(&published).unwrap(), finished_clip());
+        let names: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [published.file_name().unwrap()]);
+    }
+
+    #[test]
+    fn a_link_to_the_partial_is_not_the_same_file() {
+        // The clip's own name only points at the .partial: removing the
+        // .partial would lose the clip.
+        let d = tempfile::tempdir().unwrap();
+        let partial = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00.mp4.partial");
+        std::fs::write(&partial, finished_clip()).unwrap();
+        let own = d.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+        std::os::unix::fs::symlink(&partial, &own).unwrap();
+        assert_eq!(sweep(d.path()), 0);
+        let recovered = d
+            .path()
+            .join("desktop_clip_from_31Oct2026_20-00-00 (recovered).mp4");
+        assert_eq!(std::fs::read(&recovered).unwrap(), finished_clip());
     }
 
     #[test]
