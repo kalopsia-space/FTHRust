@@ -47,8 +47,10 @@ pub const AUTO_RESTART_WINDOW_S: f64 = 600.0;
 pub const HANG_RESTART_S: f64 = 15.0;
 /// How long a graceful stop waits for the engine to exit before SIGTERM.
 pub const KILL_GRACE_S: f64 = 2.0;
-/// The same with a clip save in flight: the engine finishes the save first
-/// (it waits up to 60 s for it), so it gets that long plus a margin.
+/// The same with a clip save in flight: the engine finishes the save before
+/// it exits (its own wait for the save is 60 s, after it has stopped
+/// capturing), so it gets about that long plus a margin. The UI fails a save
+/// that hasn't answered in 60 s anyway.
 pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
 
 /// What drives the supervisor.
@@ -922,8 +924,10 @@ impl Supervisor {
             self.status(&mut out, "DISCONNECTED", StatusStyle::Warning);
             self.advance_incidents(&mut out, false, 0, HealthState::Stopped, now);
         }
+        // Not while quitting: the stop is under way and has its own bounds.
         if self.is_connected()
             && self.silence_reported
+            && !self.final_stop
             && now - self.last_event_at >= HANG_RESTART_S
         {
             tracing::warn!("engine silent for {HANG_RESTART_S} s; stopping it");
@@ -933,12 +937,21 @@ impl Supervisor {
                 "The capture engine stopped answering and was stopped. Clips cannot be saved until it is restarted."
             };
             self.engine_gone(&mut out, detail.into(), now);
-            // engine_gone marked it stopped; the process is still there.
+            // engine_gone marked it stopped; the process is still there. With
+            // a save in flight it gets the save's grace first: an engine that
+            // is busy finishing a clip is not cut off.
             self.phase = Phase::Stopping;
             self.generation += 1;
-            out.push(Effect::Kill {
-                graceful: false,
-                grace_s: KILL_GRACE_S,
+            out.push(if self.save_busy {
+                Effect::Kill {
+                    graceful: true,
+                    grace_s: SAVE_EXIT_GRACE_S,
+                }
+            } else {
+                Effect::Kill {
+                    graceful: false,
+                    grace_s: KILL_GRACE_S,
+                }
             });
         }
         out
@@ -1344,10 +1357,15 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                             // on screen follows them.
                                             p @ IpcEvent::SaveProgress { .. } => {
                                                 outbox.send_quiet(Event::Engine(p));
+                                                // Any event shows the engine is
+                                                // alive (a shutting-down engine
+                                                // sends only save events).
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                             other => {
                                                 outbox.send(Event::Engine(other));
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                         };
@@ -1381,16 +1399,18 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
 }
 
 /// How long an engine left over from an earlier session gets to let go of
-/// the socket: the engine's own wait for a save in flight, plus a margin.
+/// the socket or exit. An engine on its way out stops capturing and drops its
+/// socket before it waits for a save in flight, so this mostly covers an old
+/// engine that still keeps its socket (an older build, or one that hangs).
 pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(65);
 
 /// An engine left over from an earlier session (the UI died mid-save, say)
 /// may still own the socket. The UI used to unlink the socket and start a
 /// second engine beside it, both capturing. Now it asks the old one to
 /// stop if it still serves clients, then waits until the socket refuses
-/// connections or the process is gone (an engine finishing a save no
-/// longer accepts clients, so it gets the time its save needs), and only
-/// then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
+/// connections or the process is gone (an engine shutting down drops its
+/// socket first and finishes a save in flight after that, without
+/// capturing), and only then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
 /// peer credentials, which a connection still waiting in the backlog has
 /// too. A socket file nobody listens on is left for the new engine, which
 /// replaces it.

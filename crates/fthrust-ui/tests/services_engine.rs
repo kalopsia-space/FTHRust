@@ -1081,3 +1081,36 @@ fn quitting_stops_restarts_but_not_the_engine() {
     fx.extend(sv.handle(Input::Tick, now + 5.0));
     assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
 }
+
+/// Final review of the audit fixes: an engine finishing a save while
+/// quitting (it sends only save events) is not killed as hung, and a hang
+/// with a save in flight gets the save's grace.
+#[test]
+fn the_hang_check_spares_a_saving_or_quitting_engine() {
+    use fthrust_ui::services::engine::{HANG_RESTART_S, SAVE_EXIT_GRACE_S};
+    // Quitting: no hang kill however long the silence.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 97, &mut now);
+    sv.handle(Input::Quitting, now);
+    let fx = sv.handle(Input::Tick, now + HANG_RESTART_S + 5.0);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+    // A save in flight: a hang stops the engine gracefully, with time to
+    // finish the save.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 98, &mut now);
+    sv.set_save_busy(true);
+    sv.handle(Input::Tick, now + 3.1);
+    let fx = sv.handle(Input::Tick, now + HANG_RESTART_S + 0.1);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Kill { graceful: true, grace_s } if *grace_s == SAVE_EXIT_GRACE_S
+        )),
+        "{fx:?}"
+    );
+}
