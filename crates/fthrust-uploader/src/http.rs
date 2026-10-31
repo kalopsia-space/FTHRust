@@ -70,16 +70,58 @@ fn client(
 /// A readable account of a request error: a lower-case clause for
 /// "Could not reach …: <clause>", without the full stop.
 pub fn describe(e: &reqwest::Error) -> String {
-    let text = describe_raw(e);
-    // A server URL may carry `user:password@`; never show it.
-    match e.url() {
-        Some(u) if !u.username().is_empty() || u.password().is_some() => {
-            let mut clean = u.clone();
-            let _ = clean.set_username("");
-            let _ = clean.set_password(None);
-            text.replace(u.as_str(), clean.as_str())
-        }
-        _ => text,
+    // reqwest names the whole URL in its errors ("error sending request for
+    // url (…)"), and a server URL is where secrets get put.
+    scrub_urls(&describe_raw(e))
+}
+
+/// `text` with every http(s) URL in it cut down to scheme, host, port and
+/// path: no `user:password@`, no `?token=…`, no `#fragment`.
+fn scrub_urls(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(start) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| lower[at..].find(scheme).map(|i| at + i))
+        .min()
+    {
+        out.push_str(&text[at..start]);
+        // A URL runs to the next space: query strings may hold any
+        // punctuation, and what is left of one after a stray comma or
+        // bracket is the part that would leak. Only the punctuation that
+        // closes a sentence or a bracket at the very end is not part of it.
+        let end = text[start..]
+            .find(char::is_whitespace)
+            .map_or(text.len(), |n| start + n);
+        let url_end = start
+            + text[start..end]
+                .trim_end_matches([')', ']', '}', '>', '"', '\'', '.', ',', ';', ':', '!', '?'])
+                .len();
+        out.push_str(&plain_url(&text[start..url_end]));
+        out.push_str(&text[url_end..end]);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// One URL without user info, query and fragment.
+fn plain_url(url: &str) -> String {
+    if let Ok(mut u) = reqwest::Url::parse(url) {
+        let _ = u.set_username("");
+        let _ = u.set_password(None);
+        u.set_query(None);
+        u.set_fragment(None);
+        return u.to_string();
+    }
+    // Not a URL that can be taken apart: cut it by hand.
+    let url = url.find(['?', '#']).map_or(url, |i| &url[..i]);
+    let after = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[after..].find('/').map_or(url.len(), |i| after + i);
+    match url[after..authority_end].rfind('@') {
+        Some(i) => format!("{}{}", &url[..after], &url[after + i + 1..]),
+        None => url.to_owned(),
     }
 }
 
@@ -902,4 +944,37 @@ pub async fn test_custom(settings: &Map<String, Value>) -> Result<(bool, String)
         500.. => (false, format!("Your server hit an error (HTTP {code}).")),
         _ => (false, format!("Your server returned HTTP {code}.")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urls_in_messages_lose_their_secrets() {
+        for (text, want) in [
+            (
+                "error sending request for url (https://u:p@host:8080/a/b?token=1#x): boom",
+                "error sending request for url (https://host:8080/a/b): boom",
+            ),
+            ("no address in this one", "no address in this one"),
+            (
+                "from http://a.example/x?k=v to HTTPS://B:C@b.example/y?z",
+                "from http://a.example/x to https://b.example/y",
+            ),
+            // An address that cannot be taken apart is cut by hand.
+            (
+                "bad url (http://me:pw@[broken/up?x=1)",
+                "bad url (http://[broken/up)",
+            ),
+            ("scheme only http://", "scheme only http://"),
+            // Punctuation inside a query is no end of the URL.
+            (
+                "failed for url (http://h/p?a=1,b;c)d=SECRET): refused.",
+                "failed for url (http://h/p): refused.",
+            ),
+        ] {
+            assert_eq!(scrub_urls(text), want, "{text}");
+        }
+    }
 }

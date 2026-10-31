@@ -1039,6 +1039,55 @@ async fn url_credentials_stay_out_of_messages() {
     assert!(!msg.contains("hunter2"), "{msg}");
 }
 
+/// An upload URL often carries the secret (`?token=…`, `user:password@`):
+/// network errors may name the address, never that part of it.
+#[tokio::test]
+async fn url_secrets_stay_out_of_messages() {
+    // A server that reads each request whole and then hangs up without
+    // answering: the client's error is "connection closed before message
+    // completed", which names the URL (a reset would not).
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in listener.incoming() {
+            let Ok(s) = s else { break };
+            let mut reader = BufReader::new(s);
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let _ = reader.read_exact(&mut vec![0; length]);
+        }
+    });
+    let h = home(json!({
+        "upload_provider": "custom",
+        "upload_server_url": format!("http://alice:hunter2@127.0.0.1:{port}/up?token=SECRET#frag"),
+    }));
+    let env = h.env("x");
+    let (_, uploaded, _) = h.upload(&env).await;
+    let (_, tested) = h.test(&env).await;
+    for message in [uploaded, tested] {
+        assert!(
+            message.starts_with("Could not reach your server: "),
+            "{message}"
+        );
+        for secret in ["SECRET", "hunter2", "alice", "frag", "token"] {
+            assert!(!message.contains(secret), "{secret} leaked: {message}");
+        }
+        // The address itself is still useful to read.
+        assert!(
+            message.contains(&format!("http://127.0.0.1:{port}/up")),
+            "{message}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn settings_problems_are_flagged() {
     async fn flagged(status: u16, extra: &str, auth: &str) -> (bool, String) {
