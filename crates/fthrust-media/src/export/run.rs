@@ -79,7 +79,7 @@ fn inputs(ictx: &ff::format::context::Input) -> Inputs {
 }
 
 /// Labels like `0:v` and `0:a:1` the graph reads, with their use counts.
-fn input_uses(graph: &str) -> BTreeMap<String, usize> {
+pub(super) fn input_uses(graph: &str) -> BTreeMap<String, usize> {
     let mut uses = BTreeMap::new();
     let mut rest = graph;
     while let Some(start) = rest.find('[') {

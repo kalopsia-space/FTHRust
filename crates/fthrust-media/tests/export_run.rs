@@ -13,6 +13,12 @@ use fthrust_media::export::{ExportState, Job, Quality, run};
 
 /// A 160×90 30 fps clip with `tracks` AAC tones (0 = video only).
 fn clip(dir: &Path, name: &str, seconds: u32, tracks: usize) -> Option<PathBuf> {
+    clip_with_audio(dir, name, seconds, &vec![f64::from(seconds); tracks])
+}
+
+/// [`clip`] with one tone per entry of `audio_s`, each that many seconds
+/// long.
+fn clip_with_audio(dir: &Path, name: &str, seconds: u32, audio_s: &[f64]) -> Option<PathBuf> {
     use fthrust_core::capture_config::{Codec, EncoderPref};
     use fthrust_media::clip_writer::{ClipAudio, ClipVideo, write_clip};
     use fthrust_media::encoder::{Encoder, EncoderConfig};
@@ -61,12 +67,14 @@ fn clip(dir: &Path, name: &str, seconds: u32, tracks: usize) -> Option<PathBuf> 
         width: 160,
         height: 90,
         bitrate_kbps: 300,
-        separate_audio: tracks > 1,
+        separate_audio: audio_s.len() > 1,
     };
-    let tones: Vec<Vec<f32>> = (0..tracks)
-        .map(|t| {
+    let tones: Vec<Vec<f32>> = audio_s
+        .iter()
+        .enumerate()
+        .map(|(t, &len)| {
             let hz = 440.0 * (t + 1) as f32;
-            (0..u64::from(seconds) * 48_000)
+            (0..(len * 48_000.0).round() as u64)
                 .flat_map(|i| {
                     let v = (i as f32 * hz * std::f32::consts::TAU / 48_000.0).sin() * 0.3;
                     [v, v]
@@ -660,6 +668,94 @@ fn an_export_whose_audio_stops_early_fails() {
     assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
     assert!(r.detail.contains("audio"), "{}", r.detail);
     assert!(!out.exists());
+}
+
+#[test]
+fn audio_that_ends_inside_the_last_range_is_not_a_short_export() {
+    // 6 s of video, 4.5 s of audio, kept as (0, 2) + (3.5, 6): the last
+    // range holds one second of audio, so 3 s of audio is all there is.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "early.mp4", 6, &[4.5]) else {
+        return;
+    };
+    let out = tmp.path().join("ranges.mp4");
+    let j = Job {
+        expected_duration_s: 4.5,
+        ..job(
+            &src,
+            out.clone(),
+            &spec(&[(0.0, 2.0), (3.5, 6.0)]),
+            Quality::Fast,
+        )
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+    let p = probe(&out);
+    let audio = p.streams.iter().find(|(k, _)| k == "Audio").unwrap().1;
+    assert!((audio - 3.0).abs() < 0.2, "{:?}", p.streams);
+}
+
+#[test]
+fn several_ranges_without_a_manifest_carry_only_the_first_track() {
+    // Track 0 ends at 4.5 s, track 1 lasts the whole 6 s.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "two.mp4", 6, &[4.5, 6.0]) else {
+        return;
+    };
+    let out = tmp.path().join("ranges.mp4");
+    let j = Job {
+        expected_duration_s: 4.5,
+        ..job(&src, out, &spec(&[(0.0, 2.0), (3.5, 6.0)]), Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_mix_without_a_track_that_does_not_decode_is_not_short() {
+    // Track 0 ends at 4.5 s; track 1, which lasts the whole 6 s, does not
+    // decode, so the mix leaves it out.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "two.mp4", 6, &[4.5, 6.0]) else {
+        return;
+    };
+    let mut s = spec(&[(0.0, 6.0)]);
+    s.has_manifest_tracks = true;
+    s.sources = (0..2)
+        .map(|i| MixSource {
+            audio_index: Some(i),
+            available: i == 0,
+            role: MixRole::Direct,
+            gain_percent: 100,
+            muted: false,
+        })
+        .collect();
+    let out = tmp.path().join("mix.mp4");
+    let j = Job {
+        expected_duration_s: 6.0,
+        ..job(&src, out, &s, Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_sped_up_range_past_the_end_of_the_audio_is_not_short() {
+    // (2, 6) at double speed: 2 s of video, and the 2.5 s of audio left
+    // after 2 s play in 1.25 s.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip_with_audio(tmp.path(), "early.mp4", 6, &[4.5]) else {
+        return;
+    };
+    let mut s = spec(&[(2.0, 6.0)]);
+    s.speed = 2.0;
+    let out = tmp.path().join("fast.mp4");
+    let j = Job {
+        expected_duration_s: 2.0,
+        ..job(&src, out, &s, Quality::Fast)
+    };
+    let (r, _, _) = run_job(&j);
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
 }
 
 #[test]
