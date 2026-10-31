@@ -24,6 +24,7 @@ fn data() -> CardData {
         upload_enabled: true,
         uploading: false,
         ready: true,
+        recording: false,
         feedback: None,
         thumbnail: None,
     }

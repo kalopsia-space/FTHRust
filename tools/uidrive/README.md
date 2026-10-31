@@ -27,7 +27,13 @@ uidrive wait-status CAPTURING; uidrive shot; uidrive click settingsGearBtn
 tools/uidrive/bench.sh down
 ```
 
-Options for `up`: `--release`, `--engine synthetic|real`, `--size WxH` (the
+The bench lives in a fresh private `/tmp/uidrive-XXXXXX` (mode 0700, unpredictable
+name). `BENCH_DIR=/some/path` picks the place instead, and the bench only empties
+and reuses a `BENCH_DIR` that it made earlier (it carries a `.uidrive-bench`
+marker) or that is empty; any other directory is refused untouched.
+
+Options for `up`: `--release`, `--engine synthetic|real` (`real` forces the
+`wlr` screencopy backend against cage's output), `--size WxH` (the
 synthetic frame size; cage's headless output is 1280×720), `--app PATH`,
 `--settings FILE` (merged over the seeded settings), `--cage PATH`,
 `--renderer auto|gles2|vulkan|pixman` (cage's renderer; `auto` is gles2 when a
@@ -65,9 +71,21 @@ Widget names come from the app's `FTHRUST_UI_DUMP` file (`$BENCH/ui.json`):
 prints `SKIP` without it.
 `scenarios/lib.sh` has `step`, `run`, `fail`, `names`, `wait_file`, `scroll_to`.
 
+`bench-unit.sh` tests the launcher's own rules without a compositor (the engine
+backend names, the bench directory rules, the teardown); `bench-selfcheck.sh`
+checks the whole bench end to end and needs cage. CI runs the unit tests, the
+crate's fmt, clippy and tests, then the scenarios.
+
 `docs-shots.sh` regenerates `docs/images`: it renders a few demo clips with
 ffmpeg (or takes `--seed DIR`), runs `docs_shots.sh` with `--pipewire`, and
-copies the named shots over.
+copies the named shots over. It works in `/tmp/fthrust-docs` and
+`/tmp/fthrust-docs-bench`: the screenshots show those paths (the Hotkeys popup
+the app's, Settings the clips folder), so the names stay fixed. Both follow the
+bench directory rules (an absent, empty or earlier-bench directory is cleared;
+a symlink, someone else's or any other directory is refused untouched), and
+both are removed when the script ends. When the run fails after the bench
+started, the bench directory stays, with its `logs/` and `shots/`, and the
+script prints its name; the next run clears it.
 
 ## Reading a failure
 

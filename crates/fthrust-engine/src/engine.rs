@@ -17,7 +17,9 @@ use fthrust_wayland::backend::monotonic_ns;
 use fthrust_wayland::frame::{BgraFrame, FrameSource, OutputTransform, normalize};
 
 use crate::audio::{AudioConfig, AudioProvider, AudioTarget};
-use crate::backend::{BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind};
+use crate::backend::{
+    BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind, OpenReason,
+};
 use crate::policy::{
     CaptureRecoveryPolicy, EncodeFailurePolicy, capture_pacing_wait, next_encode_deadline,
     recovery_order, wait_for_recovery_backoff,
@@ -672,8 +674,13 @@ pub fn encode_size(native: (u32, u32), target: (u32, u32), scaling: Scaling) -> 
 
 enum GenerationEnd {
     Stop,
-    BackendFailed { transient: bool, reason: String },
+    BackendFailed {
+        transient: bool,
+        reason: String,
+    },
     EncoderFailed(String),
+    /// The desktop ended the capture (the portal's "Stop sharing"): final.
+    Closed(String),
 }
 
 fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
@@ -723,6 +730,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // Lives across generations, so a black screen is followed through the
     // recovery it asked for (one per run of suspect content).
     let mut watchdog = ContentWatchdog::new(fps);
+    // Once a generation ran, every open is a recovery: the portal may then
+    // only restore its saved session, never show its dialog.
+    let mut open_reason = OpenReason::Start;
+    // The watchdog restarted capture over a black zero-copy feed: the next
+    // generation captures through shm, since a compositor that completes
+    // captures into the surfaces without drawing would bring it back as is.
+    let mut shm_after_black_zero_copy = false;
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -738,10 +752,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 // dialog would come up for nothing.
                 break;
             }
-            match inner
-                .backends
-                .create(*kind, cfg, strict_output, inner.cancel.clone())
-            {
+            match inner.backends.create(
+                *kind,
+                cfg,
+                strict_output,
+                open_reason,
+                inner.cancel.clone(),
+            ) {
                 Ok(b) => {
                     backend = Some(b);
                     break;
@@ -797,6 +814,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         // retries it first and, when the user named an output and this is
         // it, insists on that output (`capture_engine.cpp:198-204`).
         let kind = backend.kind();
+        open_reason = OpenReason::Recovery;
         let native = backend.native_size();
         let selected = backend.selected_output();
         strict_output = !cfg.monitor.is_empty() && selected == cfg.monitor;
@@ -907,14 +925,21 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
 
         // Zero copy: the compositor renders into the encoder's surfaces.
         let buffer = backend.buffer_size().unwrap_or(native);
-        let mut zero_copy_active = match start_zero_copy(backend.as_mut(), enc, buffer) {
-            Ok(()) => {
-                tracing::info!("zero-copy capture in use");
-                true
-            }
-            Err(reason) => {
-                log_zero_copy_off(&mut zero_copy_logged, &reason);
-                false
+        let mut zero_copy_active = if std::mem::take(&mut shm_after_black_zero_copy) {
+            tracing::warn!(
+                "the picture stayed black through zero copy; capturing through shared memory"
+            );
+            false
+        } else {
+            match start_zero_copy(backend.as_mut(), enc, buffer) {
+                Ok(()) => {
+                    tracing::info!("zero-copy capture in use");
+                    true
+                }
+                Err(reason) => {
+                    log_zero_copy_off(&mut zero_copy_logged, &reason);
+                    false
+                }
             }
         };
         let mut surface_proven = false;
@@ -1041,6 +1066,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         reason: "the Wayland connection was lost".into(),
                     };
                 }
+                Err(CaptureError::Closed(reason)) => break GenerationEnd::Closed(reason),
                 Err(e) => {
                     break GenerationEnd::BackendFailed {
                         transient: false,
@@ -1069,8 +1095,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 let result = if !upright {
                     Err("the output is rotated or flipped".to_string())
                 } else {
-                    // Only the 16x9 sample pixels are read from the
-                    // surface, never the whole frame.
+                    // Only the 16x9 sample pixels are read: from a direct
+                    // mapping of the surface where the driver allows one,
+                    // else from FFmpeg's copy of the whole surface (logged
+                    // once).
                     let (columns, rows) = (ContentWatchdog::COLUMNS, ContentWatchdog::ROWS);
                     if watchdog.tick()
                         && enc
@@ -1227,8 +1255,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 if m.recover && kind != BackendKind::PortalScreenCast {
                     tracing::warn!(
                         samples = m.streak,
+                        zero_copy = zero_copy_active,
                         "{CONTENT_RECOVERY_REASON}; restarting capture"
                     );
+                    shm_after_black_zero_copy = zero_copy_active;
                     break GenerationEnd::BackendFailed {
                         transient: false,
                         reason: CONTENT_RECOVERY_REASON.into(),
@@ -1237,11 +1267,21 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
         };
 
-        // Generation end.
+        // Generation end. The compositor no longer writes into the capture
+        // surfaces; the next generation allocates its own if it uses any.
         drop(backend);
+        if let Some(enc) = encoder.as_mut() {
+            enc.release_dmabuf_targets();
+        }
         inner.zero_copy.store(false, Ordering::Relaxed);
         match end {
             GenerationEnd::Stop => break 'generations,
+            GenerationEnd::Closed(reason) => {
+                // Like a dismissed picker: only the user starts it again.
+                tracing::info!("{reason}; capture ends");
+                terminal_failure(&inner, &reason);
+                break 'generations;
+            }
             GenerationEnd::EncoderFailed(reason) => {
                 tracing::warn!("encoder failed ({reason}); reopening");
                 encoder = None;
@@ -1443,7 +1483,9 @@ fn start_zero_copy(
         .render_node()
         .and_then(fthrust_media::vaapi::render_node_dev);
     if env_disabled || !gpu_conversion || constraints.is_none() {
-        // Nothing to allocate surfaces for.
+        // Nothing to allocate surfaces for, and surfaces an earlier
+        // generation left (the encoder outlives it) are freed.
+        enc.release_dmabuf_targets();
         return match zero_copy_plan(
             constraints.as_ref(),
             encoder_gpu,
@@ -1490,6 +1532,58 @@ fn log_zero_copy_off(logged: &mut bool, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_copy_that_cannot_start_frees_surfaces_an_earlier_generation_left() {
+        // An ext generation held capture surfaces; its retries are spent and
+        // wlr, which has no dmabuf, takes over with the same encoder.
+        if fthrust_media::init().is_err() || !fthrust_media::vaapi::vaapi_available() {
+            return eprintln!("skipping: no VA-API device");
+        }
+        let capture = fthrust_core::capture_config::CaptureConfig::default();
+        let Ok(mut enc) = Encoder::open(&EncoderConfig {
+            src_width: 320,
+            src_height: 180,
+            enc_width: 320,
+            enc_height: 180,
+            fps: 30,
+            bitrate_kbps: 2000,
+            codec: fthrust_core::capture_config::Codec::H264,
+            encoder: fthrust_core::capture_config::EncoderPref::Vaapi,
+            preset: 1,
+        }) else {
+            return eprintln!("skipping: no VA-API H.264 encoder");
+        };
+        if enc.conversion() != Conversion::Gpu {
+            return eprintln!("skipping: no GPU colour conversion");
+        }
+        enc.dmabuf_targets(320, 180, ZERO_COPY_SURFACES).unwrap();
+        let mut probe = Vec::new();
+        assert!(enc.download_surface(0, &mut probe).is_ok(), "surfaces held");
+        let mut script = crate::backend::SyntheticScript::new(320, 180);
+        script.kinds.insert(
+            BackendKind::WlrScreencopy,
+            crate::backend::KindScript::default(),
+        );
+        let factory = crate::backend::SyntheticFactory {
+            script: Arc::new(Mutex::new(script)),
+            candidates: vec![BackendKind::WlrScreencopy],
+        };
+        let Ok(mut wlr) = factory.create(
+            BackendKind::WlrScreencopy,
+            &capture,
+            false,
+            OpenReason::Recovery,
+            Arc::new(AtomicBool::new(false)),
+        ) else {
+            panic!("the synthetic wlr backend opens");
+        };
+        assert!(start_zero_copy(wlr.as_mut(), &mut enc, (320, 180)).is_err());
+        assert!(
+            enc.download_surface(0, &mut probe).is_err(),
+            "the earlier generation's surfaces are still allocated"
+        );
+    }
 
     #[test]
     fn the_recording_keyframe_is_requested_only_once_the_tap_is_in_place() {

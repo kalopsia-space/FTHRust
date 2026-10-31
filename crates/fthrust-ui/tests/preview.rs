@@ -204,6 +204,68 @@ fn shader_output_matches_cpu_formula() {
     assert_ne!(want[0], pixels[0]);
 }
 
+/// With Live edit preview on, the shader keeps a bind group on the last
+/// frame's view. Closing the editor used to leave it there, and with it the
+/// frame's texture on the GPU (8 MB at 1080p) until another editor drew.
+#[test]
+fn closing_the_editor_lets_go_of_the_previews_last_frame() {
+    let Some(rs) = headless() else {
+        return;
+    };
+    preview::install(&rs);
+    const W: u32 = 8;
+    const H: u32 = 6;
+    let (_t, mut s) = editor_state(serde_json::json!({}));
+    let mut tex = fthrust_ui::video_texture::VideoTexture::new();
+    tex.update(
+        &rs,
+        &fthrust_media::playback::video::Frame {
+            pts_ms: 0,
+            width: W,
+            height: H,
+            rgba: vec![128; (W * H * 4) as usize],
+        },
+    );
+    let view = tex.view_unorm().unwrap().clone();
+    s.editor_video = Some(tex);
+    // One frame through the shader, as egui's renderer prepares the callback
+    // the editor's video surface adds.
+    let callback = preview::PreviewCallback {
+        view,
+        size: (W, H),
+        uniforms: Uniforms::from_edit(Some((1, 1, 6, 4)), (W, H), &fx(), 1.0, true),
+    };
+    let mut encoder = rs
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let mut renderer = rs.renderer.write();
+        egui_wgpu::CallbackTrait::prepare(
+            &callback,
+            &rs.device,
+            &rs.queue,
+            &egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [W, H],
+                pixels_per_point: 1.0,
+            },
+            &mut encoder,
+            &mut renderer.callback_resources,
+        );
+        assert!(
+            preview::holds_frame(&renderer),
+            "the shader keeps the frame it drew"
+        );
+    }
+    drop(callback);
+    // Closing the editor.
+    fthrust_ui::editor::sessions::shutdown(&mut s);
+    assert!(s.editor.is_none() && s.editor_video.is_none());
+    assert!(
+        !preview::holds_frame(&rs.renderer.read()),
+        "the shader still holds the closed editor's frame"
+    );
+}
+
 fn editor_state(settings: serde_json::Value) -> (tempfile::TempDir, AppState) {
     let tmp = tempfile::tempdir().unwrap();
     let mut s = AppState::for_tests(tmp.path(), settings);

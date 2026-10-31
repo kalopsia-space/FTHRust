@@ -188,6 +188,30 @@ fn dmabuf_targets_reject_bad_counts() {
 }
 
 #[test]
+fn shared_memory_frames_before_the_first_surface_frame_leave_no_upload_pool() {
+    let (w, h) = (320u32, 180u32);
+    let Some(mut enc) = open_gpu(w, h) else {
+        return;
+    };
+    enc.dmabuf_targets(w, h, 4).unwrap();
+    // Zero copy's warm-up repeats the shared-memory probe frame until the
+    // compositor fills the first surface.
+    let red = solid(w, h, [0, 0, 255, 255]);
+    let mut out = Vec::new();
+    enc.encode(&red, w as usize * 4, w, h, 0, &mut out).unwrap();
+    assert_eq!(enc.upload_pools_created(), (false, true));
+    enc.write_surface(0, &red, w as usize * 4).unwrap();
+    enc.encode_surface(0, 33_000_000, &mut out).unwrap();
+    assert_eq!(
+        enc.upload_pools_created(),
+        (false, false),
+        "frames from the surfaces need no upload pool"
+    );
+    enc.flush(&mut out).unwrap();
+    assert_eq!(out.len(), 2);
+}
+
+#[test]
 fn upload_pools_exist_only_while_frames_are_uploaded() {
     let (w, h) = (320u32, 180u32);
     let Some(mut enc) = open_gpu(w, h) else {

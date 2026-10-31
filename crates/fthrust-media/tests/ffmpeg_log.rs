@@ -140,6 +140,29 @@ fn repeated_lines_are_counted_not_repeated() {
 }
 
 #[test]
+fn a_line_repeated_after_a_pause_is_shown_again() {
+    fthrust_media::init().unwrap();
+    fthrust_media::init_ffmpeg_logging();
+    let text = capture(|| {
+        // SAFETY: av_log calls with a constant message.
+        unsafe {
+            ffi::av_log(
+                ptr::null_mut(),
+                ffi::AV_LOG_ERROR,
+                c"now and then\n".as_ptr(),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            ffi::av_log(
+                ptr::null_mut(),
+                ffi::AV_LOG_ERROR,
+                c"now and then\n".as_ptr(),
+            );
+        }
+    });
+    assert_eq!(text.matches("now and then").count(), 2, "{text}");
+}
+
+#[test]
 fn an_overlong_message_is_cut_but_stays_its_own_line() {
     fthrust_media::init().unwrap();
     fthrust_media::init_ffmpeg_logging();

@@ -47,9 +47,14 @@ pub const AUTO_RESTART_WINDOW_S: f64 = 600.0;
 pub const HANG_RESTART_S: f64 = 15.0;
 /// How long a graceful stop waits for the engine to exit before SIGTERM.
 pub const KILL_GRACE_S: f64 = 2.0;
-/// The same with a clip save in flight: the engine finishes the save first
-/// (it waits up to 60 s for it), so it gets that long plus a margin.
+/// The same with a clip save in flight: the engine finishes the save before
+/// it exits (its own wait for the save is 60 s, after it has stopped
+/// capturing), so it gets about that long plus a margin. The UI fails a save
+/// that hasn't answered in 60 s anyway.
 pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
+/// The same with a manual recording still finishing: the engine gives a
+/// recording 15 s to stop when it shuts down.
+pub const RECORDING_EXIT_GRACE_S: f64 = 20.0;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]
@@ -256,6 +261,18 @@ impl Supervisor {
     /// Whether a clip save is in flight.
     pub fn save_busy(&self) -> bool {
         self.save_busy
+    }
+
+    /// How long a stop now gives the engine before it is signalled: a save
+    /// in flight or a recording still finishing gets its time.
+    pub fn stop_grace(&self) -> f64 {
+        if self.save_busy {
+            SAVE_EXIT_GRACE_S
+        } else if self.recording {
+            RECORDING_EXIT_GRACE_S
+        } else {
+            KILL_GRACE_S
+        }
     }
 
     /// The recording service reports whether a recording is not idle.
@@ -512,12 +529,9 @@ impl Supervisor {
                 // restart used to spawn a new engine after the stop).
                 self.no_more_starts(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
-                    // Quitting mid-save: let the engine finish the clip.
-                    let grace_s = if self.save_busy {
-                        SAVE_EXIT_GRACE_S
-                    } else {
-                        KILL_GRACE_S
-                    };
+                    // Quitting mid-save or mid-recording: let the engine
+                    // finish the file.
+                    let grace_s = self.stop_grace();
                     self.begin_stop(&mut out, true, grace_s);
                 }
             }
@@ -834,6 +848,12 @@ impl Supervisor {
             }
             Input::Tick => {}
         }
+        // A quit signal is seen here at once, before the shutdown sends
+        // `Quitting`; a logout ends the engine too, and its automatic
+        // restart must not start a new one.
+        if !self.final_stop && super::quitting() {
+            self.no_more_starts(&mut out);
+        }
         // Timers.
         if let Some(at) = self.restart_at
             && now >= at
@@ -922,8 +942,10 @@ impl Supervisor {
             self.status(&mut out, "DISCONNECTED", StatusStyle::Warning);
             self.advance_incidents(&mut out, false, 0, HealthState::Stopped, now);
         }
+        // Not while quitting: the stop is under way and has its own bounds.
         if self.is_connected()
             && self.silence_reported
+            && !self.final_stop
             && now - self.last_event_at >= HANG_RESTART_S
         {
             tracing::warn!("engine silent for {HANG_RESTART_S} s; stopping it");
@@ -933,12 +955,15 @@ impl Supervisor {
                 "The capture engine stopped answering and was stopped. Clips cannot be saved until it is restarted."
             };
             self.engine_gone(&mut out, detail.into(), now);
-            // engine_gone marked it stopped; the process is still there.
+            // engine_gone marked it stopped; the process is still there. With
+            // a save in flight (or a recording) it gets that file's grace
+            // first: an engine that is busy finishing a clip is not cut off.
+            let grace_s = self.stop_grace();
             self.phase = Phase::Stopping;
             self.generation += 1;
             out.push(Effect::Kill {
-                graceful: false,
-                grace_s: KILL_GRACE_S,
+                graceful: grace_s > KILL_GRACE_S,
+                grace_s,
             });
         }
         out
@@ -1147,19 +1172,14 @@ impl EngineDriver {
     /// it is done, so a save in flight is finished rather than cut off by
     /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
-        let save_busy = self
+        let grace = self
             .supervisor
             .lock()
-            .map(|s| s.save_busy())
-            .unwrap_or(false);
+            .map(|s| s.stop_grace())
+            .unwrap_or(KILL_GRACE_S);
         let _ = self.inputs.send(Input::Stop);
         // The kill task's own bound: the graceful wait it was given, then
         // 1 s after SIGTERM and 0.5 s after SIGKILL, plus some slack.
-        let grace = if save_busy {
-            SAVE_EXIT_GRACE_S
-        } else {
-            KILL_GRACE_S
-        };
         let deadline = Instant::now() + Duration::from_secs_f64(grace + 3.0);
         // The supervisor picks the Stop up within one loop turn; give it
         // that long before trusting "no process" to mean "already gone".
@@ -1344,10 +1364,15 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                             // on screen follows them.
                                             p @ IpcEvent::SaveProgress { .. } => {
                                                 outbox.send_quiet(Event::Engine(p));
+                                                // Any event shows the engine is
+                                                // alive (a shutting-down engine
+                                                // sends only save events).
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                             other => {
                                                 outbox.send(Event::Engine(other));
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                         };
@@ -1381,16 +1406,18 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
 }
 
 /// How long an engine left over from an earlier session gets to let go of
-/// the socket: the engine's own wait for a save in flight, plus a margin.
+/// the socket or exit. An engine on its way out stops capturing and drops its
+/// socket before it waits for a save in flight, so this mostly covers an old
+/// engine that still keeps its socket (an older build, or one that hangs).
 pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(65);
 
 /// An engine left over from an earlier session (the UI died mid-save, say)
 /// may still own the socket. The UI used to unlink the socket and start a
 /// second engine beside it, both capturing. Now it asks the old one to
 /// stop if it still serves clients, then waits until the socket refuses
-/// connections or the process is gone (an engine finishing a save no
-/// longer accepts clients, so it gets the time its save needs), and only
-/// then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
+/// connections or the process is gone (an engine shutting down drops its
+/// socket first and finishes a save in flight after that, without
+/// capturing), and only then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
 /// peer credentials, which a connection still waiting in the backlog has
 /// too. A socket file nobody listens on is left for the new engine, which
 /// replaces it.

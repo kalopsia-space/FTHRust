@@ -67,6 +67,9 @@ cp "$PKG/$APP_ID.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/"
 ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
 cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$APPDIR/"
 cp -r "$ROOT/licenses" "$APPDIR/licenses"
+# THIRD_PARTY_NOTICES.md links to the FFmpeg manifest (packaging/check-notice-links.sh).
+mkdir -p "$APPDIR/packaging"
+cp "$PKG/ffmpeg_manifest_linux.json" "$APPDIR/packaging/"
 desktop-file-validate "$APPDIR/$APP_ID.desktop"
 
 step "gating AppDir"
@@ -113,9 +116,15 @@ cp -a "$APPDIR/usr/lib" "$TREE/lib"
 cp -a "$APPDIR/usr/bin/assets" "$TREE/share/fthrust/assets"
 cp "$PKG/$APP_ID.desktop" "$TREE/share/applications/"
 cp "$PKG/$APP_ID.png" "$TREE/share/icons/hicolor/512x512/apps/"
-cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$TREE/"
-cp -r "$ROOT/licenses" "$TREE/share/licenses/fthrust/licenses"
-cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$TREE/share/licenses/fthrust/"
+# The notices sit at the top and under share/licenses/fthrust/, and the links in
+# each must resolve next to it: licenses/ and packaging/ go to both places.
+for dest in "$TREE" "$TREE/share/licenses/fthrust"; do
+    cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$dest/"
+    cp -r "$ROOT/licenses" "$dest/licenses"
+    mkdir -p "$dest/packaging"
+    cp "$PKG/ffmpeg_manifest_linux.json" "$dest/packaging/"
+    "$PKG/check-notice-links.sh" --require-links "$dest/THIRD_PARTY_NOTICES.md"
+done
 TAROUT="$DIST/.staging/$TARNAME"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH:-0}" \
     -C "$DIST/.staging/tree" -cf - "$TARBASE" | gzip -n -9 > "$TAROUT"

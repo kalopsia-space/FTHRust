@@ -102,6 +102,20 @@ pub fn capture_preset(backend: EncoderPref, preset: u8) -> u8 {
     }
 }
 
+/// Settings that stop a capture encoder from holding frames back, tried at
+/// open with the encoder's defaults as the fallback; none for encoders
+/// that hold none back. SVT-AV1's default random-access structure holds
+/// about 60 to 76 frames (two seconds and more), which a clip saved now
+/// would miss. Its low-delay structure holds none, and needs constant
+/// bitrate: SVT-AV1 refuses it with variable bitrate.
+pub fn low_delay_options(codec_name: &str) -> &'static [(&'static str, &'static str)] {
+    if codec_name.contains("svtav1") {
+        &[("svtav1-params", "pred-struct=1:rc=2")]
+    } else {
+        &[]
+    }
+}
+
 /// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).
 pub fn is_hardware(codec_name: &str) -> bool {
     ["nvenc", "vaapi", "amf", "qsv"]
@@ -110,9 +124,11 @@ pub fn is_hardware(codec_name: &str) -> bool {
 }
 
 /// The `thread_count` an encoder opens with: `Some(0)`, FFmpeg's automatic
-/// count, for software encoders (most of their wrappers otherwise run the
-/// library on one thread), and `None` to leave hardware encoders as they
-/// are.
+/// count, for software encoders, and `None` to leave hardware encoders as
+/// they are. OpenH264, libaom and rav1e otherwise run on one thread, and
+/// x265 on one frame thread (zerolatency keeps it at one anyway); x264
+/// already defaults to automatic threads, and Kvazaar and SVT-AV1 ignore
+/// `thread_count` and choose their own.
 pub fn thread_count(codec_name: &str) -> Option<i32> {
     (!is_hardware(codec_name)).then_some(0)
 }

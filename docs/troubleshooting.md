@@ -13,7 +13,7 @@ When something goes wrong, FTHRust says so in the bar at the bottom of the windo
 ### The status never reaches "Capturing"
 
 - **Is this a Wayland session?** Run `echo $WAYLAND_DISPLAY`. If it's empty, you're on X11, which FTHRust doesn't support.
-- **Did you cancel the screen-sharing dialog?** On desktops that use the ScreenCast portal, declining it stops capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**) and choose a screen this time.
+- **Did you cancel the screen-sharing dialog, or stop sharing?** On desktops that use the ScreenCast portal, declining the dialog, stopping the share from the desktop, or a recovery that could only continue by asking again all stop capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**), and choose a screen if the dialog comes up.
 - **Is the portal installed?** You need `xdg-desktop-portal` plus a backend for your desktop: `xdg-desktop-portal-hyprland`, `-wlr`, `-kde` or `-gnome`.
 - **Try another capture method.** Start the app with `FTHR_CAPTURE_BACKEND=portal` (or `wlr`, or `ext`) to see if a different one works.
 
@@ -42,7 +42,7 @@ Automatic encoder mode only uses GPU encoders, and won't quietly switch to your 
 
 ### "FTHR Clips is already running"
 
-Only one copy runs at a time; starting another brings the existing window forward. If no window appears, the first copy may be stuck. Run `pkill fthrust` and start again.
+Only one copy runs at a time; starting another brings the existing window forward. A copy that is still quitting (finishing a save, a recording or an export) is waited for, up to two minutes, and then the new one starts. If no window appears after that, the first copy may be stuck: `pkill -x fthrust` asks it to quit as if you had closed it, and a second `pkill -x fthrust` ends it at once. A capture engine it leaves behind is stopped by the next start.
 
 ### Clips look blocky or smeared
 
@@ -114,7 +114,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
 - **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through. Each log's own filter must allow that level too: `RUST_LOG` for the app (it already passes `info`), `FTHRUST_LOG` for the engine, for example `RUST_LOG=debug FTHRUST_LOG=debug`.
 
-If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that.
+If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that, and so does logging out or the compositor exiting: the app shuts down in order then too.
 
 ## Diagnostic reports
 

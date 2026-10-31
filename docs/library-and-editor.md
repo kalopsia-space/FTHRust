@@ -23,13 +23,13 @@ The **Clips** page shows everything in your clips folder, grouped by day, newest
 
 The filter in the top right switches between **All clips**, **Clips only**, **Screenshots** and **Imported clips**. Sort by **Newest** or **Oldest**.
 
-Badges on a card tell you more: **Uploaded**, **Imported** (from a folder you added) and **Finalizing** (still being written).
+Badges on a card tell you more: **Uploaded**, **Imported** (from a folder you added), **Recording** (a recording that is still going) and **Finalizing** (a clip still being finished, or a recording that was just stopped). A card badged Recording or Finalizing can't be opened, renamed, deleted or uploaded until it's done.
 
 ### Importing folders you already have
 
 Got years of clips somewhere else? **Settings → Clip → Import Clips → Add folder** adds a folder to the library without moving or copying anything. **Scan for clips** looks for new files. Imported clips appear under the **Imported clips** filter. MP4, MKV and AVI videos and PNG and JPEG images are picked up. Symlinks aren't followed.
 
-The library has no database of its own: it reads your folders every time, so files you add, rename or delete in a file manager show up straight away. A recording that is still being written isn't listed (and doesn't make the app rescan your folders) until it has its final name. Tags, descriptions and editor drafts are kept in `~/.fthr/clip_metadata.sqlite3`.
+The library has no database of its own: it reads your folders every time, so files you add, rename or delete in a file manager show up straight away. A recording appears as soon as it starts, badged **Recording**, and the app doesn't rescan your folders for every write to it; when it ends, the card is refreshed with the finished file. A recording cut short by a crash keeps its name and stays in the list like any other clip. Tags, descriptions and editor drafts are kept in `~/.fthr/clip_metadata.sqlite3`.
 
 ## The editor
 
@@ -63,7 +63,7 @@ Scroll on the timeline to zoom in around the cursor, and hold **Shift** while sc
 
 ### Juggling clips
 
-You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor (while the Share picker is open it closes only the picker) and **F11** goes fullscreen. Closing or parking an editor frees its video frame from the graphics card straight away.
+You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor (while the Share picker is open it closes only the picker) and **F11** goes fullscreen. Closing or parking an editor frees its video frame from the graphics card straight away, with **Live edit preview** on or off.
 
 On a slow PC, **Settings → Performance** can turn the full editor off, so clips open in a simple player instead.
 

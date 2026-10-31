@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use egui::{Align, Color32, CornerRadius, Pos2, Rect, Sense, Ui, Vec2};
+use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::library_index::{Filter, MediaKind, Sort};
 use fthrust_core::library_ownership::{Ownership, classify_media_path};
 
@@ -700,10 +701,15 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                         let on_screen = crect.intersects(viewport);
                         visible.push(path.clone());
                         let is_video = fthrust_core::clip_files::is_completed_video_path(path);
+                        // Listed files exist; only a tracked, unfinished clip is not ready.
+                        let readiness = any_blocked.then(|| state.readiness.state(path));
+                        let writing = readiness == Some(ReadinessState::Recording);
                         let (metadata, duration) =
                             state.thumb_meta.get(path).cloned().unwrap_or_else(|| {
                                 (
-                                    if is_video {
+                                    if writing {
+                                        "Recording…".to_owned()
+                                    } else if is_video {
                                         "Reading clip details…".to_owned()
                                     } else {
                                         "Screenshot".to_owned()
@@ -722,10 +728,13 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             let fp = fingerprint(state, path);
                             state.thumb_failed.blocks(path, &fp, now)
                         };
+                        // A recording in progress is not probed: its file is half
+                        // written, and grows under any thumbnail made of it.
                         if thumbnail.is_none()
                             && on_screen
                             && !settling
                             && !failed
+                            && !writing
                             && !state.thumb_requested.contains(path)
                         {
                             let fp = fingerprint(state, path);
@@ -739,8 +748,9 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             }
                         }
                         let imported = state.library.record(path).is_some_and(|r| r.imported);
-                        // Listed files exist; only a tracked, unfinished clip is not ready.
-                        let ready = !any_blocked || state.readiness.can_access(path);
+                        let ready = readiness.is_none_or(|s| {
+                            matches!(s, ReadinessState::Ready | ReadinessState::ReadyWithWarning)
+                        });
                         let key = upload_key(state, path);
                         let link = state.upload_history.link(&key).map(|l| l.url);
                         let uploaded = state.upload_history.is_uploaded(&key);
@@ -761,6 +771,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                             upload_enabled,
                             uploading: upload_status.is_some(),
                             ready,
+                            recording: writing,
                             feedback: upload_status
                                 .or_else(|| state.card_feedback.get(path).map(|(f, _)| f.clone())),
                             thumbnail,

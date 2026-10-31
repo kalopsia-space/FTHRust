@@ -6,10 +6,12 @@
 #   packaging/verify-appdir.sh <AppDir>
 #
 # Prints PASS/FAIL per check and RESULT: PASS|FAIL; exits 0 only on PASS.
-# MAX_GLIBC_OVERRIDE replaces the baseline ceiling (tests only).
+# MAX_GLIBC_OVERRIDE replaces the baseline ceiling, FFMPEG_MANIFEST_OVERRIDE the
+# FFmpeg manifest and FFMPEG_LIBRARIES_OVERRIDE the library registry (tests only).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FFM="$HERE/ffmpeg_manifest_linux.json"
+FFM="${FFMPEG_MANIFEST_OVERRIDE:-$HERE/ffmpeg_manifest_linux.json}"
+REG="${FFMPEG_LIBRARIES_OVERRIDE:-$HERE/ffmpeg_libraries.json}"
 MAX_GLIBC="${MAX_GLIBC_OVERRIDE:-$(jq -r .max_glibc "$HERE/linux_release_baseline.json")}"
 BINARIES=(fthrust fthrust-engine fthrust-uploader)
 DIR="${1:-}"
@@ -34,7 +36,8 @@ mapfile -t ELVES < <(find -L "$DIR" -type f | while read -r f; do is_elf "$f" &&
 # 1. files
 missing=()
 for f in AppRun space.kalopsia.fthrust.desktop space.kalopsia.fthrust.png .DirIcon \
-         LICENSE THIRD_PARTY_NOTICES.md licenses usr/bin/assets/fonts/Oswald-Regular.ttf; do
+         LICENSE THIRD_PARTY_NOTICES.md licenses packaging/ffmpeg_manifest_linux.json \
+         usr/bin/assets/fonts/Oswald-Regular.ttf; do
     [ -e "$DIR/$f" ] || missing+=("$f")
 done
 for b in "${BINARIES[@]}"; do [ -x "$DIR/usr/bin/$b" ] || missing+=("usr/bin/$b"); done
@@ -103,6 +106,66 @@ else
         fail glibc "$worst_file needs GLIBC_$worst, ceiling $MAX_GLIBC"
     fi
 fi
+
+# 6. ffmpeg-config: the configure line recorded in the manifest, which the
+# licence notices are generated from, is the one inside every bundled library.
+want="$(jq -r .configuration "$FFM")"
+problems=()
+scanned=0
+while IFS= read -r -d '' f; do
+    scanned=$((scanned + 1))
+    grep -aqF -- "$want" "$f" || problems+=("$(basename "$f")")
+done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
+if [ -z "$want" ] || [ "$want" = null ]; then problems+=("the manifest records no configuration"); fi
+[ $scanned -gt 0 ] || problems+=("no FFmpeg libraries found")
+[ ${#problems[@]} -eq 0 ] && pass ffmpeg-config || fail ffmpeg-config "${problems[*]}"
+
+# 7. notice-links: the links in THIRD_PARTY_NOTICES.md resolve inside the package.
+if out="$("$HERE/check-notice-links.sh" --require-links "$DIR/THIRD_PARTY_NOTICES.md" 2>&1)"; then pass notice-links; else fail notice-links "$(tr '\n' ' ' <<<"$out")"; fi
+
+# 8. gpl-libs: a library the notices declare as GPL ("gpl": true in the registry) is in exactly the bundled
+# libraries they name. Each is recognised by strings only it contains (its "signatures": FFTW's own solver names,
+# string literals that survive stripping); a mismatch means the licence notices describe a different build than
+# the one in the package. A registry that cannot be read, or that names no GPL library, fails the gate (as a
+# missing configure line fails gate 6): the check must not pass because it had nothing to check.
+problems=()
+declare -A reported=()
+report() { [ -n "${reported[$1]:-}" ] || { reported[$1]=1; problems+=("$1"); }; }
+gpl_rows='(.libraries[], .supporting_libraries[]) | select(.gpl == true) | .id as $id | (.in_libraries | join(" ")) as $in | .signatures[] | [$id, $in, .] | join("\u001f")'
+if err="$(jq -r "$gpl_rows" "$REG" 2>&1 >/dev/null)"; then
+    rows="$(jq -r "$gpl_rows" "$REG")"
+    [ -n "$rows" ] || report "${REG##*/} marks no library \"gpl\": true, so the notices name nothing behind the GPL in libavformat"
+else
+    report "cannot read the GPL libraries from ${REG##*/}: $(head -n1 <<<"$err")"
+    rows=""
+fi
+LIBS=()
+declare -A seen=()
+while IFS= read -r -d '' f; do
+    real="$(readlink -f "$f")"
+    [ -z "${seen[$real]:-}" ] || continue
+    seen[$real]=1
+    LIBS+=("$f")
+done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
+[ ${#LIBS[@]} -gt 0 ] || report "no FFmpeg libraries found"
+while IFS=$'\x1f' read -r id names sig; do
+    [ -n "$id" ] || continue
+    if [ -z "$names" ] || [ -z "$sig" ]; then report "$id has no signatures or no in_libraries in ${REG##*/}"; continue; fi
+    for n in $names; do
+        found=0
+        for f in "${LIBS[@]}"; do [[ "$(basename "$f")" == "$n".so.* ]] && found=1; done
+        [ $found = 1 ] || report "$id: $n, which the notices say holds it, is not in the package"
+    done
+    for f in "${LIBS[@]}"; do
+        base="$(basename "$f")"
+        has=0 want=0
+        grep -aqF -- "$sig" "$f" && has=1
+        for n in $names; do [[ "$base" == "$n".so.* ]] && want=1; done
+        [ $has = 1 ] && [ $want = 0 ] && report "$id ($sig) is in $base, which the notices do not name"
+        [ $has = 0 ] && [ $want = 1 ] && report "$id ($sig) is not in $base, which the notices say holds it"
+    done
+done <<<"$rows"
+[ ${#problems[@]} -eq 0 ] && pass gpl-libs || fail gpl-libs "${problems[*]}"
 
 [ $failed -eq 0 ] && { echo "RESULT: PASS"; exit 0; }
 echo "RESULT: FAIL"

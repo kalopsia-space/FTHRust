@@ -65,7 +65,7 @@ it, click and type in it, read what it shows, and loop on failures by itself.
 - The synthetic engine backend exists (`FTHRUST_SYNTHETIC_BACKEND=1` with
   `FTHR_CAPTURE_BACKEND=synthetic`, used by the engine round-trip test): status
   reaches `CAPTURING` and saves produce real MP4s without a screen, a GPU or
-  PipeWire. `--engine real` uses `FTHR_CAPTURE_BACKEND=screencopy` against
+  PipeWire. `--engine real` uses `FTHR_CAPTURE_BACKEND=wlr` against
   cage's virtual output (cage offers `zwlr_screencopy`) and is best effort:
   without PipeWire the audio sources report unavailable and clips are video
   only.
@@ -88,7 +88,9 @@ crate; it talks to the app only through files and the compositor.
 
 `bench.sh up [--release] [--engine synthetic|real] [--size WxH]`:
 
-1. Creates `$BENCH` (default `/tmp/uidrive-<pid>`): `home/` (scratch `HOME`
+1. Creates `$BENCH` (default a fresh private `mktemp -d /tmp/uidrive-XXXXXX`; a
+   `BENCH_DIR` that exists is only emptied and reused if a bench made it, see
+   its `.uidrive-bench` marker): `home/` (scratch `HOME`
    with `.fthr/settings.json` seeded from `--settings <file>` or a default
    that sets `notification_sounds_enabled=false` and
    `clips_directory=$BENCH/clips`, so scenarios know where files land), `rt/`
@@ -98,7 +100,7 @@ crate; it talks to the app only through files and the compositor.
 2. Starts `cage` headless with the pixman renderer, output size from `--size`,
    with the app as cage's application:
    `env -i HOME=$BENCH/home XDG_RUNTIME_DIR=$BENCH/rt PATH=... FTHRUST_UI_DUMP=$BENCH/ui.json
-   FTHRUST_SYNTHETIC_BACKEND=<0|1> FTHR_CAPTURE_BACKEND=<synthetic|screencopy>
+   FTHRUST_SYNTHETIC_BACKEND=<0|1> FTHR_CAPTURE_BACKEND=<synthetic|wlr>
    RUST_LOG=info cage -- <app binary>`. Because cage inherits the private
    runtime directory, its socket (`wayland-0` under `$BENCH/rt`) is private
    too, and the app, grim and the driver all find it there. No symlinks into

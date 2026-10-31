@@ -53,6 +53,17 @@ pub enum RecordState {
     Finalizing,
 }
 
+/// How far a recording's file is from being a clip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilePhase {
+    /// The engine is writing it (the Record button reads `Starting…` or
+    /// `Stop`).
+    Writing,
+    /// The recording was stopped; the engine is closing the file and the app
+    /// checking it (the button reads `Finalizing…`).
+    Finishing,
+}
+
 /// What the service wants done.
 #[derive(Debug)]
 pub enum RecAction {
@@ -192,6 +203,19 @@ impl RecordingService {
     /// The state.
     pub fn state(&self) -> RecordState {
         self.state
+    }
+
+    /// The file the recording writes into, from the moment its name is chosen
+    /// until the recording is over, failed or not. The engine writes a
+    /// recording straight into its final name, so while this is `Some` the
+    /// file is not a clip: nothing but the recording says so.
+    pub fn file_in_progress(&self) -> Option<(&Path, FilePhase)> {
+        let phase = match self.state {
+            RecordState::Starting | RecordState::Recording => FilePhase::Writing,
+            RecordState::Stopping | RecordState::Finalizing => FilePhase::Finishing,
+            RecordState::Idle | RecordState::Preparing => return None,
+        };
+        self.path.as_deref().map(|p| (p, phase))
     }
 
     /// How a finished recording is checked (tests stand in a slow one).

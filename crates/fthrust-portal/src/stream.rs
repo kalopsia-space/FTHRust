@@ -359,8 +359,9 @@ impl PipeWireVideoStream {
         if let Some(closed) = &self.closed
             && *closed.borrow()
         {
-            return Err(CaptureFailure::Failed(
-                "the portal session was closed".into(),
+            // The desktop's "Stop sharing": final, never re-opened on its own.
+            return Err(CaptureFailure::Closed(
+                "screen sharing was stopped from the desktop".into(),
             ));
         }
         let now = Instant::now();
@@ -749,6 +750,21 @@ mod tests {
                 delivered,
                 "the frame PipeWire filled is the one returned"
             );
+        }
+    }
+
+    #[test]
+    fn a_session_the_desktop_closed_ends_capture_for_good() {
+        let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+        let mut stream = receiver(60);
+        stream.closed = Some(closed_rx);
+        negotiated(&stream, PixelLayout::Bgra);
+        deliver(&stream, 1);
+        stream.capture().unwrap();
+        closed_tx.send(true).unwrap();
+        match stream.capture() {
+            Err(CaptureFailure::Closed(reason)) => assert!(reason.contains("desktop"), "{reason}"),
+            other => panic!("expected Closed, got {:?}", other.map(|v| v.repeated)),
         }
     }
 
