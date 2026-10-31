@@ -202,18 +202,23 @@ pub fn uploader_enabled(state: &AppState) -> bool {
     state.uploader_settings.enabled()
 }
 
-fn approved_roots(state: &AppState) -> Vec<PathBuf> {
-    let root = state
+/// The clips folder: the only place an upload may delete a clip from.
+fn clips_root(state: &AppState) -> PathBuf {
+    state
         .settings
         .clips_directory()
-        .unwrap_or_else(|_| state.library.clips_root.clone());
-    validate::allowed_roots(&root, &state.settings)
+        .unwrap_or_else(|_| state.library.clips_root.clone())
+}
+
+fn approved_roots(state: &AppState) -> Vec<PathBuf> {
+    validate::allowed_roots(&clips_root(state), &state.settings)
 }
 
 enum Job {
     Upload {
         path: PathBuf,
         roots: Vec<PathBuf>,
+        clips_root: PathBuf,
     },
     Compressed {
         path: PathBuf,
@@ -530,14 +535,12 @@ impl UploadService {
                 continue;
             }
             let roots = approved_roots(state);
+            let clips_root = clips_root(state);
             let job = if oversized {
                 Job::Compressed {
                     path: path.clone(),
                     roots,
-                    clips_root: state
-                        .settings
-                        .clips_directory()
-                        .unwrap_or_else(|_| state.library.clips_root.clone()),
+                    clips_root,
                     provider,
                     limit: self.limit,
                 }
@@ -545,6 +548,7 @@ impl UploadService {
                 Job::Upload {
                     path: path.clone(),
                     roots,
+                    clips_root,
                 }
             };
             self.in_flight.insert(path.clone());
@@ -742,17 +746,20 @@ struct Worker {
 }
 
 impl Worker {
-    fn upload(&self, path: &Path, roots: &[PathBuf]) -> Reply {
+    fn upload(&self, path: &Path, roots: &[PathBuf], clips_root: &Path) -> Reply {
         let Some(exe) = &self.exe else {
             return Reply::fail(MISSING);
         };
         if !path.is_file() {
             return Reply::fail("File no longer exists (deleted before upload)");
         }
+        // `clips_root` is the only folder the uploader may delete from after
+        // an upload; imported folders are in `roots` but never deleted from.
         let request = json!({
             "action": "upload",
             "path": path,
             "allowed_roots": roots,
+            "clips_root": clips_root,
         });
         let timeout = self
             .timeouts
@@ -768,9 +775,13 @@ impl Worker {
 
     fn run(&self, job: &Job) -> Done {
         match job {
-            Job::Upload { path, roots } => Done {
+            Job::Upload {
+                path,
+                roots,
+                clips_root,
+            } => Done {
                 path: path.clone(),
-                reply: self.upload(path, roots),
+                reply: self.upload(path, roots, clips_root),
                 compressed: None,
                 compression_failed: false,
             },
@@ -788,7 +799,7 @@ impl Worker {
                     compression_failed: failed,
                 },
                 Ok((copy, size, summary)) => {
-                    let reply = self.upload(&copy, roots);
+                    let reply = self.upload(&copy, roots, clips_root);
                     let ok = reply.ok;
                     Done {
                         path: path.clone(),

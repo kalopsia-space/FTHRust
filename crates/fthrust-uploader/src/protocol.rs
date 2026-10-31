@@ -81,7 +81,16 @@ async fn perform(env: &Env, request: &Value) -> Result<Response, String> {
         });
     }
     let path = validated_clip_path(request)?;
-    Ok(http::upload(env, provider, &runtime, &path).await)
+    let clips_root = clips_root(request);
+    Ok(http::upload(env, provider, &runtime, &path, clips_root.as_deref()).await)
+}
+
+/// The request's `clips_root`: the one folder whose clips may be deleted
+/// after an upload (imported folders may be uploaded from, never deleted
+/// from). Without it nothing is deleted.
+fn clips_root(request: &Map<String, Value>) -> Option<PathBuf> {
+    let raw = request.get("clips_root").and_then(Value::as_str)?;
+    (!raw.is_empty()).then(|| resolve_lenient(Path::new(raw)))
 }
 
 /// `_validated_clip_path`: the real file must sit under an approved root.

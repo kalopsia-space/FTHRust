@@ -59,10 +59,12 @@ impl Home {
     }
 
     async fn upload(&self, env: &Env) -> (bool, String) {
+        let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
             "path": self.clip,
-            "allowed_roots": [self.dir.path().join("clips")],
+            "allowed_roots": [clips],
+            "clips_root": clips,
         });
         let r = handle(env, &req).await;
         (r.ok, r.message)

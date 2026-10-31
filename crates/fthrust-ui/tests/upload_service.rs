@@ -209,6 +209,9 @@ fn success_updates_card_and_toasts() {
                 .into_owned()
         )
     );
+    // The clips folder is named on its own: it is the only place an upload
+    // may delete from, whatever other folders are approved.
+    assert_eq!(req["clips_root"], json!(r.clips.to_string_lossy()));
     assert!(r.error_titles().is_empty());
 }
 

@@ -135,10 +135,12 @@ impl Home {
 
     /// The whole reply to an upload request for the clip.
     async fn respond(&self, env: &Env) -> Response {
+        let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
             "path": self.clip,
-            "allowed_roots": [self.dir.path().join("clips")],
+            "allowed_roots": [clips],
+            "clips_root": clips,
         });
         handle(env, &req).await
     }
@@ -665,6 +667,71 @@ async fn auto_delete_failure_still_succeeds() {
     assert!(
         msg.starts_with("Uploaded, but local delete failed: "),
         "{msg}"
+    );
+}
+
+/// Auto-delete only ever removes files in the clips folder. Imported folders
+/// (and links into them) upload like everything else but are never deleted:
+/// interval mode plus auto-delete would otherwise empty a whole imported
+/// library.
+#[tokio::test]
+async fn auto_delete_stays_inside_the_clips_folder() {
+    let srv = server(vec![(200, "https://cdn.example/ok"); 5]);
+    let h = home(json!({
+        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
+    }));
+    let clips = h.dir.path().join("clips");
+    let imports = h.dir.path().join("imports");
+    std::fs::create_dir_all(&imports).unwrap();
+    let make = |dir: &Path, name: &str| {
+        let p = dir.join(name);
+        std::fs::write(&p, b"VIDEO-BYTES").unwrap();
+        p.canonicalize().unwrap()
+    };
+    let ours = make(&clips, "ours.mp4");
+    let theirs = make(&imports, "theirs.mp4");
+    let real = make(&imports, "real.mp4");
+    let link = clips.join("link.mp4");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let env = h.env("x");
+    let ask = |path: PathBuf, clips_root: Option<&PathBuf>| {
+        let mut req = json!({
+            "action": "upload", "path": path, "allowed_roots": [clips, imports],
+        });
+        if let Some(root) = clips_root {
+            req["clips_root"] = json!(root);
+        }
+        let env = &env;
+        async move { handle(env, &req).await }
+    };
+    for (path, deleted, what) in [
+        (ours.clone(), true, "a clip in the clips folder"),
+        (theirs.clone(), false, "a clip in an imported folder"),
+        (
+            link,
+            false,
+            "a link in the clips folder to an imported clip",
+        ),
+    ] {
+        let r = ask(path.clone(), Some(&clips)).await;
+        assert!(r.ok, "{what}: {}", r.message);
+        assert_eq!(r.message, "https://cdn.example/ok", "{what}");
+        assert!(r.warning.is_none(), "{what}: {:?}", r.warning);
+        let target = path.canonicalize().unwrap_or(path.clone());
+        assert_eq!(!target.exists(), deleted, "{what}");
+        assert!(
+            h.history().is_uploaded(&target) || deleted,
+            "{what}: not recorded"
+        );
+    }
+    assert!(real.exists() && theirs.exists());
+    // Without a clips folder in the request nothing is ever deleted.
+    let again = make(&clips, "again.mp4");
+    let r = ask(again.clone(), None).await;
+    assert!(r.ok, "{}", r.message);
+    assert!(
+        again.exists(),
+        "deleted without a clips folder to be inside of"
     );
 }
 

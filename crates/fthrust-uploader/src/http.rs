@@ -651,11 +651,13 @@ fn usable_link(entry: &Map<String, Value>) -> Option<String> {
 }
 
 /// `UploadRuntime.upload`: size limit, attempts, history, auto-delete.
+/// Auto-delete only removes a clip inside `clips_root`.
 pub async fn upload(
     env: &Env,
     provider: Provider,
     settings: &Map<String, Value>,
     path: &Path,
+    clips_root: Option<&Path>,
 ) -> Response {
     let failed = |message: String| Response {
         ok: false,
@@ -754,9 +756,11 @@ pub async fn upload(
             )),
         };
     }
-    // Without a link the upload is not confirmed: keep the only copy.
+    // Without a link the upload is not confirmed: keep the only copy. Clips
+    // outside the clips folder (imported libraries) are never ours to delete.
     if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
         && link.is_some()
+        && clips_root.is_some_and(|root| path.starts_with(root))
         && let Err(e) = std::fs::remove_file(path)
     {
         return Response {
