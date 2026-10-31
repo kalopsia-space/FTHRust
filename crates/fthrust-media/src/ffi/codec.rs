@@ -100,6 +100,42 @@ impl RawEncoder {
         unsafe { !ffi::avcodec_find_encoder_by_name(cname.as_ptr()).is_null() }
     }
 
+    /// The `key=value` pairs among `options` that `name`'s private options
+    /// refuse, or `None` when this FFmpeg build has no such encoder. The
+    /// context is only allocated, so no device is needed.
+    #[cfg(test)]
+    pub(crate) fn rejected_options(
+        name: &str,
+        options: &[(&'static str, String)],
+    ) -> Option<Vec<String>> {
+        let cname = CString::new(name).ok()?;
+        // SAFETY: the context is allocated, configured and freed here; the
+        // option strings are valid C strings for each call.
+        unsafe {
+            let codec = ffi::avcodec_find_encoder_by_name(cname.as_ptr());
+            if codec.is_null() {
+                return None;
+            }
+            let mut ctx = ffi::avcodec_alloc_context3(codec);
+            if ctx.is_null() {
+                return None;
+            }
+            let rejected = options
+                .iter()
+                .filter(|(key, value)| {
+                    let (Ok(k), Ok(v)) = (CString::new(*key), CString::new(value.as_str())) else {
+                        return true;
+                    };
+                    (*ctx).priv_data.is_null()
+                        || ffi::av_opt_set((*ctx).priv_data, k.as_ptr(), v.as_ptr(), 0) < 0
+                })
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect();
+            ffi::avcodec_free_context(&mut ctx);
+            Some(rejected)
+        }
+    }
+
     /// Opens `name` with `params`; a VA-API encoder gets `hw` as its device
     /// and frame pool (or the converter's output pool). Colour is BT.709 studio range, GOP is `2*fps` with no
     /// B-frames, and a global header is requested.
@@ -177,7 +213,7 @@ impl RawEncoder {
                 }
                 let ret = ffi::av_opt_set((*ctx).priv_data, k.as_ptr(), v.as_ptr(), 0);
                 if ret < 0 {
-                    tracing::debug!(encoder = name, option = key, "option not accepted");
+                    tracing::warn!(encoder = name, option = key, value = %value, "encoder option not accepted");
                 }
             }
             (*ctx).flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
@@ -385,6 +421,69 @@ mod tests {
         if opened == 0 {
             eprintln!("skipping: no software H.264 encoder in this FFmpeg build");
         }
+    }
+
+    #[test]
+    fn every_preset_option_is_one_the_encoder_has() {
+        use crate::encoder_policy::{encoder_candidates, preset_options};
+        use fthrust_core::capture_config::{Codec, EncoderPref};
+        crate::init().unwrap();
+        let mut names = encoder_candidates(Codec::Auto, EncoderPref::Auto);
+        names.extend(encoder_candidates(Codec::Auto, EncoderPref::Software));
+        let mut checked = Vec::new();
+        let mut refused = Vec::new();
+        for name in names {
+            for preset in 1..=7 {
+                let options = preset_options(name, preset).unwrap_or_default();
+                match RawEncoder::rejected_options(name, &options) {
+                    None => break,
+                    Some(r) if r.is_empty() => {}
+                    Some(r) => refused.push(format!("{name} preset {preset}: {}", r.join(", "))),
+                }
+                if preset == 7 {
+                    checked.push(name);
+                }
+            }
+        }
+        assert!(refused.is_empty(), "refused: {refused:#?}");
+        eprintln!("checked against this FFmpeg: {checked:?}");
+    }
+
+    #[test]
+    fn string_presets_open() {
+        // x264 and x265 take their preset as a string that only opening
+        // the encoder checks.
+        use crate::encoder_policy::preset_options;
+        crate::init().unwrap();
+        for name in ["libx264", "libx265"] {
+            if !RawEncoder::exists(name) {
+                continue;
+            }
+            for preset in 1..=7 {
+                let params = OpenParams {
+                    options: preset_options(name, preset).unwrap(),
+                    ..params()
+                };
+                if let Err(e) = RawEncoder::open(name, &params, None) {
+                    panic!("{name} preset {preset}: {e}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_options_reports_unknown_names_and_values() {
+        crate::init().unwrap();
+        let options = [
+            ("huffman", "optimal".to_string()),
+            ("huffman", "slowest".to_string()),
+            ("no_such_option", "1".to_string()),
+        ];
+        assert_eq!(
+            RawEncoder::rejected_options("mjpeg", &options).unwrap(),
+            ["huffman=slowest", "no_such_option=1"]
+        );
+        assert!(RawEncoder::rejected_options("no_such_encoder", &options).is_none());
     }
 
     #[test]

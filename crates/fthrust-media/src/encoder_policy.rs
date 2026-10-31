@@ -106,15 +106,28 @@ pub fn thread_count(codec_name: &str) -> Option<i32> {
 /// know. VA-API deliberately gets no quality option: its meaning differs
 /// between drivers. `libopenh264` additionally needs `max_b_frames = 0`,
 /// which the encoder applies itself.
+///
+/// Every pair is one the encoder accepts (tested against the FFmpeg the
+/// tests run with): QSV's slowest preset is `veryslow`, only `h264_qsv`
+/// has `look_ahead`, NVENC's `cbr` (default off) is gone in FFmpeg 9, and
+/// libkvazaar takes its preset inside `kvazaar-params`.
 pub fn preset_options(codec_name: &str, preset: u8) -> Option<Vec<(&'static str, String)>> {
     let p = preset.clamp(1, 7) as usize;
     let s = |v: &str| v.to_string();
+    const X26X: [&str; 7] = [
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "fast",
+        "medium",
+        "slow",
+        "veryslow",
+    ];
     Some(if codec_name.contains("nvenc") {
         vec![
             ("preset", format!("p{p}")),
             ("tune", s("ll")),
             ("rc", s("vbr")),
-            ("cbr", s("0")),
             ("forced-idr", s("1")),
         ]
     } else if codec_name.contains("amf") {
@@ -126,30 +139,23 @@ pub fn preset_options(codec_name: &str, preset: u8) -> Option<Vec<(&'static str,
         Vec::new()
     } else if codec_name.contains("qsv") {
         const QSV: [&str; 7] = [
-            "veryfast", "fast", "medium", "medium", "slow", "slower", "slowest",
+            "veryfast", "fast", "medium", "medium", "slow", "slower", "veryslow",
         ];
-        vec![("preset", s(QSV[p - 1])), ("look_ahead", s("0"))]
+        let mut v = vec![("preset", s(QSV[p - 1]))];
+        if codec_name.starts_with("h264") {
+            v.push(("look_ahead", s("0")));
+        }
+        v
     } else if codec_name.contains("openh264") {
         vec![
             ("rc_mode", s("bitrate")),
             ("allow_skip_frames", s("0")),
             ("profile", s("high")),
         ]
-    } else if codec_name.contains("kvazaar") || codec_name.contains("libx26") {
-        const NAMES: [&str; 7] = [
-            "ultrafast",
-            "superfast",
-            "veryfast",
-            "fast",
-            "medium",
-            "slow",
-            "veryslow",
-        ];
-        let mut v = vec![("preset", s(NAMES[p - 1]))];
-        if codec_name.contains("libx26") {
-            v.push(("tune", s("zerolatency")));
-        }
-        v
+    } else if codec_name.contains("kvazaar") {
+        vec![("kvazaar-params", format!("preset={}", X26X[p - 1]))]
+    } else if codec_name.contains("libx26") {
+        vec![("preset", s(X26X[p - 1])), ("tune", s("zerolatency"))]
     } else if codec_name.contains("svtav1") {
         const SVT: [u8; 7] = [12, 9, 7, 6, 4, 1, 0];
         vec![("preset", SVT[p - 1].to_string())]

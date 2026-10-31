@@ -98,7 +98,6 @@ fn preset_options_match_reference_tables() {
             ("preset", "p3"),
             ("tune", "ll"),
             ("rc", "vbr"),
-            ("cbr", "0"),
             ("forced-idr", "1")
         ]
         .map(|(k, v)| (k, v.to_string()))
@@ -123,7 +122,17 @@ fn preset_options_match_reference_tables() {
             ("look_ahead", "0".to_string())
         ]
     );
-    assert_eq!(opts("h264_qsv", 7)[0], ("preset", "slowest".to_string()));
+    assert_eq!(
+        opts("h264_qsv", 7)[0],
+        ("preset", "veryslow".to_string()),
+        "QSV has no `slowest`"
+    );
+    assert_eq!(
+        opts("hevc_qsv", 1),
+        [("preset", "veryfast".to_string())],
+        "only h264_qsv has look_ahead"
+    );
+    assert_eq!(opts("av1_qsv", 6), [("preset", "slower".to_string())]);
     assert_eq!(
         opts("libopenh264", 4),
         [
@@ -132,7 +141,22 @@ fn preset_options_match_reference_tables() {
             ("profile", "high".to_string())
         ]
     );
-    assert_eq!(opts("libkvazaar", 5), [("preset", "medium".to_string())]);
+    assert_eq!(
+        opts("libkvazaar", 5),
+        [("kvazaar-params", "preset=medium".to_string())],
+        "libkvazaar has no `preset` option of its own"
+    );
+    assert_eq!(
+        opts("libkvazaar", 7),
+        [("kvazaar-params", "preset=veryslow".to_string())]
+    );
+    assert_eq!(
+        opts("libx265", 7),
+        [
+            ("preset", "veryslow".to_string()),
+            ("tune", "zerolatency".to_string())
+        ]
+    );
     assert_eq!(
         opts("libx264", 1),
         [
