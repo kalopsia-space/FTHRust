@@ -6,7 +6,7 @@ use std::ptr;
 
 use ffmpeg_next::ffi;
 
-use super::frame::OwnedFrame;
+use super::frame::{OwnedFrame, check_bgra_geometry};
 use crate::{MediaError, Result};
 
 /// `SWS_BILINEAR` (the flag constant is not exported by the FFmpeg 9 bindings).
@@ -160,19 +160,10 @@ impl Scaler {
                 self.src_height
             )));
         }
-        let row = self.src_width as usize * 4;
-        if stride < row {
-            return Err(MediaError::Invalid(format!(
-                "stride {stride} is smaller than width*4 ({row})"
-            )));
-        }
-        let needed = stride * (height as usize - 1) + row;
-        if bgra.len() < needed {
-            return Err(MediaError::Invalid(format!(
-                "frame buffer holds {} bytes but its geometry needs {needed}",
-                bgra.len()
-            )));
-        }
+        check_bgra_geometry(bgra.len(), stride, self.src_width, height as usize)?;
+        let linesize = i32::try_from(stride).map_err(|_| {
+            MediaError::Invalid(format!("stride {stride} is larger than FFmpeg's line size"))
+        })?;
         // SAFETY: the source length was checked above and the destination
         // frame owns buffers sized for the scaler's output. The source
         // frame wraps `bgra` in a buffer whose free callback does nothing,
@@ -195,7 +186,7 @@ impl Scaler {
             let src = self.src;
             (*src).buf[0] = buf;
             (*src).data[0] = bgra.as_ptr().cast_mut();
-            (*src).linesize[0] = stride as i32;
+            (*src).linesize[0] = linesize;
             (*src).format = ffi::AVPixelFormat::AV_PIX_FMT_BGRA as i32;
             (*src).width = self.src_width as i32;
             (*src).height = height as i32;
@@ -461,6 +452,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn rejects_strides_whose_size_overflows_or_that_ffmpeg_cannot_take() {
+        let mut s = scaler();
+        let mut dst = OwnedFrame::video(ffi::AVPixelFormat::AV_PIX_FMT_YUV420P, 32, 32).unwrap();
+        let buf = vec![0u8; 64 * 64 * 4];
+        assert!(s.scale_bgra(&buf, usize::MAX / 2, 64, &mut dst).is_err());
+        assert!(s.scale_bgra(&buf, usize::MAX, 64, &mut dst).is_err());
+        // One row needs no stride, but FFmpeg's line size is an int.
+        let mut one_row =
+            Scaler::new(64, 1, 32, 32, ffi::AVPixelFormat::AV_PIX_FMT_YUV420P).unwrap();
+        let row = vec![0u8; 64 * 4];
+        assert!(
+            one_row
+                .scale_bgra(&row, i32::MAX as usize + 1, 1, &mut dst)
+                .is_err()
+        );
+        assert!(one_row.scale_bgra(&row, 64 * 4, 1, &mut dst).is_ok());
     }
 
     #[test]

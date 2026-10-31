@@ -82,6 +82,28 @@ fn rejects_short_stride() {
 }
 
 #[test]
+fn rejects_geometry_whose_size_overflows() {
+    if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
+        return;
+    }
+    let mut encoder = Encoder::open(&software_config(64, 8, 30)).unwrap();
+    let mut out = Vec::new();
+    let tiny = vec![0u8; 64 * 4 * 8];
+    for (stride, width, height) in [
+        (usize::MAX / 2, 64, 3),
+        (usize::MAX, 64, 2),
+        (0, 1 << 30, 1),
+        (usize::MAX, u32::MAX, u32::MAX),
+    ] {
+        let err = encoder
+            .encode(&tiny, stride, width, height, SECOND, &mut out)
+            .unwrap_err();
+        assert!(matches!(err, MediaError::Invalid(_)), "{err}");
+    }
+    assert!(out.is_empty());
+}
+
+#[test]
 fn first_pts_zero_strictly_increasing_keyframe_every_gop() {
     if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
         return;

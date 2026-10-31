@@ -10,7 +10,7 @@ use fthrust_core::capture_config::{Codec, EncoderPref};
 use crate::encoder_policy::{encoder_candidates, preset_options};
 use crate::ffi::capture_surfaces::{CaptureSurfaces, ExportedImage};
 use crate::ffi::codec::{HwInput, OpenParams, RawEncoder};
-use crate::ffi::frame::OwnedFrame;
+use crate::ffi::frame::{OwnedFrame, check_bgra_geometry};
 use crate::ffi::hw::{POOL_SURFACES, VaapiFrames, candidate_devices};
 use crate::ffi::scaler::Scaler;
 use crate::ffi::vpp::VaapiConverter;
@@ -331,9 +331,13 @@ impl Encoder {
     fn gpu_input(hw: VaapiFrames, cfg: &EncoderConfig) -> Result<HwInput> {
         let (src_w, src_h) = (cfg.src_width.max(1), cfg.src_height.max(1));
         let mut converter = VaapiConverter::new(&hw, src_w, src_h, cfg.enc_width, cfg.enc_height)?;
-        let black = vec![0u8; src_w as usize * src_h as usize * 4];
+        let row = src_w as usize * 4;
+        let len = row
+            .checked_mul(src_h as usize)
+            .ok_or_else(|| MediaError::Invalid(format!("source {src_w}x{src_h} is too large")))?;
+        let black = vec![0u8; len];
         let mut out = OwnedFrame::empty()?;
-        converter.convert(&black, src_w as usize * 4, &mut out)?;
+        converter.convert(&black, row, &mut out)?;
         Ok(HwInput::Converter(hw, converter))
     }
 
@@ -614,17 +618,7 @@ impl Encoder {
         if width == 0 || height == 0 {
             return Err(MediaError::Invalid("frame size must be non-zero".into()));
         }
-        if stride < width as usize * 4 {
-            return Err(MediaError::Invalid(format!(
-                "stride {stride} is smaller than width*4 ({})",
-                width * 4
-            )));
-        }
-        if bgra.len() < stride * (height as usize - 1) + width as usize * 4 {
-            return Err(MediaError::Invalid(
-                "frame buffer is shorter than its declared geometry".into(),
-            ));
-        }
+        check_bgra_geometry(bgra.len(), stride, width, height as usize)?;
         // The new frame replaces the last one: drop the repeat reference so
         // it pins no surface through the rebuild or the next convert.
         self.last_frame_valid = false;

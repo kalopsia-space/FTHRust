@@ -200,20 +200,8 @@ impl VaapiConverter {
         stride: usize,
         out: &mut OwnedFrame,
     ) -> Result<()> {
-        let row = self.src_w as usize * 4;
         let h = self.src_h as usize;
-        if stride < row {
-            return Err(MediaError::Invalid(format!(
-                "stride {stride} is smaller than width*4 ({row})"
-            )));
-        }
-        let needed = stride * (h - 1) + row;
-        if bgra.len() < needed {
-            return Err(MediaError::Invalid(format!(
-                "frame buffer holds {} bytes but its geometry needs {needed}",
-                bgra.len()
-            )));
-        }
+        let row = super::frame::check_bgra_geometry(bgra.len(), stride, self.src_w, h)?;
         if !self.upload_mapped(bgra, stride, row, h) {
             self.upload_transfer(bgra, stride, row, h)?;
         }

@@ -81,3 +81,15 @@ fn mapped_and_transfer_uploads_match() {
     assert_eq!(mapped.len(), transfer.len());
     assert!(mapped == transfer, "mapped and transfer uploads differ");
 }
+
+#[test]
+fn gpu_conversion_rejects_strides_whose_size_overflows() {
+    if !vaapi_available() {
+        eprintln!("skipping: no VA-API device");
+        return;
+    }
+    let frame = solid(64, 64, [0, 0, 0, 255]);
+    for stride in [usize::MAX / 2, usize::MAX] {
+        assert!(gpu_convert_rgb_with_stride(64, 64, 64, 64, stride, &frame).is_err());
+    }
+}
