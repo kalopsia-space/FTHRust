@@ -43,3 +43,37 @@ measured end to end yet.
 - Startup time; thumbnail generation for many clips.
 - Disk replay buffer RAM savings on a real desktop (the plan 9 run used a
   tmpfs home).
+
+## Packaging (from the 2026-10-31 audit)
+
+### A trimmed FFmpeg for the AppImage
+
+The AppImage ships BtbN's all-libraries LGPL FFmpeg build. It is most of the
+86 MB image (uncompressed: libavcodec 69 MB, libavfilter 30 MB, libavformat
+24 MB, libswscale 13 MB), and its ~60 external libraries make up most of
+`THIRD_PARTY_NOTICES.md`. One of them, FFTW (GPL-2.0-or-later, pulled in by
+chromaprint), makes `libavformat` GPL-covered; that is compatible with the
+app's GPL-3.0 and the notices say so, but nothing in the app uses chromaprint.
+
+Deferred on 2026-10-31 rather than done with the audit fixes: it means
+building FFmpeg and the encoder libraries from source in the packaging
+container, and the hardware encoders it must keep (NVENC, VA-API, QSV, AMF)
+can't be checked on the build machine. The current build works and is
+licensed correctly, so the gain (size, a shorter notice list) didn't justify
+the risk to the release.
+
+Sketch: a custom variant of the pinned BtbN build scripts (the same
+`scripts.d` steps, fewer of them) or a `--disable-everything` configure in
+the packaging image, enabling only what the app uses:
+- encoders: `h264/hevc/av1` over `_vaapi`, `_nvenc`, `_qsv`, `_amf`;
+  `libopenh264`, `libkvazaar`, `libsvtav1`; `aac`;
+- decoders: `h264`, `hevc`, `av1` (plus `libdav1d` if the native one is too
+  slow), `aac`, `mjpeg`, `png`/`mjpeg` for posters and images;
+- muxers/demuxers: `mp4`, `mov`, `matroska`/`webm` demux for imports;
+- filters: `scale_vaapi`, `scale`, `format`, `aresample`, `amix`, `volume`,
+  `atempo`, `setpts`, `overlay`, `concat`, plus what the exporter's graphs
+  name (grep `fthrust-media/src/export`);
+- devices: `v4l2`; hwaccels: `vaapi`, `cuda` (for NVENC frames), `qsv`.
+Gate it with `packaging/verify-appdir.sh` and the notice generator (which
+then lists only what is built), and keep the old build as a fallback until a
+release has been checked on NVIDIA, AMD and Intel hardware.
