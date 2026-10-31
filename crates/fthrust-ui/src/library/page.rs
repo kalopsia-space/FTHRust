@@ -240,6 +240,24 @@ fn delete_clip(state: &mut AppState, path: &Path) {
     }
 }
 
+/// Moves the clip's tag, description and editor draft to its new name (the
+/// metadata store keys them by path).
+fn move_metadata(state: &mut AppState, old: &Path, new: &Path) {
+    let moved = match crate::editor::sessions::store(state) {
+        Some(store) => store.rename_path(old, new).map_err(|e| e.to_string()),
+        None => Err("the clip metadata database is unavailable".to_owned()),
+    };
+    if let Err(e) = moved {
+        tracing::warn!(error = %e, "clip metadata not moved to the new name");
+        state.dialogs.push_message(
+            "Clip renamed",
+            format!(
+                "The file was renamed, but its tag, description and editor draft could not be moved: {e}"
+            ),
+        );
+    }
+}
+
 fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
     if state.upload_status.contains_key(path) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
@@ -249,6 +267,7 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
     match fthrust_core::audio_manifest::rename_clip(path, stem) {
         Ok(new_path) => {
             if new_path != path {
+                move_metadata(state, path, &new_path);
                 // Keep the returned link attached to the renamed clip.
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);

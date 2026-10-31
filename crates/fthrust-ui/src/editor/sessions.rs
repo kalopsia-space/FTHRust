@@ -48,7 +48,8 @@ fn factory(state: &mut AppState) -> PlayerFactory {
         .clone()
 }
 
-fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
+/// The clip metadata store, opened on first use.
+pub(crate) fn store(state: &mut AppState) -> Option<&mut ClipMetadataStore> {
     if state.clip_metadata.is_none() {
         match ClipMetadataStore::open(&state.paths) {
             Ok(s) => state.clip_metadata = Some(s),

@@ -385,6 +385,64 @@ fn renaming_a_linked_import_asks_first() {
     );
 }
 
+/// Answers the rename question of `path` with `stem`, as the dialog does.
+fn rename_through_the_dialog(s: &mut AppState, path: &std::path::Path, stem: &str) {
+    s.dialogs.results.push(DialogResult::Answer {
+        tag: format!("rename-clip:{}\u{1f}{stem}", path.display()),
+        yes: true,
+    });
+    fthrust_ui::library::page::consume_results(s);
+}
+
+#[test]
+fn renaming_a_clip_keeps_its_tag_description_and_editor_draft() {
+    use fthrust_core::clip_metadata::{ClipMetadataStore, DraftFile, EditorDraft};
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Desktop")).unwrap();
+    let clip = root.join("Desktop/old_name.mp4");
+    std::fs::write(&clip, b"video").unwrap();
+    s.library.upsert(&clip, false);
+    // What the editor saved for the clip.
+    let identity = fthrust_core::media_identity::file_identity(&clip).unwrap();
+    {
+        let mut store = ClipMetadataStore::open(&s.paths).unwrap();
+        store
+            .update(&clip, Some("clutch"), Some("1v4 on B site"))
+            .unwrap();
+        let draft = EditorDraft {
+            version: 1,
+            file: DraftFile {
+                mtime_ns: identity.mtime_ns,
+                size: identity.size,
+            },
+            updated_at: 1.0,
+            state: serde_json::json!({"trim_start": 0.25}),
+        };
+        store.set_editor_draft(&clip, draft).unwrap();
+    }
+    rename_through_the_dialog(&mut s, &clip, "renamed");
+    let renamed = root.join("Desktop/renamed.mp4");
+    assert!(renamed.exists() && !clip.exists(), "renamed on disk");
+    let store = ClipMetadataStore::open(&s.paths).unwrap();
+    let entry = store.get(&renamed).unwrap();
+    assert_eq!(entry.tag, "clutch");
+    assert_eq!(entry.description, "1v4 on B site");
+    let renamed_identity = fthrust_core::media_identity::file_identity(&renamed).unwrap();
+    assert!(
+        store
+            .editor_draft_if_current(&renamed, &renamed_identity)
+            .unwrap()
+            .is_some(),
+        "the draft followed the file"
+    );
+    let old = store.get(&clip).unwrap();
+    assert!(
+        old.tag.is_empty() && old.description.is_empty() && old.editor_draft.is_none(),
+        "nothing is left under the old name: {old:?}"
+    );
+}
+
 /// `n_new` clips on one day and `n_old` on the day before, all within an hour
 /// of noon UTC so that any local offset keeps the two days apart.
 fn two_day_records(root: &std::path::Path, n_new: usize, n_old: usize) -> Vec<LibraryRecord> {
