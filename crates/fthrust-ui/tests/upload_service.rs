@@ -356,6 +356,25 @@ fn an_uploaded_clip_without_a_link_says_so_and_can_be_uploaded_again() {
     assert_eq!(r.requests().len(), 2);
 }
 
+/// A scan sees resolved paths; the library may list the same clip under
+/// another spelling (a clips folder behind a symlink), and the queue keeps one
+/// entry per clip, under the library's. The records hold their resolved path
+/// already, so finding a clip must not resolve every record again: a round of
+/// n clips did n² file system lookups on the UI thread.
+#[test]
+fn a_scanned_path_is_queued_under_the_librarys_spelling() {
+    let mut r = rig(&uploader_ok("https://cdn.example/s.mp4"), json!({}));
+    let clip = r.clip("s.mp4");
+    r.state.library.upsert(&clip, false);
+    // Nothing is at the library's spelling to resolve: only the record's own
+    // resolved path says which clip it is.
+    let spelled = PathBuf::from("/library/spelling/s.mp4");
+    r.state.library.records[0].path = spelled.clone();
+    r.svc.enqueue(&mut r.state, clip.canonicalize().unwrap());
+    let queued: Vec<&PathBuf> = r.state.upload_status.keys().collect();
+    assert_eq!(queued, vec![&spelled]);
+}
+
 /// Auto-delete removes the clip, and the clips folder may be reached through
 /// a symlink: the history entry is the uploader's, under the real path. The
 /// app must not add a second one under the symlink's spelling (a path that

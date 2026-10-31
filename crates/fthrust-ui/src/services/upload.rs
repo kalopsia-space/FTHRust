@@ -766,6 +766,7 @@ impl Drop for UploadService {
 
 /// The library's own spelling of `path` (scans see resolved paths; cards,
 /// renames and deletes use the library's), so one clip is one queue entry.
+/// The records carry their resolved path: only `path` is resolved here, once.
 fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
     if state.library.records.iter().any(|r| r.path == path) {
         return path;
@@ -775,7 +776,7 @@ fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
         .library
         .records
         .iter()
-        .find(|r| resolved(&r.path) == real)
+        .find(|r| r.identity == real)
         .map(|r| r.path.clone())
         .unwrap_or(path)
 }
