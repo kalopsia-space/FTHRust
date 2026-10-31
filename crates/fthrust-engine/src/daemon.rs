@@ -57,8 +57,8 @@ pub enum DaemonError {
 pub enum Stop {
     /// The parent closed our stdin.
     ParentGone,
-    /// SIGTERM or SIGINT. The first one starts a graceful shutdown; another
-    /// one during it stops waiting for the save and the capture threads.
+    /// SIGTERM or SIGINT. While serving it starts a graceful shutdown; during
+    /// the shutdown's waits (whatever started it) it ends them at once.
     Signal,
 }
 
@@ -623,7 +623,7 @@ pub async fn serve_until(
 /// needs from live capture; stop a recording, capture and audio, so this
 /// engine never captures next to the one a relaunched UI starts; stop
 /// listening, so that engine can bind; then let the save finish. Each step
-/// has its own limit, and another signal skips what is left.
+/// has its own limit, and a signal during them skips what is left.
 async fn shut_down(
     mut service: Service,
     server: EngineServer,
@@ -672,7 +672,7 @@ async fn shut_down(
     // one finishes its save. The connected client keeps its own socket.
     drop(server);
     if cut {
-        tracing::warn!("signal received again; not waiting any longer");
+        tracing::warn!("signal received during the shutdown; not waiting any longer");
         return;
     }
     // The save in flight finishes (bounded like the UI's completion
@@ -687,7 +687,9 @@ async fn shut_down(
                 deliver(client, e).await;
             }
             Ok(Some(Internal::Stop(Stop::Signal))) => {
-                tracing::warn!("signal received again; not waiting for the clip save");
+                tracing::warn!(
+                    "signal received during the shutdown; not waiting for the clip save"
+                );
                 return;
             }
             Ok(Some(_)) => {}
