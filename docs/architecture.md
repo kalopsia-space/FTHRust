@@ -107,7 +107,7 @@ Each message is a **little-endian `u32` length followed by a JSON body**, up to 
 
 The app's engine service (`fthrust-ui/src/services/engine.rs`) is a state machine around a driver task:
 
-1. **Spawn** `fthrust-engine --socket <path>` from `$FTHRUST_ENGINE` or next to the app, with stdin piped. The engine treats stdin closing as "the app is gone" and exits. On the way out it stops listening at once (so a new engine can start), lets a save in flight finish (up to 60 seconds) and stops capture within 15 seconds; a second SIGTERM or SIGINT skips the waiting.
+1. **Spawn** `fthrust-engine --socket <path>` from `$FTHRUST_ENGINE` or next to the app, with stdin piped. The engine treats stdin closing as "the app is gone" and exits. On the way out it stops capturing (once a save just asked for has taken its frames), then stops listening so a new engine can start, then lets the save finish (up to 60 seconds); a second SIGTERM or SIGINT skips the waiting.
 2. **Connect**, retrying 60 times at 150 ms intervals, then wait up to 9 seconds for `Hello`.
 3. **Configure**, and wait up to 30 seconds for healthy capture before showing **SETTINGS APPLY TIMED OUT**.
 4. **Watch.** Three seconds without any event means the engine is gone. An unexpected exit shows **ENGINE STOPPED** with **RESTART ENGINE**.
