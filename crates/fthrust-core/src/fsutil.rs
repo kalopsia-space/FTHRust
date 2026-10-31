@@ -50,8 +50,11 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> io::Result<(
     };
     let result = (|| -> io::Result<()> {
         // The umask may have narrowed the creation mode; the file gets
-        // exactly the requested one.
-        file.set_permissions(Permissions::from_mode(mode & 0o777))?;
+        // exactly the requested one. A filesystem without modes (some FUSE
+        // and FAT mounts) refuses the chmod, and the write still goes ahead.
+        if let Err(e) = file.set_permissions(Permissions::from_mode(mode & 0o777)) {
+            tracing::debug!(path = %tmp.display(), error = %e, "could not set the file mode");
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&tmp, path)
