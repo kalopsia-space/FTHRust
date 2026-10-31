@@ -893,3 +893,43 @@ fn unusable_capture_settings_are_reported_at_start() {
     );
     services.shutdown();
 }
+
+/// Audit 2026-10-31: an engine left over from an earlier session is asked
+/// to stop before a new one starts (its socket used to be unlinked and a
+/// second engine started beside it).
+#[test]
+fn a_leftover_engine_is_asked_to_stop() {
+    use fthrust_ipc::transport::EngineServer;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("engine.sock");
+    let got_shutdown = rt.block_on(async {
+        let server = EngineServer::bind(&path).await.unwrap();
+        let old_engine = tokio::spawn(async move {
+            let mut conn = server.accept().await.unwrap();
+            conn.events
+                .send(fthrust_ipc::Event::Hello {
+                    protocol_version: fthrust_ipc::PROTOCOL_VERSION,
+                    pid: 0,
+                    version: "old".into(),
+                })
+                .await
+                .unwrap();
+            let cmd = conn.commands.recv().await;
+            // Exits: the connection and the socket go away.
+            matches!(cmd, Some(fthrust_ipc::Command::Shutdown))
+        });
+        let started = std::time::Instant::now();
+        fthrust_ui::services::engine::retire_stale_engine(&path).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        old_engine.await.unwrap()
+    });
+    assert!(got_shutdown, "the old engine was told to shut down");
+    assert!(!path.exists(), "and its socket went with it");
+    // Nothing listening: nothing to do, and quickly.
+    rt.block_on(fthrust_ui::services::engine::retire_stale_engine(&path));
+}

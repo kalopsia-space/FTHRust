@@ -1131,7 +1131,7 @@ fn run_effect(ctx: &Arc<DriverCtx>, effect: Effect) {
 fn spawn_engine(ctx: &Arc<DriverCtx>) {
     let c = ctx.clone();
     ctx.handle.spawn(async move {
-        let _ = std::fs::remove_file(&c.socket);
+        retire_stale_engine(&c.socket).await;
         if let Some(parent) = c.socket.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1304,6 +1304,45 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
             }
         }
     });
+}
+
+/// How long an engine left over from an earlier session gets to exit.
+pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(15);
+
+/// An engine left over from an earlier session (the UI died mid-save, say)
+/// may still own the socket. The UI used to unlink the socket and start a
+/// second engine beside it, both capturing; now it asks the old one to stop
+/// first (then SIGTERM, then SIGKILL). A socket file nobody listens on is
+/// left for the new engine, which replaces it.
+pub async fn retire_stale_engine(socket: &Path) {
+    let connect = tokio::time::timeout(Duration::from_secs(2), EngineClient::connect(socket));
+    let Ok(Ok(mut client)) = connect.await else {
+        return;
+    };
+    let pid = client.hello().pid;
+    tracing::warn!(
+        pid,
+        "an engine from an earlier session is still running; stopping it"
+    );
+    let _ = client.send(Command::Shutdown).await;
+    let drained = tokio::time::timeout(STALE_ENGINE_EXIT, async {
+        while client.events().recv().await.is_some() {}
+    })
+    .await
+    .is_ok();
+    if drained || pid == 0 {
+        return;
+    }
+    let target = nix::unistd::Pid::from_raw(pid as i32);
+    let _ = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM);
+    let gone = tokio::time::timeout(Duration::from_secs(2), async {
+        while client.events().recv().await.is_some() {}
+    })
+    .await
+    .is_ok();
+    if !gone {
+        let _ = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGKILL);
+    }
 }
 
 /// Reads the engine's stderr to the end, a line at a time. Bytes that are
