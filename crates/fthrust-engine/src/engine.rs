@@ -17,7 +17,9 @@ use fthrust_wayland::backend::monotonic_ns;
 use fthrust_wayland::frame::{BgraFrame, FrameSource, OutputTransform, normalize};
 
 use crate::audio::{AudioConfig, AudioProvider, AudioTarget};
-use crate::backend::{BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind};
+use crate::backend::{
+    BackendFactory, BackendFailure, CaptureBackend, CaptureError, FailureKind, OpenReason,
+};
 use crate::policy::{
     CaptureRecoveryPolicy, EncodeFailurePolicy, capture_pacing_wait, next_encode_deadline,
     recovery_order, wait_for_recovery_backoff,
@@ -672,8 +674,13 @@ pub fn encode_size(native: (u32, u32), target: (u32, u32), scaling: Scaling) -> 
 
 enum GenerationEnd {
     Stop,
-    BackendFailed { transient: bool, reason: String },
+    BackendFailed {
+        transient: bool,
+        reason: String,
+    },
     EncoderFailed(String),
+    /// The desktop ended the capture (the portal's "Stop sharing"): final.
+    Closed(String),
 }
 
 fn run_capture(inner: Arc<Inner>, config: EngineConfig) {
@@ -723,6 +730,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // Lives across generations, so a black screen is followed through the
     // recovery it asked for (one per run of suspect content).
     let mut watchdog = ContentWatchdog::new(fps);
+    // Once a generation ran, every open is a recovery: the portal may then
+    // only restore its saved session, never show its dialog.
+    let mut open_reason = OpenReason::Start;
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -738,10 +748,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 // dialog would come up for nothing.
                 break;
             }
-            match inner
-                .backends
-                .create(*kind, cfg, strict_output, inner.cancel.clone())
-            {
+            match inner.backends.create(
+                *kind,
+                cfg,
+                strict_output,
+                open_reason,
+                inner.cancel.clone(),
+            ) {
                 Ok(b) => {
                     backend = Some(b);
                     break;
@@ -797,6 +810,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         // retries it first and, when the user named an output and this is
         // it, insists on that output (`capture_engine.cpp:198-204`).
         let kind = backend.kind();
+        open_reason = OpenReason::Recovery;
         let native = backend.native_size();
         let selected = backend.selected_output();
         strict_output = !cfg.monitor.is_empty() && selected == cfg.monitor;
@@ -1041,6 +1055,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         reason: "the Wayland connection was lost".into(),
                     };
                 }
+                Err(CaptureError::Closed(reason)) => break GenerationEnd::Closed(reason),
                 Err(e) => {
                     break GenerationEnd::BackendFailed {
                         transient: false,
@@ -1242,6 +1257,12 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         inner.zero_copy.store(false, Ordering::Relaxed);
         match end {
             GenerationEnd::Stop => break 'generations,
+            GenerationEnd::Closed(reason) => {
+                // Like a dismissed picker: only the user starts it again.
+                tracing::info!("{reason}; capture ends");
+                terminal_failure(&inner, &reason);
+                break 'generations;
+            }
             GenerationEnd::EncoderFailed(reason) => {
                 tracing::warn!("encoder failed ({reason}); reopening");
                 encoder = None;

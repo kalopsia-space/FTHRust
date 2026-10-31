@@ -59,11 +59,15 @@ pub enum CaptureFailure {
     /// The dmabuf images no longer fit the session (new buffer constraints
     /// or a geometry change): the caller supplies new ones or uses shm.
     DmabufInvalidated,
+    /// The desktop ended the capture (the portal's "Stop sharing"). Final:
+    /// capture must not open it again on its own.
+    Closed(String),
 }
 
 impl std::fmt::Display for CaptureFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CaptureFailure::Closed(reason) => f.write_str(reason),
             CaptureFailure::Unchanged => f.write_str("the screen has not changed"),
             CaptureFailure::Timeout => {
                 f.write_str("the compositor did not deliver a frame in time")
@@ -105,7 +109,7 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
             FailureKind::CompositorUnreachable,
             format!("{step}: the compositor did not answer"),
         ),
-        CaptureFailure::Failed(reason) => {
+        CaptureFailure::Failed(reason) | CaptureFailure::Closed(reason) => {
             BackendError::new(FailureKind::Error, format!("{step}: {reason}"))
         }
         CaptureFailure::DmabufInvalidated => BackendError::new(

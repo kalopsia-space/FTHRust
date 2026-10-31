@@ -9,8 +9,8 @@ use fthrust_core::capture_config::{CaptureConfig, Codec, EncoderPref, Scaling};
 use fthrust_core::capture_health::flags;
 use fthrust_engine::audio::SyntheticAudio;
 use fthrust_engine::backend::{
-    CaptureError, FailureKind, KindScript, RealFactory, SyntheticFactory, SyntheticScript,
-    solid_grey,
+    CaptureError, FailureKind, KindScript, OpenReason, RealFactory, SyntheticFactory,
+    SyntheticScript, solid_grey,
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
@@ -600,6 +600,96 @@ fn a_black_screen_never_reopens_the_portal() {
     assert_eq!(s.capture_generation, 1, "{s:?}");
     assert_eq!(script.lock().unwrap().opens, 1, "the session was reopened");
     assert!(sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+/// A synthetic engine over `kinds` (in that candidate order) whose
+/// backoffs are recorded instead of slept.
+fn engine_over(script: SyntheticScript, candidates: Vec<BackendKind>) -> Harness {
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script: script.clone(),
+            candidates,
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    Harness {
+        engine: CaptureEngine::new(config(|_| {}), deps),
+        script,
+        sleeps,
+    }
+}
+
+#[test]
+fn a_portal_session_the_desktop_closed_is_not_reopened() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The desktop's "Stop sharing" ends capture like a dismissed picker:
+    // no recovery, no new session ~250 ms later.
+    let mut script = SyntheticScript::new(320, 180);
+    script.kinds.insert(
+        BackendKind::PortalScreenCast,
+        KindScript {
+            capture_error_after: Some((
+                10,
+                CaptureError::Closed("screen sharing was stopped from the desktop".into()),
+            )),
+            ..KindScript::default()
+        },
+    );
+    let mut h = engine_over(script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.health_flags & flags::BACKEND_FAILED != 0
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let opens = h.script.lock().unwrap().opens;
+    h.engine.shutdown();
+    assert!(s.capture_failure_detail.contains("desktop"), "{s:?}");
+    assert_eq!(opens, 1, "the session was opened again");
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
+fn only_the_first_open_may_show_a_dialog() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The portal dies after 10 frames, then reopens: the open the user
+    // started may show the portal's dialog, the recovery may not.
+    let mut script = SyntheticScript::new(320, 180);
+    script.kinds.insert(
+        BackendKind::PortalScreenCast,
+        KindScript {
+            capture_error_after: Some((
+                10,
+                CaptureError::Failed("stream resolution changed".into()),
+            )),
+            ..KindScript::default()
+        },
+    );
+    let mut h = engine_over(script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.capture_generation >= 2
+    });
+    h.engine.shutdown();
+    let reasons = h.script.lock().unwrap().open_reasons.clone();
+    assert_eq!(
+        reasons[..2],
+        [
+            (BackendKind::PortalScreenCast, OpenReason::Start),
+            (BackendKind::PortalScreenCast, OpenReason::Recovery),
+        ],
+        "{reasons:?}"
+    );
 }
 
 #[test]

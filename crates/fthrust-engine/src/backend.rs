@@ -73,6 +73,17 @@ pub trait CaptureBackend: Send {
     }
 }
 
+/// Why a backend is being opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenReason {
+    /// The capture the user started (the app starting, a settings change,
+    /// a restart): the portal may show its dialog.
+    Start,
+    /// An automatic recovery: the portal may only restore its saved
+    /// session, never show its dialog.
+    Recovery,
+}
+
 /// Creates backends.
 pub trait BackendFactory: Send + Sync {
     /// First-time selection order.
@@ -83,6 +94,7 @@ pub trait BackendFactory: Send + Sync {
         kind: BackendKind,
         cfg: &CaptureConfig,
         strict_output: bool,
+        reason: OpenReason,
         cancel: Arc<AtomicBool>,
     ) -> Result<Box<dyn CaptureBackend>, BackendFailure>;
 }
@@ -119,6 +131,7 @@ impl BackendFactory for RealFactory {
         kind: BackendKind,
         cfg: &CaptureConfig,
         strict_output: bool,
+        reason: OpenReason,
         cancel: Arc<AtomicBool>,
     ) -> Result<Box<dyn CaptureBackend>, BackendFailure> {
         match kind {
@@ -140,7 +153,7 @@ impl BackendFactory for RealFactory {
                 Ok(Box::new(ExtAdapter(b)))
             }
             BackendKind::PortalScreenCast => {
-                crate::portal_backend::open(self.paths.as_ref(), cfg, cancel)
+                crate::portal_backend::open(self.paths.as_ref(), cfg, reason, cancel)
             }
             BackendKind::Synthetic => {
                 if std::env::var("FTHRUST_SYNTHETIC_BACKEND").as_deref() == Ok("1") {
@@ -149,7 +162,7 @@ impl BackendFactory for RealFactory {
                         script,
                         candidates: vec![BackendKind::Synthetic],
                     }
-                    .create(kind, cfg, strict_output, cancel)
+                    .create(kind, cfg, strict_output, reason, cancel)
                 } else {
                     Err(BackendFailure {
                         kind: FailureKind::Error,
@@ -288,6 +301,9 @@ pub struct SyntheticScript {
     /// Backends opened so far (for the portal: sessions started; tests
     /// read it).
     pub opens: u64,
+    /// Every `create` call with the reason it gave, opened or not (tests
+    /// read it).
+    pub open_reasons: Vec<(BackendKind, OpenReason)>,
 }
 
 impl SyntheticScript {
@@ -311,6 +327,7 @@ impl SyntheticScript {
             dmabuf_uses: 0,
             captures: 0,
             opens: 0,
+            open_reasons: Vec::new(),
         }
     }
 
@@ -349,9 +366,11 @@ impl BackendFactory for SyntheticFactory {
         kind: BackendKind,
         cfg: &CaptureConfig,
         strict_output: bool,
+        reason: OpenReason,
         cancel: Arc<AtomicBool>,
     ) -> Result<Box<dyn CaptureBackend>, BackendFailure> {
         let mut script = self.script.lock().unwrap_or_else(|p| p.into_inner());
+        script.open_reasons.push((kind, reason));
         let (width, height) = (script.width, script.height);
         let Some(k) = script.kinds.get_mut(&kind) else {
             return Err(BackendFailure {
