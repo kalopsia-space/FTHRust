@@ -1,7 +1,10 @@
 //! A decoded frame as an egui texture: one RGBA wgpu texture rewritten in
 //! place while the size holds, recreated (and re-registered with egui's
-//! renderer) when it changes.
+//! renderer) when it changes, and unregistered when dropped.
 
+use std::sync::Arc;
+
+use egui::mutex::RwLock;
 use egui_wgpu::RenderState;
 use egui_wgpu::wgpu;
 use fthrust_media::playback::video::Frame;
@@ -15,6 +18,10 @@ pub struct VideoTexture {
     view_unorm: Option<wgpu::TextureView>,
     id: Option<egui::TextureId>,
     size: Option<(u32, u32)>,
+    /// The renderer `id` is registered with, so that dropping the texture can
+    /// unregister it: egui's renderer keeps a native texture (a bind group on
+    /// its view) until told otherwise.
+    renderer: Option<Arc<RwLock<egui_wgpu::Renderer>>>,
 }
 
 impl VideoTexture {
@@ -92,6 +99,7 @@ impl VideoTexture {
             self.texture = Some(texture);
             self.id = Some(id);
             self.size = Some((frame.width, frame.height));
+            self.renderer = Some(rs.renderer.clone());
         }
         let Some(texture) = &self.texture else {
             return;
@@ -125,5 +133,16 @@ impl VideoTexture {
         self.texture = None;
         self.view_unorm = None;
         self.size = None;
+    }
+}
+
+impl Drop for VideoTexture {
+    /// Closing or parking the editor drops its texture: without this the
+    /// renderer kept the frame's GPU memory (8 MB at 1080p, 33 MB at 4K) for
+    /// every editor session.
+    fn drop(&mut self) {
+        if let (Some(id), Some(renderer)) = (self.id.take(), self.renderer.take()) {
+            renderer.write().free_texture(&id);
+        }
     }
 }

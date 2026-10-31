@@ -445,6 +445,50 @@ fn default_bindings_drive_the_editor() {
     assert!(r.s.editor_sessions.is_empty());
 }
 
+/// Ticks the editor with `rs` until its first video frame is a texture.
+fn first_video_texture(r: &mut Rig, rs: &egui_wgpu::RenderState) -> Option<egui::TextureId> {
+    for _ in 0..500 {
+        r.s.tick_editor(Some(rs));
+        sessions::service(&mut r.s);
+        if let Some(id) = r.s.editor_video.as_ref().and_then(|v| v.id()) {
+            return Some(id);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn closing_or_parking_an_editor_frees_its_video_texture() {
+    let Some(rs) = common::headless_render_state() else {
+        eprintln!("skipping: no wgpu adapter");
+        return;
+    };
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    let id = first_video_texture(&mut r, &rs).expect("a video frame reached the texture");
+    assert!(rs.renderer.read().texture(&id).is_some());
+    // Parking releases the player and the texture.
+    sessions::park(&mut r.s);
+    assert!(r.s.editor_video.is_none());
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the parked editor's texture is still registered"
+    );
+    // Restoring builds a new one; closing frees that.
+    assert!(sessions::restore(&mut r.s, 1));
+    let id = first_video_texture(&mut r, &rs).expect("a video frame after restoring");
+    sessions::close(&mut r.s, 1);
+    assert!(r.s.editor_video.is_none());
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the closed editor's texture is still registered"
+    );
+}
+
 #[test]
 fn escape_in_the_share_picker_closes_the_picker_not_the_editor() {
     let mut r = rig();

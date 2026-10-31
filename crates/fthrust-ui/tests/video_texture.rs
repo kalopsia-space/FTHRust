@@ -130,6 +130,45 @@ fn video_texture_uploads_and_resizes() {
     assert_eq!(tex.size(), None);
 }
 
+#[test]
+fn dropping_the_video_texture_frees_its_registration() {
+    let Some(rs) = headless() else {
+        return;
+    };
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(320, 180, [255, 0, 0, 255]));
+    let id = tex.id().expect("registered");
+    assert!(rs.renderer.read().texture(&id).is_some());
+    // What closing the editor does: the texture is dropped, not cleared.
+    drop(tex);
+    assert!(
+        rs.renderer.read().texture(&id).is_none(),
+        "the renderer still holds the dropped texture: a closed editor leaks its video frame"
+    );
+}
+
+#[test]
+fn dropping_an_unused_or_cleared_video_texture_is_harmless() {
+    let Some(rs) = headless() else {
+        return;
+    };
+    drop(VideoTexture::new());
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(64, 64, [0, 255, 0, 255]));
+    tex.clear(&rs);
+    drop(tex);
+    // A resize frees the old registration once and the drop the new one.
+    let mut tex = VideoTexture::new();
+    tex.update(&rs, &solid(64, 64, [0, 0, 255, 255]));
+    let first = tex.id().unwrap();
+    tex.update(&rs, &solid(128, 72, [0, 0, 255, 255]));
+    let second = tex.id().unwrap();
+    assert!(rs.renderer.read().texture(&first).is_none());
+    assert!(rs.renderer.read().texture(&second).is_some());
+    drop(tex);
+    assert!(rs.renderer.read().texture(&second).is_none());
+}
+
 /// Draws `tex` full-frame through egui into an `Rgba8Unorm` target (as the
 /// app's swapchain is) and reads back the centre pixel.
 fn drawn_centre(rs: &RenderState, tex: &VideoTexture) -> [u8; 4] {
