@@ -15,11 +15,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::export_presets::ExportPreset;
+use fthrust_core::library_ownership::{Ownership, classify_media_path};
 use fthrust_core::upload::history::{Entry, History};
 use fthrust_core::upload::settings::Provider;
 use fthrust_core::upload::{CATBOX_LIMIT_BYTES, validate};
 use serde_json::{Map, Value, json};
 
+use crate::library::page::NotDeleted;
 use crate::services::CardKind;
 use crate::shell::error_bar::{Action, Level};
 use crate::state::{AppState, DialogKind, DialogResult, StatusStyle, StatusText};
@@ -73,11 +75,15 @@ pub struct Reply {
     /// The upload settings are wrong (URL, token); retrying cannot help.
     pub settings_problem: bool,
     /// What the user should know about an upload that worked: no link came
-    /// back, the clip could not be deleted, the history was not saved.
+    /// back, the history was not saved.
     pub warning: Option<String>,
     /// The history entry of the upload, as the uploader made it. The history
     /// file is where the app learns it; this is for when that write failed.
     pub upload_info: Option<Map<String, Value>>,
+    /// The upload is confirmed and the settings ask for the clip to be
+    /// deleted: the uploader leaves that to the app (see
+    /// [`delete_uploaded`]).
+    pub delete: bool,
 }
 
 impl Reply {
@@ -89,6 +95,7 @@ impl Reply {
             settings_problem: false,
             warning: None,
             upload_info: None,
+            delete: false,
         }
     }
 }
@@ -212,6 +219,7 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
                 Some(Value::Object(info)) if !info.is_empty() => Some(info.clone()),
                 _ => None,
             },
+            delete: m.get("delete").and_then(Value::as_bool) == Some(true),
         },
         _ => Reply::fail("Uploader returned an invalid response."),
     }
@@ -701,6 +709,16 @@ impl UploadService {
                 false,
             );
         }
+        // The uploader says the clip may go; whether it does is up to the
+        // library's rules, asked now rather than when the upload started.
+        if done.reply.delete && done.reply.warning.is_none() {
+            // The file that went out: the clip, or the compressed copy of it.
+            let sent = done
+                .compressed
+                .as_ref()
+                .map_or(done.path.as_path(), |(copy, _, _)| copy.as_path());
+            delete_uploaded(state, sent);
+        }
         let (text, kind) = if compressed {
             ("UPLOADED COMPRESSED COPY", "COMPRESSED COPY")
         } else {
@@ -802,6 +820,71 @@ fn unsaved_entry(
     }
 }
 
+/// Auto-delete: removes the file an upload confirmed, `sent`, the way the bin
+/// button would (`library::page::remove_clip`). The uploader leaves this to
+/// the app because only the app knows what has become of the clip since the
+/// upload began: an export or share that reads it keeps it (and the bar says
+/// so), and an editor opened on it closes with it. Nothing outside the clips
+/// folder is ever removed, imported libraries least of all.
+fn delete_uploaded(state: &mut AppState, sent: &Path) {
+    // Switched off while the upload ran: the setting counts at this moment.
+    if !state.uploader_settings.flag("upload_auto_delete") {
+        return;
+    }
+    let imports = crate::library::page::imported_roots(state);
+    let ours =
+        classify_media_path(sent, &state.library.clips_root, &imports) == Ownership::FthrOwned;
+    // Gone already (deleted in a file manager meanwhile): the library's
+    // watcher takes it from here.
+    if !ours || !sent.is_file() {
+        return;
+    }
+    let name = file_name(sent);
+    match crate::library::page::remove_clip(state, sent) {
+        Ok(()) => {}
+        Err(NotDeleted::Busy) => notice(
+            state,
+            "UPLOAD WARNING",
+            &format!(
+                "{name} was uploaded, but not deleted: an export or share of it is queued or running. Delete it yourself when that has finished."
+            ),
+            Vec::new(),
+            format!("upload-warning:{}", sent.display()),
+            false,
+        ),
+        Err(NotDeleted::Failed(e)) => notice(
+            state,
+            "UPLOAD WARNING",
+            &format!("Uploaded, but local delete failed: {e}"),
+            Vec::new(),
+            format!("upload-warning:{}", sent.display()),
+            false,
+        ),
+    }
+}
+
+/// A bar entry about what an upload came to. Shown whatever "Show capture
+/// error messages" says: it holds what nothing else tells (a link, why a
+/// clip was kept, why a button does nothing).
+fn notice(
+    state: &mut AppState,
+    title: &str,
+    detail: &str,
+    actions: Vec<Action>,
+    key: String,
+    dismiss_on_action: bool,
+) {
+    let detail: String = detail.trim().chars().take(240).collect();
+    state.error_bar.push(
+        title,
+        &detail,
+        Level::Warning,
+        actions,
+        Some(key),
+        dismiss_on_action,
+    );
+}
+
 /// The user asked to upload a clip that is uploaded already but has no link
 /// (its server sent none back, so the card offers "Upload clip" and nothing
 /// would happen): say so, and offer to upload it again.
@@ -879,8 +962,9 @@ impl Worker {
         if !path.is_file() {
             return Reply::fail("File no longer exists (deleted before upload)");
         }
-        // `clips_root` is the only folder the uploader may delete from after
-        // an upload; imported folders are in `roots` but never deleted from.
+        // `clips_root` is the only folder whose clips the uploader reports as
+        // deletable after an upload (the app does the deleting); imported
+        // folders are in `roots` but never deleted from.
         let request = json!({
             "action": "upload",
             "path": path,

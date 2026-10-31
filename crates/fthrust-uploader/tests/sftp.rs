@@ -58,7 +58,8 @@ impl Home {
         (r.ok, r.message)
     }
 
-    async fn upload(&self, env: &Env) -> (bool, String) {
+    /// The whole reply to an upload request for the clip.
+    async fn respond(&self, env: &Env) -> fthrust_uploader::Response {
         let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
@@ -66,7 +67,11 @@ impl Home {
             "allowed_roots": [clips],
             "clips_root": clips,
         });
-        let r = handle(env, &req).await;
+        handle(env, &req).await
+    }
+
+    async fn upload(&self, env: &Env) -> (bool, String) {
+        let r = self.respond(env).await;
         (r.ok, r.message)
     }
 
@@ -414,7 +419,8 @@ async fn upload_part_rename_and_urls() {
 }
 
 /// Both SFTP links, the `sftp://` location and the public HTTPS one, are
-/// links the card can offer, so they confirm an upload.
+/// links the card can offer, so they confirm an upload: the clip may go (the
+/// app deletes it, not the uploader).
 #[tokio::test]
 async fn auto_delete_follows_a_confirmed_sftp_upload() {
     let server = srv::start(15).await;
@@ -429,15 +435,16 @@ async fn auto_delete_follows_a_confirmed_sftp_upload() {
         let env = h.env();
         h.save_password(&env, srv::PASSWORD).await;
         let clip = h.clip.canonicalize().unwrap();
-        let (ok, msg) = h.upload(&env).await;
-        assert!(ok, "{msg}");
+        let r = h.respond(&env).await;
+        assert!(r.ok, "{}", r.message);
         let want = if public {
             "https://videos.example/clips/fthr-"
         } else {
             "sftp://127.0.0.1:"
         };
-        assert!(msg.starts_with(want), "{msg}");
-        assert!(!clip.exists(), "public={public}: the clip stayed");
+        assert!(r.message.starts_with(want), "{}", r.message);
+        assert!(r.delete, "public={public}: the clip must stay");
+        assert!(clip.exists(), "public={public}: the uploader deleted it");
     }
 }
 

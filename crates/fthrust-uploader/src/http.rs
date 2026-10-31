@@ -731,7 +731,11 @@ fn usable_link(entry: &Map<String, Value>) -> Option<String> {
 }
 
 /// `UploadRuntime.upload`: size limit, attempts, history, auto-delete.
-/// Auto-delete only removes a clip inside `clips_root`.
+///
+/// Auto-delete is the app's to do: the reply says whether the clip may go
+/// ([`Response::delete`]), and only a clip inside `clips_root` ever may. The
+/// app knows what the uploader cannot, whether the clip is being exported,
+/// shared or edited by now.
 pub async fn upload(
     env: &Env,
     provider: Provider,
@@ -745,6 +749,7 @@ pub async fn upload(
         upload_info: Some(Map::new()),
         settings_problem: false,
         warning: None,
+        delete: false,
     };
     if !path.is_file() {
         return failed("File no longer exists.".into());
@@ -839,11 +844,12 @@ pub async fn upload(
             upload_info: Some(entry),
             settings_problem: false,
             warning: Some(warning),
+            delete: false,
         };
     }
     let auto_delete = fthrust_core::upload::truthy(settings.get("upload_auto_delete"));
-    let mut message = message;
     let mut warning = None;
+    let mut delete = false;
     if link.is_none() {
         // Without a link the upload is not confirmed: keep the only copy, and
         // say that there is nothing to copy from the card.
@@ -858,14 +864,10 @@ pub async fn upload(
             ""
         };
         warning = Some(format!("{said}{kept}"));
-    } else if auto_delete
+    } else {
         // Clips outside the clips folder (imported libraries) are never ours
         // to delete.
-        && clips_root.is_some_and(|root| path.starts_with(root))
-        && let Err(e) = std::fs::remove_file(path)
-    {
-        message = format!("Uploaded, but local delete failed: {e}");
-        warning = Some(message.clone());
+        delete = auto_delete && clips_root.is_some_and(|root| path.starts_with(root));
     }
     Response {
         ok: true,
@@ -873,6 +875,7 @@ pub async fn upload(
         upload_info: Some(entry),
         settings_problem: false,
         warning,
+        delete,
     }
 }
 

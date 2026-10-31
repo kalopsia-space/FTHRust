@@ -174,7 +174,7 @@ pub fn consume_results(state: &mut AppState) {
     state.dialogs.results = keep;
 }
 
-fn imported_roots(state: &AppState) -> Vec<PathBuf> {
+pub(crate) fn imported_roots(state: &AppState) -> Vec<PathBuf> {
     state
         .settings
         .get("imported_clip_folders")
@@ -233,35 +233,53 @@ fn delete_clip(state: &mut AppState, path: &Path) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
         return;
     }
-    if crate::editor::sessions::exporting(state, path) {
-        state.dialogs.push_message(
+    match remove_clip(state, path) {
+        Ok(()) => {}
+        Err(NotDeleted::Busy) => state.dialogs.push_message(
             crate::editor::sessions::EXPORT_BUSY,
             "Finish or cancel this clip\u{2019}s exports before deleting the source.",
-        );
-        return;
+        ),
+        Err(NotDeleted::Failed(e)) => state.dialogs.push_message("File change failed", e),
+    }
+}
+
+/// Why a clip was not deleted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotDeleted {
+    /// An export or share of the clip is queued or running: the job reads the
+    /// file by this path.
+    Busy,
+    /// The file system said no, or the media is not the app's to delete.
+    Failed(String),
+}
+
+/// Deletes a clip and everything the app keeps for it: the file and its audio
+/// manifest, the library entry with its thumbnail and readiness, the editor
+/// sessions that hold the clip, and its draft. The bin button and an upload's
+/// auto-delete both come through here, so both keep to the same rules.
+pub fn remove_clip(state: &mut AppState, path: &Path) -> Result<(), NotDeleted> {
+    if crate::editor::sessions::exporting(state, path) {
+        return Err(NotDeleted::Busy);
     }
     let imports = imported_roots(state);
     let owned = state.library.clips_root.clone();
-    let result = match classify_media_path(path, &owned, &imports) {
+    match classify_media_path(path, &owned, &imports) {
         Ownership::FthrOwned => {
             fthrust_core::library_ownership::delete_owned_media(path, &owned, &imports)
                 .map_err(|e| e.to_string())
         }
         Ownership::LinkedImported => std::fs::remove_file(path).map_err(|e| e.to_string()),
         Ownership::External => Err("Linked or external media is protected".into()),
-    };
-    match result {
-        Ok(()) => {
-            let _ = std::fs::remove_file(fthrust_core::audio_manifest::manifest_path_for(path));
-            state.library.remove(path);
-            state.thumb_textures.remove(path);
-            state.thumb_meta.remove(path);
-            state.readiness.forget(path);
-            state.library_dirty = true;
-            crate::editor::sessions::clip_deleted(state, path);
-        }
-        Err(e) => state.dialogs.push_message("File change failed", e),
     }
+    .map_err(NotDeleted::Failed)?;
+    let _ = std::fs::remove_file(fthrust_core::audio_manifest::manifest_path_for(path));
+    state.library.remove(path);
+    state.thumb_textures.remove(path);
+    state.thumb_meta.remove(path);
+    state.readiness.forget(path);
+    state.library_dirty = true;
+    crate::editor::sessions::clip_deleted(state, path);
+    Ok(())
 }
 
 /// Moves the clip's tag, description and editor draft to its new name (the

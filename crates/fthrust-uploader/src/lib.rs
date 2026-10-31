@@ -108,9 +108,14 @@ pub struct Response {
     /// same request cannot help. Written only when true.
     pub settings_problem: bool,
     /// What the user should know about an upload that worked: no link came
-    /// back, the clip could not be deleted, the history could not be saved.
-    /// Written only when there is one.
+    /// back, the history could not be saved. Written only when there is one.
     pub warning: Option<String>,
+    /// The clip may be deleted now: the upload is confirmed (a link the app
+    /// can offer, saved in the history), the settings ask for auto-delete and
+    /// the clip is inside the clips folder. The uploader never deletes a clip
+    /// itself; the app does it by the library's own rules, which know about
+    /// the exports, shares and editors of a clip. Written only when true.
+    pub delete: bool,
 }
 
 impl Response {
@@ -122,6 +127,7 @@ impl Response {
             upload_info: None,
             settings_problem: false,
             warning: None,
+            delete: false,
         }
     }
 
@@ -133,6 +139,7 @@ impl Response {
             upload_info: None,
             settings_problem: false,
             warning: None,
+            delete: false,
         }
     }
 
@@ -149,6 +156,9 @@ impl Response {
         }
         if let Some(warning) = &self.warning {
             m.insert("warning".into(), Value::String(warning.clone()));
+        }
+        if self.delete {
+            m.insert("delete".into(), Value::Bool(true));
         }
         Value::Object(m).to_string()
     }

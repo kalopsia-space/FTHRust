@@ -421,6 +421,116 @@ fn a_clip_under_export_is_neither_renamed_nor_deleted_from_the_library() {
     assert!(a.with_file_name("renamed.mp4").exists());
 }
 
+/// A fake uploader that records the upload and says the clip may go.
+fn deleting_uploader(dir: &Path, history: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = dir.join("uploader");
+    let body = format!(
+        r#"#!/bin/sh
+read -r line
+path=$(echo "$line" | sed 's/.*"path":"\([^"]*\)".*/\1/')
+mkdir -p "$(dirname "{history}")"
+printf '{{"%s": {{"status": "ok", "provider": "custom", "url": "https://cdn.example/x", "raw_url": "https://cdn.example/x"}}}}' "$path" > "{history}"
+echo '{{"ok":true,"message":"https://cdn.example/x","delete":true}}'
+"#,
+        history = history.display()
+    );
+    std::fs::write(&exe, body).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exe
+}
+
+/// An upload's auto-delete meets the library's rules when the upload ends,
+/// not when it began: a clip that an export still reads is kept (and the bar
+/// says so), a clip that is open in the editor is deleted and the editor
+/// closes with it, draft included.
+#[test]
+fn an_uploads_auto_delete_follows_the_librarys_rules_when_the_upload_ends() {
+    use fthrust_core::clip_metadata::{DraftFile, EditorDraft};
+    use fthrust_ui::services::upload::UploadService;
+    let mut r = rig();
+    let (Some(a), Some(b)) = (r.clip("a.mp4"), r.clip("b.mp4")) else {
+        return;
+    };
+    for (k, v) in [
+        ("upload_enabled", serde_json::json!(true)),
+        ("upload_provider", serde_json::json!("custom")),
+        ("upload_auto_delete", serde_json::json!(true)),
+    ] {
+        r.s.uploader_settings.set(k, v);
+    }
+    let exe = deleting_uploader(r._tmp.path(), &r.s.paths.upload_history_file());
+    let mut uploads = UploadService::with_exe(Some(exe));
+    // `a` is open in the editor with an export queued behind another job;
+    // `b` is open in the editor too, with a draft.
+    r.s.export_queue = endless_queue();
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    fthrust_ui::editor::export_ui::export_now(&mut r.s);
+    assert!(r.s.export_queue.active_for(&a), "an export is queued");
+    r.park();
+    sessions::open(&mut r.s, &b);
+    r.settle();
+    let identity = fthrust_core::media_identity::file_identity(&b).unwrap();
+    sessions::store(&mut r.s)
+        .unwrap()
+        .set_editor_draft(
+            &b,
+            EditorDraft {
+                version: 1,
+                file: DraftFile {
+                    mtime_ns: identity.mtime_ns,
+                    size: identity.size,
+                },
+                updated_at: 1.0,
+                state: serde_json::json!({"trim_start": 0.25}),
+            },
+        )
+        .unwrap();
+    assert_eq!(r.s.editor_slots.len(), 2);
+    // Upload is pressed for both.
+    uploads.enqueue(&mut r.s, a.clone());
+    uploads.enqueue(&mut r.s, b.clone());
+    let mut now = 0.0;
+    while uploads.busy() {
+        uploads.tick(&mut r.s, now);
+        now += 0.02;
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(now < 60.0, "the uploads never finished");
+    }
+    uploads.tick(&mut r.s, now);
+    // `a` is kept for its export, and the bar says so.
+    assert!(a.exists(), "deleted under a queued export");
+    assert!(r.s.library.record(&a).is_some());
+    assert!(
+        r.s.editor_slots
+            .iter()
+            .any(|s| s.path == a && s.state.is_some()),
+        "its parked editor was closed"
+    );
+    let entries = r.s.error_bar.entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].title, "UPLOAD WARNING");
+    assert!(
+        entries[0]
+            .detail
+            .starts_with("a.mp4 was uploaded, but not deleted: "),
+        "{}",
+        entries[0].detail
+    );
+    // `b` is deleted, and the editor on it is gone with its draft.
+    assert!(!b.exists(), "the clip is still there");
+    assert!(r.s.library.record(&b).is_none());
+    assert!(
+        r.s.editor.is_none(),
+        "the editor still shows a deleted clip"
+    );
+    assert_eq!(r.s.editor_slots.len(), 1, "only a's session is left");
+    let store = fthrust_core::clip_metadata::ClipMetadataStore::open(&r.s.paths).unwrap();
+    assert!(store.get(&b).unwrap().editor_draft.is_none());
+    r.s.export_queue.shutdown(Duration::from_secs(5));
+}
+
 #[test]
 fn delete_of_linked_import_is_refused() {
     let mut r = rig();

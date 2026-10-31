@@ -84,6 +84,8 @@ Files are uploaded as `fthr-<random>.mp4` under a temporary name (`fthr-<letters
 
 **Auto-delete local clip after a confirmed successful upload** removes your copy once a host has confirmed the upload **and** sent back a link FTHRust can use: an `http://` or `https://` address, or an SFTP location. If no link comes back, or the reply is something else (a word such as `queued`, a `file:` address, several lines of text), your clip is kept. It is kept too when the upload couldn't be saved to the upload history, because the history is where FTHRust finds a clip's link; the bar then shows the link instead.
 
+The app does the deleting when the upload ends, by the same rules as the clip's **bin button**. A clip that an export or share is still working from is kept, whatever was started while the upload ran, and the bar says so (delete it yourself afterwards). A clip that is open in the editor is deleted and the editor closes with it, along with its saved draft. Switch auto-delete off while an upload runs and that clip is kept as well.
+
 Auto-delete only ever removes clips inside your clips folder. Clips in folders you've imported are uploaded like any other (interval uploads include them) but are never deleted, even with the box ticked, so a whole imported library can't disappear by accident.
 
 ## Getting the link

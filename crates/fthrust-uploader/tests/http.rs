@@ -670,38 +670,29 @@ async fn retry_never_past_deadline() {
     assert_eq!(srv.seen().len(), 1);
 }
 
+/// The uploader never deletes a clip itself. It says the clip may go
+/// (`delete`) and the app removes it by the library's rules, which know about
+/// the exports, shares and editors of a clip that the uploader cannot see.
 #[tokio::test]
-async fn auto_delete_after_success() {
+async fn a_confirmed_upload_with_auto_delete_says_the_clip_may_go() {
     let srv = server(vec![(200, "https://cdn.example/a")]);
     let h = home(json!({
         "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
     }));
     let real = h.real_clip();
-    let (ok, msg, _) = h.upload(&h.env("x")).await;
-    assert_eq!((ok, msg.as_str()), (true, "https://cdn.example/a"));
-    assert!(!real.exists());
+    let r = h.respond(&h.env("x")).await;
+    assert_eq!((r.ok, r.message.as_str()), (true, "https://cdn.example/a"));
+    assert!(r.delete);
+    assert!(r.warning.is_none(), "{:?}", r.warning);
+    assert!(r.to_line().contains(r#""delete":true"#), "{}", r.to_line());
+    assert!(real.exists(), "the uploader deleted the clip itself");
     assert!(h.history().is_uploaded(&real));
-}
-
-#[tokio::test]
-async fn auto_delete_failure_still_succeeds() {
-    use std::os::unix::fs::PermissionsExt;
-    let srv = server(vec![(200, "https://cdn.example/a")]);
-    let h = home(json!({
-        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
-    }));
-    let folder = h.dir.path().join("clips");
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let (ok, msg, _) = h.upload(&h.env("x")).await;
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
-    if nix_is_root() {
-        return;
-    }
-    assert!(ok);
-    assert!(
-        msg.starts_with("Uploaded, but local delete failed: "),
-        "{msg}"
-    );
+    // Without the setting the clip stays, and the line has no key for it.
+    let srv = server(vec![(200, "https://cdn.example/b")]);
+    let h = home(json!({"upload_provider": "custom", "upload_server_url": srv.url}));
+    let r = h.respond(&h.env("x")).await;
+    assert!(r.ok && !r.delete);
+    assert!(!r.to_line().contains("delete"), "{}", r.to_line());
 }
 
 /// Whatever an upload that worked leaves the user to know travels as the
@@ -718,6 +709,7 @@ async fn an_upload_that_worked_with_a_caveat_says_so() {
         let r = h.respond(&h.env("x")).await;
         assert!(r.ok);
         assert_eq!(r.message, NO_LINK);
+        assert!(!r.delete, "deletable without a link");
         let kept = if auto_delete {
             " The clip was kept."
         } else {
@@ -738,32 +730,12 @@ async fn an_upload_that_worked_with_a_caveat_says_so() {
     let r = h.respond(&h.env("x")).await;
     assert_eq!(r.warning, None);
     assert!(!r.to_line().contains("warning"), "{}", r.to_line());
-    // The clip could not be deleted.
-    if nix_is_root() {
-        return;
-    }
-    use std::os::unix::fs::PermissionsExt;
-    let srv = server(vec![(200, "https://cdn.example/a")]);
-    let h = home(json!({
-        "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
-    }));
-    let folder = h.dir.path().join("clips");
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let r = h.respond(&h.env("x")).await;
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(r.ok);
-    assert!(
-        r.message.starts_with("Uploaded, but local delete failed: "),
-        "{}",
-        r.message
-    );
-    assert_eq!(r.warning.as_deref(), Some(r.message.as_str()));
 }
 
-/// Auto-delete only ever removes files in the clips folder. Imported folders
-/// (and links into them) upload like everything else but are never deleted:
-/// interval mode plus auto-delete would otherwise empty a whole imported
-/// library.
+/// Auto-delete only ever applies to files in the clips folder. Imported
+/// folders (and links into them) upload like everything else but are never
+/// marked deletable: interval mode plus auto-delete would otherwise empty a
+/// whole imported library.
 #[tokio::test]
 async fn auto_delete_stays_inside_the_clips_folder() {
     let srv = server(vec![(200, "https://cdn.example/ok"); 5]);
@@ -794,7 +766,7 @@ async fn auto_delete_stays_inside_the_clips_folder() {
         let env = &env;
         async move { handle(env, &req).await }
     };
-    for (path, deleted, what) in [
+    for (path, deletable, what) in [
         (ours.clone(), true, "a clip in the clips folder"),
         (theirs.clone(), false, "a clip in an imported folder"),
         (
@@ -807,21 +779,19 @@ async fn auto_delete_stays_inside_the_clips_folder() {
         assert!(r.ok, "{what}: {}", r.message);
         assert_eq!(r.message, "https://cdn.example/ok", "{what}");
         assert!(r.warning.is_none(), "{what}: {:?}", r.warning);
+        assert_eq!(r.delete, deletable, "{what}");
         let target = path.canonicalize().unwrap_or(path.clone());
-        assert_eq!(!target.exists(), deleted, "{what}");
-        assert!(
-            h.history().is_uploaded(&target) || deleted,
-            "{what}: not recorded"
-        );
+        assert!(target.exists(), "{what}: the uploader deleted it");
+        assert!(h.history().is_uploaded(&target), "{what}: not recorded");
     }
     assert!(real.exists() && theirs.exists());
-    // Without a clips folder in the request nothing is ever deleted.
+    // Without a clips folder in the request nothing is ever deletable.
     let again = make(&clips, "again.mp4");
     let r = ask(again.clone(), None).await;
     assert!(r.ok, "{}", r.message);
     assert!(
-        again.exists(),
-        "deleted without a clips folder to be inside of"
+        !r.delete,
+        "deletable without a clips folder to be inside of"
     );
 }
 
@@ -854,20 +824,20 @@ async fn only_a_real_link_allows_auto_delete() {
         let real = h.real_clip();
         let r = h.respond(&h.env("x")).await;
         assert!(r.ok, "{what}: {}", r.message);
-        assert!(real.exists(), "{what}: the clip was deleted");
+        assert!(!r.delete, "{what}: the clip may go");
+        assert!(real.exists());
         assert_eq!(r.message, NO_LINK, "{what}");
         assert!(h.history().is_uploaded(&real), "{what}: not recorded");
     }
-    // Real links still delete (the SFTP ones are tested with the SFTP server).
+    // Real links still allow it (the SFTP ones are tested with the SFTP server).
     for url in ["https://cdn.example/a", "http://192.168.1.5:8080/f/a.mp4"] {
         let srv = server(vec![(200, url)]);
         let h = home(json!({
             "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
         }));
-        let real = h.real_clip();
         let r = h.respond(&h.env("x")).await;
         assert_eq!((r.ok, r.message.as_str()), (true, url));
-        assert!(!real.exists(), "{url}: the clip was kept");
+        assert!(r.delete, "{url}: the clip must be kept");
     }
 }
 
@@ -881,9 +851,8 @@ async fn a_history_that_cannot_be_saved_keeps_the_clip_and_hands_over_the_link()
     }));
     // A folder where the history file belongs: it cannot be written.
     std::fs::create_dir_all(h.paths.upload_history_file()).unwrap();
-    let real = h.real_clip();
     let r = h.respond(&h.env("x")).await;
-    assert!(real.exists(), "the clip was deleted: {r:?}");
+    assert!(!r.delete, "the clip may go: {r:?}");
     assert!(r.ok, "the upload itself worked: {}", r.message);
     assert_eq!(r.message, "https://cdn.example/a");
     let warning = r.warning.clone().expect("no warning");
@@ -917,12 +886,6 @@ async fn the_link_leads_the_history_warning() {
     let warning = r.warning.expect("no warning");
     let shown: String = warning.chars().take(240).collect();
     assert!(shown.starts_with(&long), "{shown}");
-}
-
-fn nix_is_root() -> bool {
-    std::fs::metadata("/proc/self")
-        .map(|m| std::os::unix::fs::MetadataExt::uid(&m) == 0)
-        .unwrap_or(false)
 }
 
 #[tokio::test]
@@ -1025,10 +988,10 @@ async fn no_link_means_no_auto_delete() {
     let h = home(json!({
         "upload_provider": "custom", "upload_server_url": srv.url, "upload_auto_delete": true
     }));
-    let real = h.real_clip();
-    let (ok, msg, _) = h.upload(&h.env("x")).await;
-    assert_eq!((ok, msg.as_str()), (true, NO_LINK));
-    assert!(real.exists(), "the only copy was deleted without a link");
+    let r = h.respond(&h.env("x")).await;
+    assert_eq!((r.ok, r.message.as_str()), (true, NO_LINK));
+    assert!(!r.delete, "the only copy may go without a link");
+    assert!(h.real_clip().exists());
 }
 
 #[tokio::test]
