@@ -6,6 +6,7 @@ use fthrust_core::window_geometry::{Rect, Screen};
 
 fn main() {
     fthrust_media::capabilities::handle_probe_argv();
+    fthrust_media::init_ffmpeg_logging();
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--version") {
         println!("fthrust {}", fthrust_ui::VERSION);
