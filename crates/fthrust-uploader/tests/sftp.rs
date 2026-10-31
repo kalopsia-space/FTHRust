@@ -144,6 +144,46 @@ async fn known_hosts_trusts_and_changed_key_refused() {
     );
 }
 
+/// A host with several key types is trusted by the one known_hosts holds:
+/// the client asks for that type first, as OpenSSH does, instead of always
+/// asking for Ed25519 and reading an ECDSA entry as an untrusted host.
+#[tokio::test]
+async fn the_key_type_in_known_hosts_is_the_one_asked_for() {
+    let server = srv::start(16).await;
+    let h = home(&server, json!({}));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    // Only the ECDSA key of this host is known (and an Ed25519 one of another).
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!(
+            "elsewhere.example {}\n{}\n",
+            server.key.public_key().to_openssh().unwrap(),
+            server.ecdsa_known_hosts_line()
+        ),
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // Nothing known but an Ed25519 entry: that is what the host presents.
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!("{}\n", server.known_hosts_line()),
+    )
+    .unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // A different ECDSA key recorded for the host is still a changed key.
+    let other = srv::start(17).await;
+    let line = other
+        .ecdsa_known_hosts_line()
+        .replace(&other.port.to_string(), &server.port.to_string());
+    std::fs::write(ssh.join("known_hosts"), format!("{line}\n")).unwrap();
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(!ok);
+    assert!(msg.contains("host-key mismatch"), "{msg}");
+}
+
 #[tokio::test]
 async fn verified_pin_is_remembered() {
     let server = srv::start(6).await;

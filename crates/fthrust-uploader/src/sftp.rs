@@ -90,10 +90,10 @@ fn host_matches(name: &str, field: &str) -> bool {
     })
 }
 
-/// Reads every known_hosts file (missing files are skipped, unparseable
-/// lines ignored) and compares the server key.
-fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String> {
-    let mut changed = false;
+/// The keys the known_hosts files record for `name`: missing files are
+/// skipped, unparseable lines ignored.
+fn recorded_keys(files: &[PathBuf], name: &str) -> Result<Vec<PublicKey>, String> {
+    let mut keys = Vec::new();
     for file in files {
         let text = match std::fs::read_to_string(file) {
             Ok(t) => t,
@@ -112,23 +112,48 @@ fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String
             if !host_matches(name, hosts) {
                 continue;
             }
-            let Ok(recorded) = PublicKey::from_openssh(&format!("{kind} {data}")) else {
-                continue;
-            };
-            if recorded.algorithm() != key.algorithm() {
-                continue;
+            if let Ok(recorded) = PublicKey::from_openssh(&format!("{kind} {data}")) {
+                keys.push(recorded);
             }
-            if recorded.key_data() == key.key_data() {
-                return Ok(Trust::Known);
-            }
-            changed = true;
         }
+    }
+    Ok(keys)
+}
+
+/// Compares the server key with the known_hosts files.
+fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String> {
+    let mut changed = false;
+    for recorded in recorded_keys(files, name)? {
+        if recorded.algorithm() != key.algorithm() {
+            continue;
+        }
+        if recorded.key_data() == key.key_data() {
+            return Ok(Trust::Known);
+        }
+        changed = true;
     }
     Ok(if changed {
         Trust::Changed
     } else {
         Trust::Unknown
     })
+}
+
+/// [`HOST_KEYS`] in the order to offer them for a host whose recorded keys
+/// have the `known` algorithms: those first, as OpenSSH does. A server with
+/// several host keys presents the first one on our list that it has, and a
+/// key of another type than the one recorded reads as an untrusted host.
+fn host_key_order(known: &[Algorithm]) -> Vec<Algorithm> {
+    // Every RSA signature variant stands for the one `ssh-rsa` key type.
+    let same = |a: &Algorithm, k: &Algorithm| match (a, k) {
+        (Algorithm::Rsa { .. }, Algorithm::Rsa { .. }) => true,
+        (a, k) => a == k,
+    };
+    let (recorded, others): (Vec<_>, Vec<_>) = HOST_KEYS
+        .iter()
+        .cloned()
+        .partition(|a| known.iter().any(|k| same(a, k)));
+    recorded.into_iter().chain(others).collect()
 }
 
 /// `remember_verified_host`: records a pinned key in the uploader's own
@@ -252,18 +277,26 @@ async fn connect(
 ) -> Result<Connection, String> {
     let name = host_name(&cfg.host, cfg.port);
     let seen = Arc::new(Mutex::new(Seen::default()));
+    let files = vec![
+        env.paths.home().join(".ssh").join("known_hosts"),
+        env.paths.uploader_known_hosts_file(),
+    ];
+    // Ask for the key types we have on record for this host first. (An
+    // unreadable file is reported by the key check, before any credential.)
+    let known: Vec<Algorithm> = recorded_keys(&files, &name)
+        .unwrap_or_default()
+        .iter()
+        .map(PublicKey::algorithm)
+        .collect();
     let checker = Checker {
         pin: cfg.fingerprint.clone(),
-        files: vec![
-            env.paths.home().join(".ssh").join("known_hosts"),
-            env.paths.uploader_known_hosts_file(),
-        ],
+        files,
         name: name.clone(),
         seen: seen.clone(),
     };
     let config = client::Config {
         preferred: russh::Preferred {
-            key: Cow::Borrowed(HOST_KEYS),
+            key: Cow::Owned(host_key_order(&known)),
             ..Default::default()
         },
         inactivity_timeout: Some(Duration::from_secs(60)),
@@ -512,4 +545,58 @@ pub fn forget(env: &Env, config: &Map<String, Value>) -> Result<String, String> 
     let service = vault::service_name(&cfg.host, cfg.port, &cfg.username);
     env.vault.delete(&service, &cfg.username)?;
     Ok("SFTP credentials updated.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const P256: Algorithm = Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP256,
+    };
+    const P384: Algorithm = Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP384,
+    };
+    const RSA512: Algorithm = Algorithm::Rsa {
+        hash: Some(HashAlg::Sha512),
+    };
+    const RSA256: Algorithm = Algorithm::Rsa {
+        hash: Some(HashAlg::Sha256),
+    };
+
+    #[test]
+    fn host_key_types_on_record_are_offered_first() {
+        // Nothing on record: the defaults, Ed25519 first.
+        assert_eq!(host_key_order(&[]), HOST_KEYS);
+        // An ECDSA key on record moves to the front; the rest keep their order.
+        assert_eq!(
+            host_key_order(&[P256]),
+            [
+                P256,
+                Algorithm::Ed25519,
+                P384,
+                HOST_KEYS[3].clone(),
+                RSA512,
+                RSA256
+            ]
+        );
+        // `ssh-rsa` stands for both RSA signature variants.
+        let rsa = host_key_order(&[Algorithm::Rsa { hash: None }]);
+        assert_eq!(rsa[..2], [RSA512, RSA256]);
+        assert_eq!(rsa[2], Algorithm::Ed25519);
+        // Several on record: all of them first, in the default order.
+        let two = host_key_order(&[RSA512, P384]);
+        assert_eq!(two[..3], [P384, RSA512, RSA256]);
+        // Whatever is on record, the same algorithms are offered.
+        for known in [vec![], vec![P256], vec![RSA512, P384, Algorithm::Ed25519]] {
+            let mut offered: Vec<String> = host_key_order(&known)
+                .iter()
+                .map(|a| a.to_string())
+                .collect();
+            let mut all: Vec<String> = HOST_KEYS.iter().map(|a| a.to_string()).collect();
+            offered.sort();
+            all.sort();
+            assert_eq!(offered, all);
+        }
+    }
 }
