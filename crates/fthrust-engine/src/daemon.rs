@@ -76,6 +76,11 @@ struct Service {
     last_save: Option<(u64, Result<SavedClip, String>)>,
     bytes_written: u64,
     dirty: bool,
+    /// Saves handed to the save worker; each is answered by exactly one
+    /// `SaveResult` from it.
+    saves_submitted: u64,
+    /// `SaveResult`s received from the save worker.
+    save_results: u64,
     internal_tx: mpsc::Sender<Internal>,
     worker_tx: crossbeam_channel::Sender<Event>,
 }
@@ -117,6 +122,11 @@ impl Service {
             s.recording = r.state();
         }
         s
+    }
+
+    /// Whether a submitted save has not been answered yet.
+    fn save_pending(&self) -> bool {
+        self.save_results < self.saves_submitted
     }
 
     /// Applies a command; returns `Some(code)` when the process must exit.
@@ -176,6 +186,7 @@ impl Service {
             } => match &self.save {
                 Some(save) => {
                     self.bytes_written = 0;
+                    self.saves_submitted += 1;
                     save.submit(SaveRequest {
                         request_id,
                         path,
@@ -237,6 +248,7 @@ impl Service {
     fn on_worker(&mut self, event: &Event) {
         match event {
             Event::SaveResult { request_id, result } => {
+                self.save_results += 1;
                 self.last_save = Some((*request_id, result.clone()));
             }
             Event::SaveProgress { bytes_written, .. } => self.bytes_written = *bytes_written,
@@ -437,6 +449,8 @@ pub async fn serve_until(
         last_save: None,
         bytes_written: 0,
         dirty: false,
+        saves_submitted: 0,
+        save_results: 0,
         internal_tx,
         worker_tx,
     };
@@ -536,17 +550,24 @@ async fn shut_down(
     internal_rx: &mut mpsc::Receiver<Internal>,
 ) {
     // A save in flight finishes first (bounded like the UI's completion
-    // timeout), and its events still reach the client.
+    // timeout), and its result still reaches the client. The wait is for
+    // the result itself: the save thread clears its busy flag right after
+    // sending it, while the event may still be crossing the forwarder.
     let deadline = Instant::now() + SHUTDOWN_SAVE_WAIT;
-    while service.save.as_ref().is_some_and(|s| s.is_busy()) && Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(50), internal_rx.recv()).await {
+    while service.save_pending() {
+        match tokio::time::timeout_at(deadline, internal_rx.recv()).await {
             Ok(Some(Internal::Worker(e))) => {
                 service.on_worker(&e);
                 deliver(client, e, deadline).await;
             }
             Ok(Some(_)) => {}
             Ok(None) => break,
-            Err(_) => {}
+            Err(_) => {
+                tracing::warn!(
+                    "the clip save did not finish within {SHUTDOWN_SAVE_WAIT:?}; shutting down without it"
+                );
+                break;
+            }
         }
     }
     // Capture, audio and a recording stop on a blocking thread, so a stuck

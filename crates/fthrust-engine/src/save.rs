@@ -86,7 +86,9 @@ impl SaveWorker {
         Self { tx, busy, events }
     }
 
-    /// Queues a save; a second request while one runs is refused at once.
+    /// Queues a save. Every call is answered by exactly one `SaveResult`:
+    /// at once when another save is running (refused), otherwise when this
+    /// one ends.
     pub fn submit(&self, req: SaveRequest) {
         if self.busy.swap(true, Ordering::SeqCst) {
             let _ = self.events.send(Event::SaveResult {
@@ -95,8 +97,12 @@ impl SaveWorker {
             });
             return;
         }
-        if self.tx.send(req).is_err() {
+        if let Err(crossbeam_channel::SendError(req)) = self.tx.send(req) {
             self.busy.store(false, Ordering::SeqCst);
+            let _ = self.events.send(Event::SaveResult {
+                request_id: req.request_id,
+                result: Err("The clip could not be saved: the save worker is not running".into()),
+            });
         }
     }
 
