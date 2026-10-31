@@ -91,20 +91,47 @@ pub trait Sink: Send + Sync {
     fn stop(&self);
 }
 
-/// Plays through the PipeWire sink once it has opened; drops cues before.
+/// Plays through the PipeWire sink once it has opened. The newest cue
+/// asked for before then (the startup cue, typically) plays when it opens.
 #[derive(Default)]
 pub struct LazySink {
     inner: std::sync::OnceLock<Arc<dyn Sink>>,
+    pending: Mutex<Option<(Arc<Pcm>, f32)>>,
+}
+
+impl LazySink {
+    /// Takes the opened sink and plays the cue that was waiting for it.
+    pub fn open(&self, sink: Arc<dyn Sink>) {
+        let sink = self.inner.get_or_init(|| sink);
+        let waiting = self.pending.lock().ok().and_then(|mut p| p.take());
+        if let Some((pcm, gain)) = waiting {
+            sink.play(pcm, gain);
+        }
+    }
 }
 
 impl Sink for LazySink {
     fn play(&self, pcm: Arc<Pcm>, gain: f32) {
-        if let Some(s) = self.inner.get() {
-            s.play(pcm, gain);
+        match self.inner.get() {
+            Some(s) => s.play(pcm, gain),
+            None => {
+                if let Ok(mut p) = self.pending.lock() {
+                    *p = Some((pcm, gain));
+                }
+                // The sink may have opened in between.
+                if let Some(s) = self.inner.get()
+                    && let Some((pcm, gain)) = self.pending.lock().ok().and_then(|mut p| p.take())
+                {
+                    s.play(pcm, gain);
+                }
+            }
         }
     }
 
     fn stop(&self) {
+        if let Ok(mut p) = self.pending.lock() {
+            *p = None;
+        }
         if let Some(s) = self.inner.get() {
             s.stop();
         }
@@ -148,9 +175,7 @@ impl SoundPlayer {
         let spawned = std::thread::Builder::new()
             .name("fthrust-sound-start".into())
             .spawn(move || match pipewire_sink::PipeWireSink::start() {
-                Ok(s) => {
-                    let _ = slot.inner.set(Arc::new(s));
-                }
+                Ok(s) => slot.open(Arc::new(s)),
                 Err(e) => tracing::warn!(error = %e, "notification sounds unavailable"),
             });
         if let Err(e) = spawned {

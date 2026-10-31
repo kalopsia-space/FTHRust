@@ -235,6 +235,11 @@ fn run(
             }
             None => {}
         }
+        if gpu.device_lost() {
+            surface = None;
+            gpu.reset();
+            ctx = fresh_ctx(&tokens);
+        }
         if !model.is_live() {
             continue;
         }

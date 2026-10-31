@@ -345,6 +345,16 @@ impl IconCache {
         self.cleared = true;
     }
 
+    /// Lends the cache out, leaving a stand-in that shares its assets path
+    /// (an empty stand-in looked the path up again on every loan).
+    pub fn lend(&mut self) -> IconCache {
+        let stand_in = IconCache {
+            assets: self.assets.clone(),
+            ..IconCache::default()
+        };
+        std::mem::replace(self, stand_in)
+    }
+
     /// Puts `lent` back into this slot, which stood in for it while it was
     /// lent out (a header drew with `lent` while the body drew through the
     /// slot). Textures the stand-in made are kept: the callers used to keep

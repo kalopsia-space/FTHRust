@@ -260,7 +260,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                 };
                 let mut open = state.customize_open[i];
                 // The header needs the icon cache while the body needs the whole state.
-                let mut icons = std::mem::take(&mut state.icons);
+                let mut icons = state.icons.lend();
                 accordion::section(
                     &mut c,
                     &t,

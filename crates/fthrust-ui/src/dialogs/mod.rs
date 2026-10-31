@@ -118,7 +118,7 @@ fn draw_centered(
     let Keys { escape, enter } = keys;
     let title = title_of(kind);
     let width = width_of(kind);
-    let mut icons = std::mem::take(&mut state.icons);
+    let mut icons = state.icons.lend();
     // The frame calls body then actions in sequence; the cell lets both borrow the state.
     let cell = std::cell::RefCell::new(&mut *state);
     let frame = Frame::new(&title, width).show_centered(
@@ -143,7 +143,7 @@ pub fn draw_at(ui: &mut Ui, state: &mut AppState, kind: &DialogKind, pos: Pos2) 
     let enter = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
     let title = title_of(kind);
     let width = width_of(kind);
-    let mut icons = std::mem::take(&mut state.icons);
+    let mut icons = state.icons.lend();
     let cell = std::cell::RefCell::new(&mut *state);
     let frame = Frame::new(&title, width).show_at(
         ui,

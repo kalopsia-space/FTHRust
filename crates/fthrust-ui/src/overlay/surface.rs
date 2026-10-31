@@ -47,6 +47,10 @@ pub enum OverlayError {
 pub struct OverlayGpu {
     instance: wgpu::Instance,
     device: Option<GpuDevice>,
+    /// Set by wgpu when the device is lost (a driver reset, suspend and
+    /// resume): the device lives as long as the thread now, so it must be
+    /// noticed and replaced.
+    lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct GpuDevice {
@@ -71,12 +75,21 @@ impl OverlayGpu {
         OverlayGpu {
             instance: wgpu::Instance::new(desc),
             device: None,
+            lost: std::sync::Arc::default(),
         }
     }
 
     /// Drops the device and renderer (after a GPU error).
     pub fn reset(&mut self) {
         self.device = None;
+        self.lost.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether wgpu reported the device lost since the last
+    /// [`reset`](Self::reset); the caller then resets this and starts a
+    /// fresh egui Context.
+    pub fn device_lost(&self) -> bool {
+        self.device.is_some() && self.lost.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether a device is up (tests).
@@ -122,6 +135,11 @@ impl OverlayGpu {
                 .ok_or_else(|| OverlayError::Gpu("no surface format".into()))?;
             let renderer =
                 egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
+            let lost = self.lost.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                tracing::warn!(?reason, message, "overlay GPU device lost");
+                lost.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
             self.device = Some(GpuDevice {
                 adapter,
                 device,

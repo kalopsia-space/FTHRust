@@ -197,6 +197,12 @@ fn run(rx: Receiver<Cmd>, assets: PathBuf) {
             Ok(Cmd::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }
+        if gpu.device_lost() {
+            shown = None;
+            textures = [None, None];
+            gpu.reset();
+            ctx = fresh_ctx();
+        }
         let Some(s) = &settings else { continue };
         let level = s
             .meter
