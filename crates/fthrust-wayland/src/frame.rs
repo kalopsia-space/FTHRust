@@ -91,11 +91,11 @@ pub enum OutputTransform {
     Rot270,
     /// Horizontal flip.
     Flipped,
-    /// Flip then 90°.
+    /// Flip around the vertical axis, then 90° counter-clockwise.
     Flipped90,
-    /// Flip then 180°.
+    /// Flip around the vertical axis, then 180°.
     Flipped180,
-    /// Flip then 270°.
+    /// Flip around the vertical axis, then 270° counter-clockwise.
     Flipped270,
 }
 
@@ -291,7 +291,10 @@ pub fn normalize(view: &FrameView<'_>, out: &mut BgraFrame) -> Result<(), FrameE
         return Ok(());
     }
 
-    // Stage 2: undo the output transform so the frame is upright.
+    // Stage 2: undo the output transform so the frame is upright. The
+    // compositor flipped (the flipped values) and then rotated
+    // counter-clockwise, so a flipped transform is undone by un-rotating
+    // first and un-flipping second.
     let t = view.transform;
     let (ow, oh) = if t.swaps_axes() { (h, w) } else { (w, h) };
     let orow = ow * 4;
@@ -305,9 +308,9 @@ pub fn normalize(view: &FrameView<'_>, out: &mut BgraFrame) -> Result<(), FrameE
                 OutputTransform::Rot180 => (w - 1 - x, h - 1 - y),
                 OutputTransform::Rot270 => (y, w - 1 - x),
                 OutputTransform::Flipped => (w - 1 - x, y),
-                OutputTransform::Flipped90 => (h - 1 - y, w - 1 - x),
+                OutputTransform::Flipped90 => (y, x),
                 OutputTransform::Flipped180 => (x, h - 1 - y),
-                OutputTransform::Flipped270 => (y, x),
+                OutputTransform::Flipped270 => (h - 1 - y, w - 1 - x),
             };
             let s = y * row + x * 4;
             let d = yd * orow + xd * 4;
