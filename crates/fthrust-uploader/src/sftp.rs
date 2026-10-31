@@ -330,11 +330,18 @@ async fn connect(
     ];
     // Ask for the key types we have on record for this host first. (An
     // unreadable file is reported by the key check, before any credential.)
-    let known: Vec<Algorithm> = recorded_keys(&files, &name)
-        .unwrap_or_default()
-        .iter()
-        .map(PublicKey::algorithm)
-        .collect();
+    // Not with a pinned fingerprint: it names one key and known_hosts is not
+    // consulted for it, so an old line of another type in there (ECDSA, RSA)
+    // must not make the server present that key and fail the pin every time.
+    let known: Vec<Algorithm> = if cfg.fingerprint.is_some() {
+        Vec::new()
+    } else {
+        recorded_keys(&files, &name)
+            .unwrap_or_default()
+            .iter()
+            .map(PublicKey::algorithm)
+            .collect()
+    };
     let checker = Checker {
         pin: cfg.fingerprint.clone(),
         files,

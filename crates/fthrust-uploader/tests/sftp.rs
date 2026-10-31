@@ -184,6 +184,44 @@ async fn the_key_type_in_known_hosts_is_the_one_asked_for() {
     assert!(msg.contains("host-key mismatch"), "{msg}");
 }
 
+/// A pinned fingerprint names one key, and known_hosts is not consulted for
+/// it. So what known_hosts holds must not decide which key type is asked for
+/// either: an old ECDSA line for a host whose pinned key is its Ed25519 one
+/// would otherwise make the server present the ECDSA key and every
+/// connection end in a "host-key mismatch".
+#[tokio::test]
+async fn a_pin_decides_alone_which_host_key_is_asked_for() {
+    let server = srv::start(22).await;
+    let h = home(&server, pinned(&server));
+    let ssh = h.dir.path().join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    // The user's file and FTHRust's own both know only the ECDSA key.
+    std::fs::write(
+        ssh.join("known_hosts"),
+        format!("{}\n", server.ecdsa_known_hosts_line()),
+    )
+    .unwrap();
+    std::fs::create_dir_all(h.paths.uploader_dir()).unwrap();
+    std::fs::write(
+        h.paths.uploader_known_hosts_file(),
+        format!("{}\n", server.ecdsa_known_hosts_line()),
+    )
+    .unwrap();
+    let env = h.env();
+    let (ok, msg) = h.test(&env, Some(srv::PASSWORD)).await;
+    assert!(ok, "{msg}");
+    // Uploads go through the same connection.
+    h.save_password(&env, srv::PASSWORD).await;
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    // The pin is still what decides: another server's key is a mismatch.
+    let other = srv::start(24).await;
+    let h = home(&other, json!({"sftp_fingerprint": server.fingerprint()}));
+    let (ok, msg) = h.test(&h.env(), Some(srv::PASSWORD)).await;
+    assert!(!ok);
+    assert!(msg.contains("host-key mismatch"), "{msg}");
+}
+
 /// known_hosts is a text file by convention only: a comment in Latin-1 or a
 /// stray byte must not take every host's trust down with it.
 #[tokio::test]
