@@ -69,7 +69,7 @@ flowchart BT
 
 **The ring.** Encoded packets go into an in-memory ring that keeps the longest configured clip plus one GOP (2 seconds) and half a second of margin, so every clip can start on a keyframe. Its memory budget is about *bitrate × (buffer + 5 s) × 1.25 + 64 MiB*, clamped between 64 MiB and 16 GiB and never more than half of RAM.
 
-**Saving.** A save takes the last N seconds of packets (shared with the ring, not copied) (starting on a keyframe) plus the matching audio window into an MP4 on a worker thread, without re-encoding the video. Audio is encoded as AAC at this point. The file is written as `.partial` and renamed when complete, so the library never shows a half-written clip. Only one save runs at a time.
+**Saving.** A save takes the last N seconds of packets (shared with the ring, not copied) (starting on a keyframe) plus the matching audio window into an MP4 on a worker thread, without re-encoding the video. Audio is encoded as AAC at this point. The file is written as `.partial` and renamed when complete, so the library never shows a half-written clip. Where the filesystem lacks no-replace renames it falls back to a hard link, then to a checked plain rename; a finished clip that still can't be renamed is kept as `.partial`, never deleted. Only one save runs at a time.
 
 **Recording** taps the same packet stream. If the writer falls more than 8 seconds behind, the recording is stopped with an error rather than eating memory.
 

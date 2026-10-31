@@ -196,7 +196,7 @@ Everything lives under your clips folder, `~/Videos/FTHR Clips` by default (chan
 └── Shared/         size-targeted files made by Share
 ```
 
-Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` and are never shown in the library.
+Game names are cleaned up for use as folder names: characters like `/ : * ? "` are removed and the name is cut to 32 characters. If a file name is already taken, `_2`, `_3` and so on are added. Files still being written end in `.partial` and are never shown in the library. If a finished clip can't be renamed into place (a folder on an unusual network or FUSE filesystem), it is kept under its `.partial` name and **CLIP SAVE FAILED** says where.
 
 ## What's not there yet
 

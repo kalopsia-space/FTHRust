@@ -133,7 +133,7 @@ fn writer_failure_cleans_temp() {
 }
 
 #[test]
-fn rename_failure_is_error() {
+fn rename_failure_keeps_the_finished_clip() {
     let fs = fake(|f| f.rename_fails = true);
     let err = run_with(&fs, Path::new("clip.mp4"), |_| {
         fs.0.borrow_mut().temporary_exists = true;
@@ -141,12 +141,26 @@ fn rename_failure_is_error() {
     })
     .unwrap_err();
     assert_eq!(err.failure, Failure::Rename);
+    let text = err.to_string();
     assert!(
-        err.to_string()
-            .starts_with("Could not atomically finalize clip 'clip.mp4' from 'clip.mp4.partial': ")
+        text.starts_with("Could not atomically finalize clip 'clip.mp4' from 'clip.mp4.partial': "),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("The finished clip was kept as 'clip.mp4.partial'."),
+        "{text}"
     );
     let f = fs.0.borrow();
-    assert!(!f.final_exists && !f.temporary_exists);
+    assert!(
+        f.temporary_exists,
+        "the written and flushed partial is the only copy"
+    );
+    assert!(!f.final_exists);
+    assert!(
+        !f.ops.iter().any(|op| op.starts_with("remove:")),
+        "{:?}",
+        f.ops
+    );
 }
 
 #[test]
@@ -208,7 +222,34 @@ fn missing_temporary_cannot_commit() {
     let fs = fake(|_| {});
     let err = run_with(&fs, Path::new("clip.mp4"), |_| Ok(())).unwrap_err();
     assert_eq!(err.failure, Failure::Rename);
+    assert!(!err.to_string().contains("kept"), "{err}");
     assert!(!fs.0.borrow().final_exists);
+}
+
+#[test]
+fn without_noreplace_or_hard_links_the_clip_is_still_published() {
+    // Some FUSE mounts (gvfs, rclone) and exFAT have neither
+    // RENAME_NOREPLACE nor hard links.
+    let tmp = tempfile::tempdir().unwrap();
+    let from = tmp.path().join("a.mp4.partial");
+    let to = tmp.path().join("a.mp4");
+    fs::write(&from, b"data").unwrap();
+    let no_links = |_: &Path, _: &Path| Err(io::Error::from_raw_os_error(libc::EPERM));
+    RealFs::publish_without_noreplace(&from, &to, no_links).unwrap();
+    assert!(!from.exists() && fs::read(&to).unwrap() == b"data");
+
+    fs::write(&from, b"other").unwrap();
+    let err = RealFs::publish_without_noreplace(&from, &to, no_links).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(&to).unwrap(), b"data", "never replaced");
+    assert_eq!(fs::read(&from).unwrap(), b"other", "never removed");
+
+    // Any other link error is the answer: nothing is renamed.
+    fs::remove_file(&to).unwrap();
+    let broken = |_: &Path, _: &Path| Err(io::Error::from_raw_os_error(libc::EIO));
+    let err = RealFs::publish_without_noreplace(&from, &to, broken).unwrap_err();
+    assert_eq!(err.raw_os_error(), Some(libc::EIO));
+    assert!(from.exists() && !to.exists());
 }
 
 #[test]
