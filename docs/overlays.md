@@ -27,6 +27,8 @@ Overlays are burned in when a clip is saved, so they're part of the file whereve
 
 If the camera disappears or fails mid-session, the bar at the bottom shows **CAMERA UNAVAILABLE** or **CAMERA OVERLAY FAILED**, and clips keep saving without it.
 
+FTHRust remembers the last 90 seconds of the camera, up to 256 MB of it. A 1080p webcam that sends large frames fills that in 30 to 60 seconds, so in longer clips its picture starts partway through.
+
 ### Image layers
 
 Logos, borders, a face-cam frame: add as many images as you like.
