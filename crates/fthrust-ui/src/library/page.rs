@@ -286,6 +286,7 @@ pub fn remove_clip(state: &mut AppState, path: &Path) -> Result<(), NotDeleted> 
     state.readiness.forget(path);
     state.library_dirty = true;
     crate::editor::sessions::clip_deleted(state, path);
+    crate::services::upload::forget_clip_notices(state, path);
     Ok(())
 }
 
@@ -325,6 +326,7 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
             if new_path != path {
                 move_metadata(state, path, &new_path);
                 crate::editor::sessions::clip_renamed(state, path, &new_path);
+                crate::services::upload::forget_clip_notices(state, path);
                 // Keep the returned link attached to the renamed clip.
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);

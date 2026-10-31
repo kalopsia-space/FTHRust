@@ -115,7 +115,7 @@ The uploader only reads clips inside your clips folder and folders you've import
 
 ## When an upload fails
 
-A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too.
+A failed upload shows **UPLOAD FAILED** in the bar at the bottom, with the reason in plain words and a **RETRY NOW** button. If the problem is your settings (a wrong URL or token), there's an **OPEN UPLOAD SETTINGS** button too. Renaming or deleting the clip dismisses its **RETRY NOW** and **UPLOAD AGAIN** notices, since their buttons would name a file that is no longer there; upload from the clip's card instead.
 
 Network errors, rate limits and server errors on Catbox and Your server are retried automatically three times, after 5, 15 and 45 seconds. SFTP uploads aren't retried.
 

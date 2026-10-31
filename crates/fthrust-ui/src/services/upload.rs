@@ -912,6 +912,16 @@ pub fn uploaded_without_link(state: &AppState, path: &Path) -> bool {
     state.upload_history.is_uploaded(&key) && state.upload_history.link(&key).is_none()
 }
 
+/// The library renamed or deleted the clip at `path`: the bar's RETRY NOW and
+/// UPLOAD AGAIN for it name that path, so they would do nothing now.
+pub fn forget_clip_notices(state: &mut AppState, path: &Path) {
+    for prefix in ["upload:", AGAIN_ACTION] {
+        state
+            .error_bar
+            .remove_by_key(&format!("{prefix}{}", path.display()));
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())

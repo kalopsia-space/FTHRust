@@ -387,5 +387,71 @@ fn the_open_editor_labels_its_upload_button_after_what_became_of_the_clip() {
     assert_eq!(label(&mut r.state).as_deref(), Some("Upload again"));
 }
 
+/// The bar's RETRY NOW and UPLOAD AGAIN name the clip by its path: once the
+/// library renames or deletes the clip they would do nothing, so they go.
+#[test]
+fn renaming_or_deleting_a_clip_drops_the_bar_entries_that_name_its_old_path() {
+    use fthrust_ui::shell::error_bar::{Action, Level};
+    let entries = |r: &Rig| -> Vec<String> {
+        r.state
+            .error_bar
+            .entries()
+            .iter()
+            .map(|e| e.title.clone())
+            .collect()
+    };
+    let fill = |r: &mut Rig| {
+        let path = r.clip.display().to_string();
+        let action = |label: &str, id: String| Action {
+            label: label.into(),
+            id,
+        };
+        r.state.error_bar.clear();
+        for (title, key, act) in [
+            ("UPLOAD FAILED", format!("upload:{path}"), "RETRY NOW"),
+            (
+                "ALREADY UPLOADED",
+                format!("upload-again:{path}"),
+                "UPLOAD AGAIN",
+            ),
+            ("SOMETHING ELSE", "other".to_owned(), "OK"),
+        ] {
+            let id = if act == "RETRY NOW" {
+                format!("upload-retry:{path}")
+            } else {
+                format!("upload-again:{path}")
+            };
+            r.state.error_bar.push(
+                title,
+                "x",
+                Level::Warning,
+                vec![action(act, id)],
+                Some(key),
+                true,
+            );
+        }
+    };
+    let mut r = rig();
+    fill(&mut r);
+    answer(
+        &mut r.state,
+        format!("rename-clip:{}\u{1f}b", r.clip.display()),
+    );
+    assert!(r.clip.with_file_name("b.mp4").exists());
+    assert_eq!(entries(&r), vec!["SOMETHING ELSE"]);
+    let mut r = rig();
+    fill(&mut r);
+    answer(&mut r.state, format!("delete-clip:{}", r.clip.display()));
+    assert!(!r.clip.exists());
+    assert_eq!(entries(&r), vec!["SOMETHING ELSE"]);
+    // A refused rename or delete leaves them: the clip is still there.
+    let mut r = rig();
+    fill(&mut r);
+    r.state.active_shares.push(r.clip.clone());
+    answer(&mut r.state, format!("delete-clip:{}", r.clip.display()));
+    assert!(r.clip.exists());
+    assert_eq!(entries(&r).len(), 3);
+}
+
 #[allow(dead_code)]
 fn unused(_: &Path) {}
