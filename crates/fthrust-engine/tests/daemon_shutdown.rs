@@ -10,7 +10,7 @@ use fthrust_core::capture_config::{CaptureConfig, Codec, EncoderPref};
 use fthrust_core::capture_health::flags;
 use fthrust_engine::audio::{AudioConfig, AudioProvider, AudioSourceKind, SyntheticAudio};
 use fthrust_engine::backend::{KindScript, SyntheticFactory, SyntheticScript};
-use fthrust_engine::daemon::{Stop, serve_until};
+use fthrust_engine::daemon::{CONFIGURE_FAILED, Stop, serve_until};
 use fthrust_engine::engine::EngineDeps;
 use fthrust_ipc::transport::EngineClient;
 use fthrust_ipc::{AudioStatus, BackendKind, Command, EngineConfig, Event};
@@ -44,6 +44,22 @@ impl AudioProvider for SlowAudio {
     fn stop(&self) {
         self.inner.stop()
     }
+}
+
+/// Audio whose start panics, taking the configure job down with it.
+struct PanickingAudio;
+
+impl AudioProvider for PanickingAudio {
+    fn start(&self, _cfg: &AudioConfig) -> Vec<(String, String)> {
+        panic!("injected audio start failure");
+    }
+    fn window(&self, _: AudioSourceKind, _: i64, _: u32) -> Option<Vec<f32>> {
+        None
+    }
+    fn status(&self) -> AudioStatus {
+        SyntheticAudio::new().status()
+    }
+    fn stop(&self) {}
 }
 
 struct Daemon {
@@ -206,4 +222,25 @@ async fn the_ui_dying_during_a_save_does_not_hang_the_shutdown() {
         d.tmp.path().join("clip.mp4").exists(),
         "the save in flight still finished"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panicking_configure_is_reported_and_ends_the_engine() {
+    // The configure job runs on a blocking thread; when it panicked, the
+    // JoinError was dropped along with the engine inside it, nothing was
+    // reported, and every later Configure was silently ignored.
+    let d = start(Arc::new(PanickingAudio));
+    let mut client = connect(&d.socket).await;
+    client.send(Command::Configure(config())).await.unwrap();
+    let e = next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::StartupError { .. } | Event::Configured { .. })
+    })
+    .await;
+    let Event::StartupError { code, detail } = e else {
+        panic!("{e:?}")
+    };
+    assert_eq!(code, CONFIGURE_FAILED);
+    assert!(detail.contains("injected audio start failure"), "{detail}");
+    let code = finished(&d, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(1)));
 }

@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::engine::{CaptureEngine, EngineDeps, EngineNotice};
-use crate::save::{RecordWorker, SaveRequest, SaveWorker};
+use crate::save::{RecordWorker, SaveRequest, SaveWorker, panic_message};
 
 /// Heartbeat period.
 pub const HEARTBEAT: Duration = Duration::from_millis(500);
@@ -31,6 +31,8 @@ pub const SHUTDOWN_FLUSH_WAIT: Duration = Duration::from_secs(1);
 /// Work still running then (a configure job stuck in a driver) is
 /// abandoned with the process.
 const RUNTIME_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
+/// The `StartupError` code for a configure job that panicked.
+pub const CONFIGURE_FAILED: &str = "CONFIGURE_FAILED";
 
 /// Why the service could not run.
 #[derive(Debug, thiserror::Error)]
@@ -320,6 +322,33 @@ impl Service {
         }
     }
 
+    /// A `Configure` job panicked. The engine (or the dependencies of a
+    /// first start) went down with it, so nothing can capture any more:
+    /// report a `StartupError` and exit, like a failed first start. Waiting
+    /// on would leave every later `Configure` silently ignored.
+    fn configure_failed(
+        &mut self,
+        error: tokio::task::JoinError,
+        events: Option<&mpsc::Sender<Event>>,
+    ) -> Option<ExitCode> {
+        let why = if error.is_panic() {
+            panic_message(error.into_panic().as_ref())
+        } else {
+            "it was cancelled".to_string()
+        };
+        let detail = format!("applying the capture settings failed: {why}");
+        tracing::error!("{detail}");
+        eprintln!("FTHR_STARTUP_ERROR: {CONFIGURE_FAILED}: {detail}");
+        let event = Event::StartupError {
+            code: CONFIGURE_FAILED.into(),
+            detail,
+        };
+        self.startup_events.push(event.clone());
+        self.dirty = true;
+        emit(events, event);
+        Some(ExitCode::from(1))
+    }
+
     fn shutdown(&mut self) {
         if let Some(r) = &self.record {
             if r.state() != RecordingState::Idle {
@@ -494,9 +523,11 @@ pub async fn serve_until(
             }
             joined = async { match service.configuring.as_mut() { Some(j) => j.await, None => std::future::pending().await } } => {
                 service.configuring = None;
-                if let Ok(outcome) = joined
-                    && let Some(code) = service.finish_configure(outcome, events)
-                {
+                let exit = match joined {
+                    Ok(outcome) => service.finish_configure(outcome, events),
+                    Err(e) => service.configure_failed(e, events),
+                };
+                if let Some(code) = exit {
                     break code;
                 }
             }
