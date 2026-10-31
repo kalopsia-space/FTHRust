@@ -1,6 +1,8 @@
 //! Upload actions on cards, the card menu and the editor
 //! (notes-uploader-reference 6.3).
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use fthrust_core::upload::history::{Entry, History};
@@ -72,6 +74,79 @@ fn card_states() {
     let mut d = data();
     d.ready = false;
     assert!(!share_action(&d).unwrap().enabled);
+}
+
+#[test]
+fn an_uploaded_clip_without_a_link_has_no_button_that_does_nothing() {
+    // The history says uploaded, but it holds no link to copy; asking to
+    // upload it again is ignored (it counts as uploaded), so the button used
+    // to answer "Upload requested" and then nothing happened.
+    let mut d = data();
+    d.uploaded = true;
+    let a = share_action(&d).unwrap();
+    assert!(!a.enabled);
+    assert!(!a.link);
+    assert_eq!(a.tooltip, "Uploaded, but the server returned no link to copy");
+    let mut off = d.clone();
+    off.upload_enabled = false;
+    assert_eq!(
+        share_action(&off).unwrap().tooltip,
+        a.tooltip,
+        "the reason is the upload, not the uploader setting"
+    );
+    assert!(
+        !menu_items(&d).contains(&MenuItem::Upload),
+        "the menu does not offer an upload that is ignored"
+    );
+    // Not uploaded (or expired): unchanged. With a link: it is copied.
+    assert!(share_action(&data()).unwrap().enabled);
+    d.upload_link = Some("https://files.catbox.moe/x.mp4".into());
+    let a = share_action(&d).unwrap();
+    assert_eq!((a.label, a.enabled, a.link), ("Copy link", true, true));
+}
+
+#[test]
+fn pressing_share_on_an_uploaded_clip_without_a_link_requests_nothing() {
+    use fthrust_ui::shell;
+    let mut r = rig();
+    let real = r.clip.canonicalize().unwrap();
+    let mut h = History::default();
+    h.record(
+        &real,
+        Entry(json!({"status": "ok"}).as_object().unwrap().clone()),
+    );
+    h.save(&r.state.paths).unwrap();
+    r.state.upload_history = History::load(&r.state.paths);
+    assert!(r.state.upload_history.is_uploaded(&real));
+    assert!(r.state.upload_history.link(&real).is_none());
+    r.state.uploader_settings.set("upload_enabled", json!(true));
+    r.state.library_dirty = true;
+    r.state.page = fthrust_ui::state::Page::Clips;
+    r.state.tokens.reduce_motion = true;
+    let tokens = r.state.tokens.clone();
+    let mut harness = common::harness(egui::Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut r.state);
+    });
+    harness.run_steps(3);
+    let share = fthrust_ui::fidelity::take(&harness.ctx)
+        .into_iter()
+        .find(|m| m.name == "cardShareBtn")
+        .expect("the card has a share button")
+        .rect
+        .center();
+    harness.hover_at(share);
+    harness.step();
+    harness.drag_at(share);
+    harness.step();
+    harness.drop_at(share);
+    harness.run_steps(3);
+    drop(harness);
+    assert_eq!(r.state.upload_requested, None, "no upload was requested");
+    assert!(
+        r.state.card_feedback.is_empty(),
+        "and no 'Upload requested' was shown: {:?}",
+        r.state.card_feedback
+    );
 }
 
 #[test]
