@@ -348,9 +348,7 @@ impl Drop for VideoWorker {
     /// the channel, is left to finish on its own.
     fn drop(&mut self) {
         let _ = self.tx.send(VideoCmd::Stop);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        drop(self.thread.take());
     }
 }
 
