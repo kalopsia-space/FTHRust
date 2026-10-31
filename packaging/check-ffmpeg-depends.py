@@ -15,7 +15,8 @@ every upstream repository such a script builds (SCRIPT_REPO, SCRIPT_REPO2, ...) 
 
 It fails the other way round too: a registry pin that is not what BtbN's script builds, a supporting library that
 no enabled option needs any more (so dropping an FFmpeg option fails in the pull request that does it, not at the
-release gate), and a "not_linked" entry that is no longer needed. Scripts are read from --scripts (BtbN's
+release gate), a "not_linked" entry that is no longer needed, and a "submodules" list that differs from the
+`git submodule update` a script runs (the source archive fetches what the registry says). Scripts are read from --scripts (BtbN's
 scripts.d, or the repository containing it), or fetched at the commit the manifest pins
 (corresponding_source.build_scripts) when --scripts is not given; the fetch is retried and has a timeout
 (FFMPEG_DEPENDS_FETCH_TIMEOUT seconds, default 120, and FFMPEG_DEPENDS_FETCH_DELAY seconds of back-off, default 5).
@@ -105,9 +106,43 @@ def parse_scripts(scripts_dir):
                 pin = grab("SCRIPT_COMMIT") or grab("SCRIPT_TAGFILTER") or (f"r{grab('SCRIPT_REV')}" if grab("SCRIPT_REV") else "")
                 repos.append((norm_repo(grab("SCRIPT_REPO")), pin))
             scripts.setdefault(name, []).append(
-                {"path": os.path.relpath(os.path.join(root, f), scripts_dir), "depends": depends, "flags": flags, "repos": repos}
+                {
+                    "path": os.path.relpath(os.path.join(root, f), scripts_dir),
+                    "depends": depends,
+                    "flags": flags,
+                    "repos": repos,
+                    "submodules": script_submodules(text),
+                }
             )
     return scripts, groups
+
+
+# Options of `git submodule update` that take their value as the next word.
+SUBMODULE_VALUE_OPTIONS = {"--depth", "--jobs", "-j", "--reference", "--filter", "--single-branch"}
+
+
+def script_submodules(text):
+    """What a BtbN script checks out of its repository's submodules: None when it checks out none, [] when it
+    initialises all of them (`git submodule update --init --recursive`), else the paths it names."""
+    found = None
+    for m in re.finditer(r"git submodule update([^\"'\n]*)", text):
+        words = m.group(1).split()
+        paths = []
+        skip = False
+        for w in words:
+            if skip:
+                skip = False
+            elif w in SUBMODULE_VALUE_OPTIONS:
+                skip = True
+            elif not w.startswith("-"):
+                paths.append(w)
+        if found is None:
+            found = paths
+        elif found and paths:
+            found = sorted(set(found) | set(paths))
+        else:
+            found = []  # one of the lines initialises all of them
+    return sorted(found) if found is not None else None
 
 
 def main():
@@ -214,6 +249,24 @@ def main():
             errors.append(
                 f"{e['id']} is in supporting_libraries but no enabled option needs it (no script in the dependency "
                 f"closure builds {repo}): remove it and licenses/ffmpeg/{e['text']}"
+            )
+    # The source archive fetches the submodules the registry names. Where a BtbN script checks any out, the registry has
+    # to name the same ones (none listed = all of them); a script that checks none out is no reason to complain.
+    checked_out = {}
+    for infos in scripts.values():
+        for i in infos:
+            if i["submodules"] is not None and i["repos"]:
+                checked_out[i["repos"][0][0]] = i["submodules"]
+    for e in entries:
+        want = checked_out.get(norm_repo(e["pinned_repo"]))
+        if want is None:
+            continue
+        have = e.get("submodules")
+        if (not want and have is not None) or (want and sorted(have or []) != want):
+            errors.append(
+                f"{e['id']}: BtbN's script checks out {', '.join(want) if want else 'all submodules'} but the registry's "
+                f"submodules says {'all' if have is None else (', '.join(have) or 'none')}: the source archive has to "
+                f"fetch what the build had"
             )
     for key in sorted(set(not_linked) - used_not_linked):
         errors.append(f"not_linked names {key}, which no enabled option needs: remove it")

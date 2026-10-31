@@ -1,5 +1,5 @@
 {
-  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. \"compiled_in\": false (with a note saying why) marks a library whose code is not inside the shipped libraries (headers only, loaded from the system at run time, or not used by the shipped build); the source archive leaves it out, and every other library is in it. \"mirror\" is where to fetch pinned_repo from when it cannot be reached. \"fetched_at_build\" says what BtbN's script downloads while building that the library's tree does not contain (the archive's README names it). pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signatures are strings only it contains, FFTW's own solver names, which survive stripping; in_libraries are the shipped libraries that hold it; verify-appdir.sh checks both).",
+  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. \"compiled_in\": false (with a note saying why) marks a library whose code is not inside the shipped libraries (headers only, loaded from the system at run time, or not used by the shipped build); the source archive leaves it out, and every other library is in it. \"mirror\" is where the source archive tries first for pinned_repo. \"fetched_at_build\" says what BtbN's script downloads while building that the library's tree does not contain (the archive's README names it). \"submodules\" lists the submodule paths BtbN's script for the library checks out ([] none; absent all of them; check-ffmpeg-depends.py compares it with the script); a tag pin needs \"resolved_commit\", the commit the tag names (the source archive stops if the tag moves). pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signatures are strings only it contains, FFTW's own solver names, which survive stripping; in_libraries are the shipped libraries that hold it; verify-appdir.sh checks both).",
   "ignored_options": {
     "--enable-version3": "Selects LGPL version 3 or later (needed by gmp, aribb24, opencore-amr and libvmaf); adds no code.",
     "--enable-shared": "Builds shared libraries; adds no code.",
@@ -78,6 +78,7 @@
       "url": "https://www.openssl.org/",
       "pinned_repo": "https://github.com/openssl/openssl.git",
       "pinned_commit": "openssl-3.6.3",
+      "resolved_commit": "aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f",
       "text": "openssl.txt",
       "source_files": [
         "LICENSE.txt"
@@ -138,6 +139,7 @@
       "url": "https://freetype.org/",
       "pinned_repo": "https://gitlab.freedesktop.org/freetype/freetype.git",
       "pinned_commit": "5336c0d4da22a13dab3389eb153b12672fdf841c",
+      "submodules": [],
       "text": "freetype.txt",
       "source_files": [
         "docs/FTL.TXT",
@@ -170,6 +172,7 @@
       "url": "https://github.com/KhronosGroup/Vulkan-Headers",
       "pinned_repo": "https://github.com/KhronosGroup/Vulkan-Headers.git",
       "pinned_commit": "v1.4.356",
+      "resolved_commit": "8d6039a455a7ecc7d2a592ff97f62db4e59b70bf",
       "text": "vulkan-headers.txt",
       "source_files": [
         "LICENSE.md",
@@ -447,6 +450,7 @@
       "url": "https://github.com/ultravideo/kvazaar",
       "pinned_repo": "https://github.com/ultravideo/kvazaar.git",
       "pinned_commit": "d6815293f34a094e26ba6c50b8644660ddc13e09",
+      "submodules": [],
       "text": "kvazaar.txt",
       "source_files": [
         "LICENSE"
@@ -492,6 +496,7 @@
       "url": "https://www.videolan.org/developers/libbluray.html",
       "pinned_repo": "https://code.videolan.org/videolan/libbluray.git",
       "pinned_commit": "8b4fb6e2562bb86601ea5a2c4140af6d8f3f1cf4",
+      "submodules": [],
       "text": "libbluray.txt",
       "source_files": [
         "COPYING"
@@ -507,12 +512,15 @@
       "url": "https://github.com/libjxl/libjxl",
       "pinned_repo": "https://github.com/libjxl/libjxl.git",
       "pinned_commit": "f0a1c5ff9dbba51ffa932433ffb80e5e6b6e22a7",
+      "submodules": [
+        "third_party/highway"
+      ],
       "text": "libjxl.txt",
       "source_files": [
         "LICENSE",
         "PATENTS"
       ],
-      "note": "Also builds highway and skcms (Apache-2.0, BSD-3-Clause); their notices are not reproduced here."
+      "note": "Also builds highway (Apache-2.0 or BSD-3-Clause), one of its submodules; its notice is not reproduced here. BtbN's build turns skcms off and uses LCMS2 and Brotli (listed below)."
     },
     {
       "id": "lame",
@@ -540,6 +548,7 @@
       "url": "https://opus-codec.org/",
       "pinned_repo": "https://github.com/xiph/opus.git",
       "pinned_commit": "3da9f7a6db1c05c3996cb363a9d1931a978bf1be",
+      "submodules": [],
       "text": "opus.txt",
       "source_files": [
         "COPYING"
@@ -820,6 +829,7 @@
       "url": "https://github.com/google/snappy",
       "pinned_repo": "https://github.com/google/snappy.git",
       "pinned_commit": "3ac3722e1bee4b99860a282fb779e8e72fa18163",
+      "submodules": [],
       "text": "snappy.txt",
       "source_files": [
         "COPYING"
@@ -835,6 +845,7 @@
       "url": "https://github.com/Haivision/srt",
       "pinned_repo": "https://github.com/Haivision/srt.git",
       "pinned_commit": "c39196c9a568ae4e3289dd65cf54ba4154deb4a1",
+      "submodules": [],
       "text": "srt.txt",
       "source_files": [
         "LICENSE"
@@ -1036,6 +1047,7 @@
       "url": "https://github.com/Mbed-TLS/mbedtls",
       "pinned_repo": "https://github.com/ARMmbed/mbedtls.git",
       "pinned_commit": "v4.1.0",
+      "resolved_commit": "0fe989b6b514192783c469039edd325fd0989806",
       "text": "mbedtls.txt",
       "source_files": [
         "LICENSE"
@@ -1113,6 +1125,7 @@
       "url": "https://github.com/BtbN/Vulkan-Shim-Loader",
       "pinned_repo": "https://github.com/BtbN/Vulkan-Shim-Loader.git",
       "pinned_commit": "65b3936528cd92eb4ea3de485d03f858a3850484",
+      "submodules": [],
       "text": "vulkan-shim-loader.txt",
       "source_files": [
         "LICENSE"

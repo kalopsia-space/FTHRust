@@ -304,18 +304,21 @@ EOF
     expect_no_notes notes_prefix_of_a_longer_version_is_missing v2.0.0-alpha "no non-empty"
 }
 
-group_archive() {
-    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m reg out r ffc bsc gc oc tc mc
+archive_cases() {
+    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m reg out r ffc bsc gc oc tc mc mu rl
     local gitq=(git -c user.name=t -c user.email=t@example.invalid)
-    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d" "$src/gpl" "$src/one" "$src/sub" "$src/tag" "$src/mirrored"
+    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d" "$src/gpl" "$src/one" "$src/sub" "$src/sub2" "$src/tag" "$src/mirrored" "$src/multi" "$src/rel"
     echo 'int main(void){return 0;}' > "$src/ffmpeg/main.c"
     echo '#!/bin/sh' > "$src/scripts/scripts.d/50-x.sh"
     echo 'double fft(double x){return x;}' > "$src/gpl/fft.c"
     echo 'int one;' > "$src/one/one.c"
     echo 'int sub;' > "$src/sub/sub.c"
+    echo 'int sub2;' > "$src/sub2/sub2.c"
     echo 'int tagged;' > "$src/tag/tagged.c"
     echo 'int mirrored;' > "$src/mirrored/mirrored.c"
-    for r in ffmpeg scripts gpl sub tag mirrored; do
+    echo 'int multi;' > "$src/multi/multi.c"
+    echo 'int rel;' > "$src/rel/rel.c"
+    for r in ffmpeg scripts gpl sub sub2 tag mirrored; do
         git -C "$src/$r" init -q
         git -C "$src/$r" config uploadpack.allowAnySHA1InWant true
         git -C "$src/$r" add -A
@@ -329,12 +332,28 @@ group_archive() {
     "${gitq[@]}" -C "$src/one" -c protocol.file.allow=always submodule add -q "$src/sub" vendor/sub
     git -C "$src/one" add -A
     "${gitq[@]}" -C "$src/one" commit -q -m init
+    # a library with two submodules, of which BtbN's script checks out one, none or both
+    git -C "$src/multi" init -q
+    git -C "$src/multi" config uploadpack.allowAnySHA1InWant true
+    "${gitq[@]}" -C "$src/multi" -c protocol.file.allow=always submodule add -q "$src/sub" vendor/a
+    "${gitq[@]}" -C "$src/multi" -c protocol.file.allow=always submodule add -q "$src/sub2" vendor/b
+    git -C "$src/multi" add -A
+    "${gitq[@]}" -C "$src/multi" commit -q -m init
+    # a library whose .gitmodules URL is relative (../sub): it resolves against the repository the tree was fetched from
+    git -C "$src/rel" init -q
+    git -C "$src/rel" config uploadpack.allowAnySHA1InWant true
+    printf '[submodule "vendor/sub"]\n\tpath = vendor/sub\n\turl = ../sub\n' > "$src/rel/.gitmodules"
+    git -C "$src/rel" add -A
+    git -C "$src/rel" update-index --add --cacheinfo "160000,$(git -C "$src/sub" rev-parse HEAD),vendor/sub"
+    "${gitq[@]}" -C "$src/rel" commit -q -m init
     ffc="$(git -C "$src/ffmpeg" rev-parse HEAD)"
     bsc="$(git -C "$src/scripts" rev-parse HEAD)"
     gc="$(git -C "$src/gpl" rev-parse HEAD)"
     oc="$(git -C "$src/one" rev-parse HEAD)"
     tc="$(git -C "$src/tag" rev-parse HEAD)"
     mc="$(git -C "$src/mirrored" rev-parse HEAD)"
+    mu="$(git -C "$src/multi" rev-parse HEAD)"
+    rl="$(git -C "$src/rel" rev-parse HEAD)"
     m="$WORK/source-manifest.json"
     jq --arg a "$src/ffmpeg" --arg b "$ffc" --arg c "$src/scripts" --arg d "$bsc" \
         '.corresponding_source = {ffmpeg: {repo: $a, commit: $b, describe: "n1-test"}, build_scripts: {repo: $c, commit: $d}}' \
@@ -345,19 +364,22 @@ group_archive() {
     # its repository does not exist; libmirror: the mirror comes first (the repository exists too); libfallback: its mirror is
     # gone, so the repository serves it; libsvn: a Subversion revision; gplx: a GPL library.
     reg="$WORK/source-registry.json"
-    jq -n --arg one "$src/one" --arg oc "$oc" --arg tag "$src/tag" --arg mir "$src/mirrored" --arg mircopy "$src/mirrored-copy" --arg mc "$mc" --arg gpl "$src/gpl" --arg gc "$gc" --arg none "$WORK/no-such-repo" \
+    jq -n --arg one "$src/one" --arg oc "$oc" --arg tag "$src/tag" --arg tc "$tc" --arg mir "$src/mirrored" --arg mircopy "$src/mirrored-copy" --arg mc "$mc" --arg gpl "$src/gpl" --arg gc "$gc" --arg none "$WORK/no-such-repo" \
+        --arg multi "$src/multi" --arg mu "$mu" --arg rel "$src/rel" --arg rl "$rl" \
         'def lib($id; $repo; $pin): {id: $id, name: ($id | ascii_upcase), flags: ["--enable-lib" + $id], license: "MIT", url: ("https://example.org/" + $id), pinned_repo: $repo, pinned_commit: $pin, text: ($id + ".txt")};
          {ignored_options: {}, not_linked: {},
-          libraries: [lib("libone"; $one; $oc) + {fetched_at_build: "the crates in its Cargo.lock"}, lib("libtag"; $tag; "v1.2"), lib("libpre"; $tag; "libpre-3.1"), lib("libhdr"; $none; "1111111111111111111111111111111111111111") + {compiled_in: false, note: "Headers only."},
-                      lib("libmirror"; $mir; $mc) + {mirror: $mircopy}, lib("libfallback"; $mir; $mc) + {mirror: $none}, lib("libsvn"; "https://svn.example.org/trunk/lame"; "r42")],
+          libraries: [lib("libone"; $one; $oc) + {fetched_at_build: "the crates in its Cargo.lock"}, lib("libtag"; $tag; "v1.2") + {resolved_commit: $tc}, lib("libpre"; $tag; "libpre-3.1") + {resolved_commit: $tc}, lib("libhdr"; $none; "1111111111111111111111111111111111111111") + {compiled_in: false, note: "Headers only."},
+                      lib("libmirror"; $mir; $mc) + {mirror: $mircopy}, lib("libfallback"; $mir; $mc) + {mirror: $none}, lib("libsvn"; "https://svn.example.org/trunk/lame"; "r42"),
+                      lib("libsome"; $multi; $mu) + {submodules: ["vendor/a"]}, lib("libnone"; $multi; $mu) + {submodules: []}, lib("liball"; $multi; $mu), lib("librel"; $rel; $rl)],
           supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $gpl, pinned_commit: $gc, text: "gplx.txt", needed_by: ["x"], gpl: true, signatures: ["gplx_sig"], in_libraries: ["libavformat"]}]}' > "$reg"
     out="$WORK/source-out/src.tar.xz"
     local svnlog="$WORK/svn-calls" svn_stub="$WORK/svn-stub"
     printf '#!/bin/sh\necho "$@" >> "%s"\nfor last; do :; done\nmkdir -p "$last"\necho "lame source" > "$last/lame.c"\n' "$svnlog" > "$svn_stub"
     chmod +x "$svn_stub"
     local opts=(--manifest "$m" --libraries "$reg" --skip-depends-check)
-    # The tests wait for nothing, and compress lightly.
-    export ARCHIVE_FETCH_DELAY=0 ARCHIVE_XZ_OPTS="-T1 -1" ARCHIVE_SVN="$svn_stub" ARCHIVE_ALLOW_LOCAL_REPO=1
+    # The other ARCHIVE_* settings (no pauses, three attempts, one second per attempt, a light xz) come from
+    # archive_run_cases; the stand-in svn is this case's.
+    export ARCHIVE_SVN="$svn_stub"
 
     if ! r="$("$arch" "${opts[@]}" --out "$out" 2>&1)"; then
         fail archive_builds "$r"; return
@@ -369,6 +391,19 @@ group_archive() {
         grep -qxF "$f" <<<"$listing" || missing="$missing $f"
     done
     if [ -z "$missing" ]; then pass archive_has_the_trees_and_every_library_compiled_in; else fail archive_has_the_trees_and_every_library_compiled_in "missing:$missing"; fi
+    # Only the submodules the registry names (libsome: vendor/a; libnone: none; liball: both), as BtbN's scripts check out
+    missing=""
+    for f in "libsome-${mu:0:12}/vendor/a/sub.c" "libnone-${mu:0:12}/multi.c" "liball-${mu:0:12}/vendor/a/sub.c" "liball-${mu:0:12}/vendor/b/sub2.c"; do
+        grep -qxF "$f" <<<"$listing" || missing="$missing $f"
+    done
+    if grep -q "^libsome-${mu:0:12}/vendor/b/sub2.c" <<<"$listing"; then missing="$missing (libsome has vendor/b)"; fi
+    # (the empty directories of the submodule paths are there, as in BtbN's checkout; files in them are not)
+    if grep -q "^libnone-${mu:0:12}/vendor/[ab]/." <<<"$listing"; then missing="$missing (libnone has a submodule)"; fi
+    if [ -z "$missing" ]; then pass archive_checks_out_only_the_submodules_the_registry_names
+    else fail archive_checks_out_only_the_submodules_the_registry_names "$missing"; fi
+    # A relative URL in .gitmodules (../sub) needs the origin remote the tree was fetched from
+    if grep -qxF "librel-${rl:0:12}/vendor/sub/sub.c" <<<"$listing"; then pass archive_resolves_relative_submodule_urls_against_an_origin
+    else fail archive_resolves_relative_submodule_urls_against_an_origin "$(grep librel <<<"$listing" | head -3 | tr '\n' ' ')"; fi
     if grep -E '(^|/)\.git(/|$)' <<<"$listing" >/dev/null; then fail archive_leaves_out_git_data "$(grep -E '(^|/)\.git(/|$)' <<<"$listing" | head -3 | tr '\n' ' ')"; else pass archive_leaves_out_git_data; fi
     if grep -q '^libhdr' <<<"$listing"; then fail archive_leaves_out_libraries_that_are_not_compiled_in "libhdr is in the archive"; else pass archive_leaves_out_libraries_that_are_not_compiled_in; fi
     readme="$(tar -xJOf "$out" ./README.txt)"
@@ -384,6 +419,9 @@ group_archive() {
     if grep -qF "Libraries the build is configured with that contribute no code" <<<"$readme" && grep -qF "LIBHDR (libhdr)" <<<"$readme" && grep -qF "Headers only." <<<"$readme"; then
         pass archive_readme_names_the_libraries_it_leaves_out
     else fail archive_readme_names_the_libraries_it_leaves_out "$readme"; fi
+    if grep -qF "submodules: only vendor/a, which is all BtbN's script checks out" <<<"$readme" && grep -qF "submodules: none, BtbN's script checks none out" <<<"$readme"; then
+        pass archive_readme_says_which_submodules_were_checked_out
+    else fail archive_readme_says_which_submodules_were_checked_out "$readme"; fi
     if grep -qF "download code while they build" <<<"$readme" && grep -qF "the crates in its Cargo.lock" <<<"$readme"; then
         pass archive_readme_names_what_btbns_scripts_download_while_building
     else fail archive_readme_names_what_btbns_scripts_download_while_building "$readme"; fi
@@ -427,6 +465,25 @@ group_archive() {
     elif grep -q "libtag: pin must be a 40-digit commit id, a tag name or a Subversion revision" <<<"$r"; then pass archive_rejects_a_library_pin_that_is_not_a_commit_tag_or_revision
     else fail archive_rejects_a_library_pin_that_is_not_a_commit_tag_or_revision "$r"; fi
 
+    # A tag can be moved: the registry records the commit it names, and a different one (or none) stops the archive
+    jq '.libraries[1].resolved_commit = "0123456789012345678901234567890123456789"' "$reg" > "$WORK/source-registry-movedtag.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-movedtag.json" --skip-depends-check --out "$WORK/source-out/moved.tar.xz" 2>&1)"; then
+        fail archive_stops_when_a_tag_has_moved "exit 0"
+    elif grep -q "libtag: tag v1.2 names $tc but the registry records 0123456789012345678901234567890123456789: the tag was moved" <<<"$r" && [ ! -e "$WORK/source-out/moved.tar.xz" ]; then pass archive_stops_when_a_tag_has_moved
+    else fail archive_stops_when_a_tag_has_moved "$r"; fi
+    jq 'del(.libraries[1].resolved_commit)' "$reg" > "$WORK/source-registry-unrecorded.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-unrecorded.json" --skip-depends-check --out "$WORK/source-out/unrecorded.tar.xz" 2>&1)"; then
+        fail archive_needs_the_commit_a_tag_names "exit 0"
+    elif grep -q "libtag: the pin v1.2 is a tag, so the registry has to record the commit it names (resolved_commit)" <<<"$r"; then pass archive_needs_the_commit_a_tag_names
+    else fail archive_needs_the_commit_a_tag_names "$r"; fi
+
+    # a submodule path the repository does not have fails the archive instead of being skipped
+    jq '(.libraries[] | select(.id == "libsome") | .submodules) = ["vendor/zzz"]' "$reg" > "$WORK/source-registry-badsub.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-badsub.json" --skip-depends-check --out "$WORK/source-out/badsub.tar.xz" 2>&1)"; then
+        fail archive_fails_for_a_submodule_path_the_repository_lacks "exit 0"
+    elif grep -q "libsome: could not fetch its submodules (vendor/zzz) after 3 attempts" <<<"$r"; then pass archive_fails_for_a_submodule_path_the_repository_lacks
+    else fail archive_fails_for_a_submodule_path_the_repository_lacks "$r"; fi
+
     if r="$(ARCHIVE_ALLOW_LOCAL_REPO= "$arch" --manifest "$m" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
         fail archive_rejects_a_non_https_repo "exit 0"
     elif grep -q "must be https" <<<"$r"; then pass archive_rejects_a_non_https_repo
@@ -456,10 +513,12 @@ group_archive() {
     elif grep -q "does not match BtbN's build scripts" <<<"$r" && [ ! -e "$WORK/source-out/nodeps.tar.xz" ]; then pass archive_checks_the_registry_against_the_scripts
     else fail archive_checks_the_registry_against_the_scripts "$r"; fi
 
-    # Network steps are tried three times, each with a timeout: here with a git in front of the real one that
-    # fails the first fetches, always, or hangs. The count of fetches of a clean run is the baseline.
-    local stub="$WORK/archive-git-stub" counter="$WORK/archive-git-fetches" sublog="$WORK/archive-git-submodule" real_git base
-    real_git="$(command -v git)"
+    # Network steps are retried the way BtbN's retry-tool does: here with a git in front of the real one that fails the
+    # first fetches, always, or hangs (and logs the credentials it was given), and a timeout and a sleep that log what
+    # they were asked for. The count of fetches of a clean run is the baseline.
+    local stub="$WORK/archive-git-stub" counter="$WORK/archive-git-fetches" sublog="$WORK/archive-git-submodule" authlog="$WORK/archive-git-auth"
+    local tolog="$WORK/archive-timeouts" sleeplog="$WORK/archive-sleeps" real_git real_sleep real_timeout base basic expected
+    real_git="$(command -v git)" real_sleep="$(command -v sleep)" real_timeout="$(command -v timeout)"
     mkdir -p "$stub"
     cat > "$stub/git" <<EOF
 #!/bin/sh
@@ -475,15 +534,18 @@ done
 if [ "\$sub" = submodule ]; then echo "\$@" >> "$sublog"; fi
 if [ "\$sub" = fetch ]; then
     n=\$(cat "$counter" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$counter"
+    echo "\${GIT_CONFIG_KEY_0:-}=\${GIT_CONFIG_VALUE_0:-}" >> "$authlog"
     case "\${GIT_STUB:-}" in
         fail) echo "fatal: simulated network failure" >&2; exit 128 ;;
         fail-twice) if [ \$n -le 2 ]; then echo "fatal: simulated network failure" >&2; exit 128; fi ;;
-        hang) exec sleep 30 ;;
+        hang) exec "$real_sleep" 30 ;;
     esac
 fi
 exec "$real_git" "\$@"
 EOF
-    chmod +x "$stub/git"
+    printf '#!/bin/sh\necho "$1" >> "%s"\nexec "%s" "$@"\n' "$tolog" "$real_timeout" > "$stub/timeout"
+    printf '#!/bin/sh\necho "$1" >> "%s"\nexit 0\n' "$sleeplog" > "$stub/sleep"
+    chmod +x "$stub/git" "$stub/timeout" "$stub/sleep"
     archiving() { # stub-mode [env...]: an archive of the test registry with the stubbed git first on PATH
         local mode="$1"
         shift
@@ -492,8 +554,10 @@ EOF
     }
     fetches() { cat "$counter" 2>/dev/null || echo 0; }
 
-    rm -f "$sublog"
+    rm -f "$sublog" "$authlog"
     if r="$(archiving ok 2>&1)"; then base="$(fetches)"; pass archive_counts_its_fetches_in_a_clean_run; else fail archive_counts_its_fetches_in_a_clean_run "$r"; return; fi
+    if [ "$(sort -u "$authlog")" = "=" ]; then pass archive_sends_no_credentials_without_a_token
+    else fail archive_sends_no_credentials_without_a_token "$(sort -u "$authlog")"; fi
     # git starts a gc or maintenance run in the background after a fetch or clone; it wrote into .git while the script
     # was removing it, which failed a trial run on libplacebo's submodules.
     if grep -q -- "-c gc.auto=0 -c maintenance.auto=false" "$sublog" && grep -q "submodule update --init --recursive --depth 1" "$sublog"; then pass archive_keeps_gits_background_maintenance_off
@@ -506,7 +570,54 @@ EOF
     if r="$(archiving hang ARCHIVE_FETCH_TIMEOUT=1 2>&1)"; then fail archive_times_out_a_hanging_fetch "exit 0"
     elif [ "$(fetches)" = 3 ] && grep -q "could not fetch" <<<"$r"; then pass archive_times_out_a_hanging_fetch
     else fail archive_times_out_a_hanging_fetch "$r ($(fetches) fetches)"; fi
-    unset ARCHIVE_FETCH_DELAY ARCHIVE_XZ_OPTS ARCHIVE_SVN ARCHIVE_ALLOW_LOCAL_REPO
+
+    # With none of the retry settings changed the schedule is BtbN's: 10 attempts, timeouts of 120 s growing by 60 s to
+    # 660 s, and between attempts a random pause of 5 to 90 s (the stand-in sleep records them and returns at once).
+    rm -f "$counter" "$tolog" "$sleeplog"
+    r="$(env -u ARCHIVE_ATTEMPTS -u ARCHIVE_FETCH_TIMEOUT -u ARCHIVE_TIMEOUT_STEP -u ARCHIVE_PAUSE_MIN -u ARCHIVE_PAUSE_MAX \
+        PATH="$stub:$PATH" GIT_STUB=fail "$arch" "${opts[@]}" --out "$WORK/source-out/stub.tar.xz" 2>&1)"
+    if [ "$(fetches)" = 10 ] && [ "$(tr '\n' ' ' < "$tolog")" = "120 180 240 300 360 420 480 540 600 660 " ] && grep -q "after 10 attempts" <<<"$r"; then
+        pass archive_retries_with_btbns_attempts_and_timeouts
+    else fail archive_retries_with_btbns_attempts_and_timeouts "$r (fetches $(fetches), timeouts $(tr '\n' ' ' < "$tolog"))"; fi
+    if [ "$(wc -l < "$sleeplog")" = 9 ] && awk '$1 < 5 || $1 > 90 { bad = 1 } END { exit bad }' "$sleeplog" && [ "$(sort -u "$sleeplog" | wc -l)" -ge 2 ]; then
+        pass archive_pauses_a_random_while_between_attempts
+    else fail archive_pauses_a_random_while_between_attempts "$(tr '\n' ' ' < "$sleeplog")"; fi
+
+    # The token goes to git as an http extraheader for github.com URLs only (in its environment, not its arguments), the
+    # way actions/checkout sets it, and its encoded form is masked in a GitHub Actions log.
+    rm -f "$authlog"
+    basic="$(printf 'x-access-token:tok3n' | base64 -w0)"
+    expected="http.https://github.com/.extraheader=AUTHORIZATION: basic $basic"
+    r="$(archiving ok ARCHIVE_GITHUB_TOKEN=tok3n GITHUB_ACTIONS=true 2>&1)"
+    if [ -s "$authlog" ] && [ "$(sort -u "$authlog")" = "$expected" ]; then pass archive_authenticates_requests_to_github_with_the_token
+    else fail archive_authenticates_requests_to_github_with_the_token "$(sort -u "$authlog")"; fi
+    if grep -qxF "::add-mask::$basic" <<<"$r" && ! grep -q tok3n <<<"$r"; then pass archive_masks_the_token_and_never_prints_it
+    else fail archive_masks_the_token_and_never_prints_it "$r"; fi
+
+    if r="$(ARCHIVE_ATTEMPTS=many "$arch" "${opts[@]}" --out "$WORK/source-out/nan.tar.xz" 2>&1)"; then fail archive_refuses_a_setting_that_is_not_a_number "exit 0"
+    elif grep -q "ARCHIVE_ATTEMPTS must be a whole number, not 'many'" <<<"$r"; then pass archive_refuses_a_setting_that_is_not_a_number
+    else fail archive_refuses_a_setting_that_is_not_a_number "$r"; fi
+}
+
+# The cases export ARCHIVE_* settings (no pauses, three attempts, one second for each, a light xz). They are taken out
+# again however the cases end: an early return used to leave them in the environment of the groups that run after.
+archive_run_cases() {
+    export ARCHIVE_PAUSE_MIN=0 ARCHIVE_PAUSE_MAX=0 ARCHIVE_ATTEMPTS=3 ARCHIVE_FETCH_TIMEOUT=120 ARCHIVE_TIMEOUT_STEP=0 \
+        ARCHIVE_XZ_OPTS="-T1 -1" ARCHIVE_ALLOW_LOCAL_REPO=1
+    archive_cases
+    local rc=$?
+    unset ARCHIVE_PAUSE_MIN ARCHIVE_PAUSE_MAX ARCHIVE_ATTEMPTS ARCHIVE_FETCH_TIMEOUT ARCHIVE_TIMEOUT_STEP ARCHIVE_XZ_OPTS \
+        ARCHIVE_ALLOW_LOCAL_REPO ARCHIVE_SVN ARCHIVE_GITHUB_TOKEN
+    return $rc
+}
+
+group_archive() {
+    # An early return, forced by a root without the archive script: the settings must not outlive it.
+    local left
+    left="$( WORK="$WORK/early"; mkdir -p "$WORK"; ROOT="$WORK/no-such-root"; archive_run_cases >/dev/null 2>&1; env | grep -c '^ARCHIVE_' )"
+    if [ "$left" = 0 ]; then pass archive_cases_leave_no_settings_behind_after_an_early_return
+    else fail archive_cases_leave_no_settings_behind_after_an_early_return "$left ARCHIVE_* variables left"; fi
+    archive_run_cases
 }
 
 # The dependency check on small synthetic BtbN scripts: the FFTW case, where a library is pulled in by another
@@ -686,6 +797,39 @@ EOF
     if out="$(python3 -I "$chk" --manifest "$d/manifest-fetch-tag.json" --libraries "$d/registry.json" 2>&1)"; then fail depends_refuses_a_build_scripts_pin_that_is_not_a_commit "exit 0"
     elif grep -q "40 lowercase hex" <<<"$out"; then pass depends_refuses_a_build_scripts_pin_that_is_not_a_commit
     else fail depends_refuses_a_build_scripts_pin_that_is_not_a_commit "$out"; fi
+
+    # The source archive fetches the submodules the registry names, so where a script checks any out (libjxl: only
+    # third_party/highway) the registry has to say the same; a script that checks none out leaves the registry free.
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/subs.git"\nSCRIPT_COMMIT="9999999999999999999999999999999999999999"\nffbuild_dockerdl() {\n    default_dl .\n    echo "git submodule update --init --recursive --depth 1 --recommend-shallow third_party/one third_party/two"\n}\nffbuild_configure() {\n    echo --enable-libsubs\n}\n' > "$d/scripts.d/50-subs.sh"
+    printf '#!/bin/bash\nSCRIPT_REPO="https://example.org/allsubs.git"\nSCRIPT_COMMIT="8888888888888888888888888888888888888888"\nffbuild_dockerdl() {\n    default_dl .\n    echo "git submodule update --init --recursive --depth=1"\n}\nffbuild_configure() {\n    echo --enable-liballsubs\n}\n' > "$d/scripts.d/50-allsubs.sh"
+    jq -n '{configuration: "--enable-libsubs --enable-liballsubs"}' > "$d/manifest-subs.json"
+    subs_registry() { # submodules-json-for-subs (or "absent") submodules-json-for-allsubs (or "absent") extra-for-foo
+        jq -n --arg a "$1" --arg b "$2" \
+            '{ignored_options: {}, not_linked: {}, supporting_libraries: [],
+              libraries: [
+                ({id: "subs", name: "subs", flags: ["--enable-libsubs"], license: "MIT", url: "https://example.org/subs", pinned_repo: "https://example.org/subs.git", pinned_commit: "9999999999999999999999999999999999999999", text: "subs.txt"} + (if $a == "absent" then {} else {submodules: ($a | fromjson)} end)),
+                ({id: "allsubs", name: "allsubs", flags: ["--enable-liballsubs"], license: "MIT", url: "https://example.org/allsubs", pinned_repo: "https://example.org/allsubs.git", pinned_commit: "8888888888888888888888888888888888888888", text: "allsubs.txt"} + (if $b == "absent" then {} else {submodules: ($b | fromjson)} end))]}' > "$d/registry-subs.json"
+    }
+    subs_run() { python3 -I "$chk" --manifest "$d/manifest-subs.json" --libraries "$d/registry-subs.json" --scripts "$d" 2>&1; }
+    subs_registry '["third_party/one","third_party/two"]' absent
+    if out="$(subs_run)"; then pass depends_accepts_the_submodules_a_script_checks_out; else fail depends_accepts_the_submodules_a_script_checks_out "$out"; fi
+    subs_registry absent absent
+    if out="$(subs_run)"; then fail depends_requires_the_submodule_list_where_a_script_names_paths "exit 0"
+    elif grep -q "subs: BtbN's script checks out third_party/one, third_party/two but the registry's submodules says all" <<<"$out"; then pass depends_requires_the_submodule_list_where_a_script_names_paths
+    else fail depends_requires_the_submodule_list_where_a_script_names_paths "$out"; fi
+    subs_registry '["third_party/one"]' absent
+    if out="$(subs_run)"; then fail depends_rejects_a_submodule_list_that_differs "exit 0"
+    elif grep -q "subs: BtbN's script checks out third_party/one, third_party/two but the registry's submodules says third_party/one:" <<<"$out"; then pass depends_rejects_a_submodule_list_that_differs
+    else fail depends_rejects_a_submodule_list_that_differs "$out"; fi
+    subs_registry '["third_party/one","third_party/two"]' '["x"]'
+    if out="$(subs_run)"; then fail depends_rejects_a_list_where_a_script_checks_out_all_submodules "exit 0"
+    elif grep -q "allsubs: BtbN's script checks out all submodules but the registry's submodules says x:" <<<"$out"; then pass depends_rejects_a_list_where_a_script_checks_out_all_submodules
+    else fail depends_rejects_a_list_where_a_script_checks_out_all_submodules "$out"; fi
+    # a script that checks none out says nothing about the registry (foo's script has no submodule line)
+    registry "[$bar, $baz]" '{}'
+    jq '(.libraries[0]) += {submodules: []}' "$d/registry.json" > "$d/registry-nosubs.json"
+    if out="$(python3 -I "$chk" --manifest "$d/manifest.json" --libraries "$d/registry-nosubs.json" --scripts "$d" 2>&1)"; then pass depends_leaves_the_registry_free_where_a_script_checks_out_no_submodule
+    else fail depends_leaves_the_registry_free_where_a_script_checks_out_no_submodule "$out"; fi
 }
 
 group_links() {
@@ -789,6 +933,11 @@ group_ffnotice() {
     registry_rejects ffnotice_a_gpl_library_must_be_compiled_in '(.supporting_libraries[] | select(.id == "fftw3")) |= (. + {compiled_in: false, note: "x"})' "fftw3 is marked gpl but not compiled in"
     registry_rejects ffnotice_mirror_must_be_https_or_git '(.libraries[] | select(.id == "iconv") | .mirror) = "http://example.org/x.git"' "iconv: mirror must be an https:// or git:// URL"
     registry_rejects ffnotice_fetched_at_build_must_say_what '(.libraries[] | select(.id == "shaderc") | .fetched_at_build) = " "' "shaderc: fetched_at_build must say what BtbN's script downloads while building"
+    registry_rejects ffnotice_submodules_are_a_list_of_relative_paths '(.libraries[] | select(.id == "libjxl") | .submodules) = ["../outside"]' "libjxl: submodules must be a list of relative paths"
+    registry_rejects ffnotice_submodules_are_not_a_string '(.libraries[] | select(.id == "libjxl") | .submodules) = "third_party/highway"' "libjxl: submodules must be a list of relative paths"
+    registry_rejects ffnotice_a_tag_pin_needs_the_commit_it_names 'del(.libraries[] | select(.id == "openssl") | .resolved_commit)' "openssl: pinned_commit openssl-3.6.3 is a tag, so resolved_commit has to be the 40-digit commit it names"
+    registry_rejects ffnotice_the_commit_a_tag_names_is_a_full_commit_id '(.libraries[] | select(.id == "openssl") | .resolved_commit) = "aae016bfd52f"' "openssl: pinned_commit openssl-3.6.3 is a tag, so resolved_commit has to be the 40-digit commit it names"
+    registry_rejects ffnotice_resolved_commit_is_for_tags_only '(.libraries[] | select(.id == "zlib")) += {resolved_commit: "aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f"}' "zlib: resolved_commit is for tag pins"
     out="$(jq -r '[(.libraries[], .supporting_libraries[]) | select(has("fetched_at_build")) | .id] | sort | join(" ")' "$ROOT/packaging/ffmpeg_libraries.json")"
     if [ "$out" = "rav1e shaderc" ]; then pass ffnotice_registry_names_what_btbns_scripts_download_while_building
     else fail ffnotice_registry_names_what_btbns_scripts_download_while_building "$out"; fi

@@ -127,7 +127,7 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 - **Chromaprint**: Built against FFTW (GPL-2.0-or-later, listed below), which Chromaprint's own LICENSE.md says to take into account when distributing it in binary form.
 - **GNU MP (GMP)**: BtbN builds its own fork.
 - **libdrm**: Loaded from the system at run time (libavutil and libavdevice dlopen libdrm.so.2); none of it is compiled into FFmpeg. No licence file: this is the notice in xf86drm.c.
-- **libjxl**: Also builds highway and skcms (Apache-2.0, BSD-3-Clause); their notices are not reproduced here.
+- **libjxl**: Also builds highway (Apache-2.0 or BSD-3-Clause), one of its submodules; its notice is not reproduced here. BtbN's build turns skcms off and uses LCMS2 and Brotli (listed below).
 - **libva (VA-API)**: Loaded from the system at run time (libavutil dlopens libva.so.2 and libva-drm.so.2); none of it is compiled into FFmpeg. The VA-API drivers are the user's system libraries.
 - **libX11**: Loaded from the system at run time (libavdevice dlopens libX11.so.6, libXext.so.6 and libXv.so.1); none of it is compiled into FFmpeg.
 - **libxcb**: Loaded from the system at run time (libavdevice dlopens libxcb.so.1 and its shm, shape and xfixes extensions); none of it is compiled into FFmpeg.
@@ -168,7 +168,7 @@ Options that add no third-party code:
 
 The configure line also disables these libraries and options (the GPL and non-free libraries among them), so nothing from them is bundled through it: `--disable-avisynth`, `--disable-libdavs2`, `--disable-libdvdread`, `--disable-libdvdnav`, `--disable-libfdk-aac`, `--disable-frei0r`, `--disable-librubberband`, `--disable-libvidstab`, `--disable-whisper`, `--disable-libx264`, `--disable-libx265`, `--disable-libxavs2`, `--disable-libxvid`.
 
-Some of these projects bundle code from further projects (for example shaderc builds glslang and SPIRV-Tools, and libjxl builds highway and skcms); their notices are in the upstream sources named above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg commit, BtbN's build scripts and the source of every library above that is compiled into the shipped libraries, at the commits or tags named above, with its README. This is a technical inventory, not legal advice.
+Some of these projects bundle code from further projects (for example shaderc builds glslang and SPIRV-Tools, and libjxl builds highway); their notices are in the upstream sources named above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg commit, BtbN's build scripts and the source of every library above that is compiled into the shipped libraries, at the commits or tags named above, with its README. This is a technical inventory, not legal advice.
 
 ### AppImage type-2 runtime
 

@@ -107,6 +107,19 @@ def main():
             problems.append(f"{e['id']}: mirror must be an https:// or git:// URL")
         if "fetched_at_build" in e and not (isinstance(e["fetched_at_build"], str) and e["fetched_at_build"].strip()):
             problems.append(f"{e['id']}: fetched_at_build must say what BtbN's script downloads while building")
+        # submodules: the paths BtbN's script checks out ([] none, absent all of them), relative and inside the tree
+        if "submodules" in e:
+            paths = e["submodules"]
+            path_ok = r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*"
+            if not (isinstance(paths, list) and all(isinstance(x, str) and re.fullmatch(path_ok, x) and ".." not in x.split("/") for x in paths)):
+                problems.append(f"{e['id']}: submodules must be a list of relative paths (empty for none; leave it out for all)")
+        # a tag moves: the commit it named when it was pinned is recorded, and the source archive checks it
+        pin = e.get("pinned_commit", "")
+        is_tag = not re.fullmatch(r"[0-9a-f]{40}|r[0-9]+", pin)
+        if is_tag and not re.fullmatch(r"[0-9a-f]{40}", e.get("resolved_commit", "")):
+            problems.append(f"{e['id']}: pinned_commit {pin} is a tag, so resolved_commit has to be the 40-digit commit it names")
+        if not is_tag and "resolved_commit" in e:
+            problems.append(f"{e['id']}: resolved_commit is for tag pins; {pin} is a commit or a revision already")
     # The tables and the GPL wording say what a supporting library is built for.
     needers = {e["id"]: e for e in supporting}
     needers.update({e["id"]: e for e in gpl})
@@ -151,6 +164,7 @@ def main():
             "licence_row": "**LGPL v3 or later** (`--enable-version3`, no `--enable-gpl`, no `--enable-nonfree`)",
             "configuration_sentence": "The configuration has no GPL or non-free library.",
         }
+
 
     out = []
     w = out.append
@@ -207,7 +221,7 @@ def main():
         )
     w(
         "Some of these projects bundle code from further projects (for example shaderc builds glslang and "
-        "SPIRV-Tools, and libjxl builds highway and skcms); their notices are in the upstream sources named "
+        "SPIRV-Tools, and libjxl builds highway); their notices are in the upstream sources named "
         "above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg "
         "commit, BtbN's build scripts and the source of every library above that is compiled into the shipped "
         "libraries, at the commits or tags named above, with its README. This is a technical "

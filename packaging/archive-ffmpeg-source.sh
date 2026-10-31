@@ -13,40 +13,65 @@
 #   <id>-<pin>/               every library packaging/ffmpeg_libraries.json lists whose code
 #                             is compiled into the shipped libraries (all but the entries
 #                             marked "compiled_in": false), at the commit or tag BtbN's
-#                             scripts build, with its submodules and without its .git
+#                             scripts build, with the submodules BtbN's scripts check out
+#                             ("submodules" in the registry) and without its .git
 #   README.txt                what is where, the licence note and the configure line
 # FFmpeg and BtbN's scripts are pinned in packaging/ffmpeg_manifest_linux.json
 # (corresponding_source) and the libraries in the registry; a commit is checked
-# against its 40-digit pin, a tag is resolved and the commit written to the README,
-# and a Subversion revision (LAME) is exported with svn. A library's "mirror" is
-# tried before its repository (libiconv's is the host BtbN's own script clones
-# from, because Savannah's https host is often unreachable). Every network step
-# is tried three times with a timeout. FILE.tar.xz.sha256 is written next to the
-# archive. Before anything is fetched but the scripts, the registry is checked
-# against them (check-ffmpeg-depends.py).
+# against its 40-digit pin, a tag against the commit the registry records for it
+# ("resolved_commit": a moved tag fails the archive), and a Subversion revision
+# (LAME) is exported with svn. A library's "mirror" is tried before its repository
+# (libiconv's is the host BtbN's own script clones from, because Savannah's https
+# host is often unreachable). FILE.tar.xz.sha256 is written next to the archive.
+# Before anything is fetched but the scripts, the registry is checked against
+# them (check-ffmpeg-depends.py).
 #
-# Environment: ARCHIVE_FETCH_TIMEOUT (seconds per git or svn call, 300) and
-# ARCHIVE_FETCH_DELAY (base of the pause between attempts, 10 s), ARCHIVE_XZ_OPTS
-# (-T0 -9), ARCHIVE_SVN (svn), SOURCE_DATE_EPOCH. For the tests only:
-# ARCHIVE_ALLOW_LOCAL_REPO=1 lets the pins name a local path, and
-# --skip-depends-check skips the check.
+# Every network step goes through the retry BtbN's own scripts use (images/base/
+# retry-tool.sh): 10 attempts, the first with a 120 s timeout and each further one
+# 60 s longer (up to 660 s), and a random pause of 5 to 90 s after a failure. Each
+# repository gets an origin remote, as BtbN's git-mini-clone does, so that relative
+# submodule URLs resolve. Requests to github.com carry ARCHIVE_GITHUB_TOKEN when it
+# is set (the release job passes its token), the way actions/checkout does: about a
+# hundred anonymous fetches from one runner address are what a rate limit is for.
+#
+# Environment: ARCHIVE_GITHUB_TOKEN; ARCHIVE_ATTEMPTS (10), ARCHIVE_FETCH_TIMEOUT
+# (120 s, the first attempt's), ARCHIVE_TIMEOUT_STEP (60 s), ARCHIVE_PAUSE_MIN (5 s)
+# and ARCHIVE_PAUSE_MAX (90 s); ARCHIVE_XZ_OPTS (-T0 -9); ARCHIVE_SVN (svn);
+# SOURCE_DATE_EPOCH. For the tests only: ARCHIVE_ALLOW_LOCAL_REPO=1 lets the pins
+# name a local path, and --skip-depends-check skips the check.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$HERE/ffmpeg_manifest_linux.json"
 LIBRARIES="$HERE/ffmpeg_libraries.json"
 SKIP_DEPENDS=0
 OUT=""
-ATTEMPTS=3
-FETCH_TIMEOUT="${ARCHIVE_FETCH_TIMEOUT:-300}"
-FETCH_DELAY="${ARCHIVE_FETCH_DELAY:-10}"
+ATTEMPTS="${ARCHIVE_ATTEMPTS:-10}"
+FETCH_TIMEOUT="${ARCHIVE_FETCH_TIMEOUT:-120}"
+TIMEOUT_STEP="${ARCHIVE_TIMEOUT_STEP:-60}"
+PAUSE_MIN="${ARCHIVE_PAUSE_MIN:-5}"
+PAUSE_MAX="${ARCHIVE_PAUSE_MAX:-90}"
 XZ_OPTS="${ARCHIVE_XZ_OPTS:--T0 -9}"
 SVN="${ARCHIVE_SVN:-svn}"
+die() { echo "archive-ffmpeg-source: $*" >&2; exit 1; }
+for v in ATTEMPTS FETCH_TIMEOUT TIMEOUT_STEP PAUSE_MIN PAUSE_MAX; do
+    [[ "${!v}" =~ ^[0-9]+$ ]] || die "ARCHIVE_$v must be a whole number, not '${!v}'"
+done
+[ "$ATTEMPTS" -ge 1 ] || die "ARCHIVE_ATTEMPTS must be at least 1"
+[ "$PAUSE_MAX" -ge "$PAUSE_MIN" ] || die "ARCHIVE_PAUSE_MAX is below ARCHIVE_PAUSE_MIN"
 # No prompts for credentials, and no background gc or maintenance: git starts one after a clone or fetch, detached, and
 # it writes into .git while this script is removing it (that failed a trial run on libplacebo's many submodules).
 export GIT_TERMINAL_PROMPT=0
 GIT=(git -c gc.auto=0 -c maintenance.auto=false)
 if [ "${ARCHIVE_ALLOW_LOCAL_REPO:-}" = 1 ]; then GIT+=(-c protocol.file.allow=always); fi
-die() { echo "archive-ffmpeg-source: $*" >&2; exit 1; }
+# The token goes into git's environment (not its command line), scoped to github.com URLs, so no other host sees it and
+# the submodule clones git starts inherit it. The encoded form is masked in a GitHub Actions log like the token itself.
+if [ -n "${ARCHIVE_GITHUB_TOKEN:-}" ]; then
+    basic="$(printf 'x-access-token:%s' "$ARCHIVE_GITHUB_TOKEN" | base64 -w0)"
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::add-mask::$basic"; fi
+    n="${GIT_CONFIG_COUNT:-0}"
+    export "GIT_CONFIG_KEY_$n=http.https://github.com/.extraheader" "GIT_CONFIG_VALUE_$n=AUTHORIZATION: basic $basic" "GIT_CONFIG_COUNT=$((n + 1))"
+    unset basic n
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -70,14 +95,19 @@ mkdir -p "$stage"
 
 field() { jq -er "$1" "$MANIFEST" || die "$MANIFEST has no $1"; }
 
-# retry DESCRIPTION COMMAND...: the command up to $ATTEMPTS times, each with a timeout, pausing longer after each failure.
+# retry DESCRIPTION COMMAND...: BtbN's retry-tool. The command up to $ATTEMPTS times, the first under a timeout of
+# $FETCH_TIMEOUT seconds and each further one under $TIMEOUT_STEP more, with a random pause of $PAUSE_MIN to $PAUSE_MAX
+# seconds after a failure.
 retry() {
-    local what="$1" attempt=1
+    local what="$1" attempt=1 limit pause
     shift
-    until timeout "$FETCH_TIMEOUT" "$@"; do
-        [ $attempt -lt $ATTEMPTS ] || return 1
-        echo "archive-ffmpeg-source: $what failed (attempt $attempt of $ATTEMPTS), trying again" >&2
-        sleep $((FETCH_DELAY * attempt * attempt))
+    while :; do
+        limit=$((FETCH_TIMEOUT + (attempt - 1) * TIMEOUT_STEP))
+        if timeout "$limit" "$@"; then return 0; fi
+        [ $attempt -lt "$ATTEMPTS" ] || return 1
+        pause=$((PAUSE_MIN + RANDOM % (PAUSE_MAX - PAUSE_MIN + 1)))
+        echo "archive-ffmpeg-source: $what failed (attempt $attempt of $ATTEMPTS, limit ${limit}s), trying again in ${pause}s" >&2
+        sleep "$pause"
         attempt=$((attempt + 1))
     done
 }
@@ -97,16 +127,23 @@ check_repo() {
 }
 
 # git_fetch DIR NAME PIN REPO [MIRROR]: PIN (a commit id or a tag), shallow, into the new repository DIR, from MIRROR if
-# there is one and else (or if that fails) from REPO. Sets fetched_from.
+# there is one and else (or if that fails) from REPO. The repository gets an origin remote, as BtbN's git-mini-clone does,
+# so that a relative submodule URL (../x.git) resolves against the place the tree came from. Sets fetched_from.
 git_fetch() {
-    local dir="$1" name="$2" pin="$3" repo="$4" mirror="${5:-}" ref candidate kind
+    local dir="$1" name="$2" pin="$3" repo="$4" mirror="${5:-}" ref candidate kind origin=0
     "${GIT[@]}" init -q "$dir"
     if [[ "$pin" =~ ^[0-9a-f]{40}$ ]]; then ref="$pin"; else ref="refs/tags/$pin:refs/tags/$pin"; fi
     for kind in mirror repo; do
         if [ "$kind" = mirror ]; then candidate="$mirror"; else candidate="$repo"; fi
         [ -n "$candidate" ] || continue
         check_repo "$name" "$candidate" "$kind"
-        if retry "fetching $name from $candidate" "${GIT[@]}" -C "$dir" fetch -q --depth 1 "$candidate" "$ref"; then
+        if [ $origin = 1 ]; then
+            "${GIT[@]}" -C "$dir" remote set-url origin "$candidate"
+        else
+            "${GIT[@]}" -C "$dir" remote add origin "$candidate"
+            origin=1
+        fi
+        if retry "fetching $name from $candidate" "${GIT[@]}" -C "$dir" fetch -q --depth 1 origin "$ref"; then
             fetched_from="$candidate"
             return 0
         fi
@@ -124,10 +161,13 @@ fetch() {
     "${GIT[@]}" -C "$work/$name" archive --format=tar --prefix="$prefix/" "$commit" | tar -x -C "$stage"
 }
 
-# fetch_library ID REPO PIN MIRROR: a library's tree into $stage/<id>-<pin>/ (with its submodules, without .git).
-# Sets lib_dir (that directory's name) and lib_from (where the tree came from, for the README).
+# fetch_library ID REPO PIN MIRROR SUBMODULES RESOLVED: a library's tree into $stage/<id>-<pin>/, without .git.
+# SUBMODULES is "all", "none" or "paths:A B" (what BtbN's script checks out; see "submodules" in the registry) and
+# RESOLVED the commit a tag pin must name. Sets lib_dir (that directory's name), lib_from (where the tree came from, for
+# the README) and lib_submodules (a README line about the submodules, or nothing).
 fetch_library() {
-    local id="$1" repo="$2" pin="$3" mirror="$4" tree="$work/lib-$1" commit
+    local id="$1" repo="$2" pin="$3" mirror="$4" submodules="$5" resolved="$6" tree="$work/lib-$1" commit paths
+    lib_submodules=""
     if [[ "$pin" =~ ^r[0-9]+$ ]]; then
         command -v "$SVN" >/dev/null 2>&1 || die "$id: the registry pins Subversion revision $pin, which needs svn (apt-get install subversion; ARCHIVE_SVN names another)"
         check_repo "$id" "$repo" ""
@@ -148,6 +188,11 @@ fetch_library() {
         lib_from="commit $pin of $repo"
     else
         commit="$("${GIT[@]}" -C "$tree" rev-parse "refs/tags/$pin^{commit}")"
+        # A tag can be moved. The registry records the commit it named when it was pinned, and a different one stops the
+        # archive instead of silently changing the source that ships.
+        [ -n "$resolved" ] || die "$id: the pin $pin is a tag, so the registry has to record the commit it names (resolved_commit)"
+        [ "$commit" = "$resolved" ] \
+            || die "$id: tag $pin names $commit but the registry records $resolved: the tag was moved, or the pin changed; check what BtbN's script builds, then update resolved_commit"
         lib_dir="$id-${pin//\//_}"
         case "$pin" in "$id"-*) lib_dir="${pin//\//_}" ;; esac # openssl-3.6.3, not openssl-openssl-3.6.3
         lib_from="tag $pin (commit $commit) of $repo"
@@ -155,8 +200,21 @@ fetch_library() {
     if [ "$fetched_from" != "$repo" ]; then lib_from="$lib_from, fetched from $fetched_from"; fi
     "${GIT[@]}" -C "$tree" checkout -q "$commit"
     if [ -f "$tree/.gitmodules" ]; then
-        retry "fetching the submodules of $id" "${GIT[@]}" -C "$tree" submodule update --init --recursive --depth 1 --quiet \
-            || die "$id: could not fetch its submodules after $ATTEMPTS attempts"
+        case "$submodules" in
+            all)
+                retry "fetching the submodules of $id" "${GIT[@]}" -C "$tree" submodule update --init --recursive --depth 1 --quiet \
+                    || die "$id: could not fetch its submodules after $ATTEMPTS attempts"
+                ;;
+            paths:*)
+                paths="${submodules#paths:}"
+                # shellcheck disable=SC2086 # a list of paths, none with a space
+                retry "fetching the submodules of $id" "${GIT[@]}" -C "$tree" submodule update --init --recursive --depth 1 --quiet -- $paths \
+                    || die "$id: could not fetch its submodules ($paths) after $ATTEMPTS attempts"
+                lib_submodules="submodules: only $paths, which is all BtbN's script checks out"
+                ;;
+            none) lib_submodules="submodules: none, BtbN's script checks none out" ;;
+            *) die "$id: unknown submodule policy '$submodules'" ;;
+        esac
     fi
     find "$tree" -name .git -prune -exec rm -rf {} +
     mv "$tree" "$stage/$lib_dir"
@@ -181,15 +239,19 @@ fi
 
 # Every library whose code is compiled into the shipped libraries.
 lib_readme="" downloads="" count=0
-while IFS=$'\x1f' read -r id name license repo pin mirror gpl_in fetched; do
+while IFS=$'\x1f' read -r id name license repo pin mirror gpl_in fetched submodules resolved; do
     [ -n "$id" ] || continue
-    fetch_library "$id" "$repo" "$pin" "$mirror" </dev/null
+    fetch_library "$id" "$repo" "$pin" "$mirror" "$submodules" "$resolved" </dev/null
     count=$((count + 1))
     echo "archived $lib_dir ($count)" >&2
     lib_readme+="  $lib_dir/
       $name ($license)
       $lib_from
 "
+    if [ -n "$lib_submodules" ]; then
+        lib_readme+="      $lib_submodules
+"
+    fi
     if [ -n "$gpl_in" ]; then
         lib_readme+="      compiled into $gpl_in; GPL code, so its source is part of this archive.
 "
@@ -199,7 +261,7 @@ while IFS=$'\x1f' read -r id name license repo pin mirror gpl_in fetched; do
       $fetched
 "
     fi
-done < <(jq -r '(.libraries[], .supporting_libraries[]) | select(.compiled_in != false) | [.id, .name, .license, .pinned_repo, .pinned_commit, (.mirror // ""), (if .gpl == true then (.in_libraries | join(" and ")) else "" end), (.fetched_at_build // "")] | join("\u001f")' "$LIBRARIES")
+done < <(jq -r '(.libraries[], .supporting_libraries[]) | select(.compiled_in != false) | [.id, .name, .license, .pinned_repo, .pinned_commit, (.mirror // ""), (if .gpl == true then (.in_libraries | join(" and ")) else "" end), (.fetched_at_build // ""), (if has("submodules") then (if (.submodules | length) == 0 then "none" else "paths:" + (.submodules | join(" ")) end) else "all" end), (.resolved_commit // "")] | join("\u001f")' "$LIBRARIES")
 [ $count -gt 0 ] || die "$LIBRARIES lists no library whose code is compiled in"
 
 # The ones the registry lists whose code is not inside the shipped libraries are named, not archived.
@@ -239,7 +301,7 @@ This archive is the corresponding source:
       commit or tag it builds.
 
 and the libraries compiled into the shared libraries, each at the commit or tag
-BtbN's scripts build, with its submodules:
+BtbN's scripts build, with the submodules their scripts check out:
 
 ${lib_readme}
 EOF
