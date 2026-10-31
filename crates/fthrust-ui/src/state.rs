@@ -320,6 +320,10 @@ pub struct AppState {
     pub source_label: String,
     /// Settings keys changed since the last engine configure (plan 5 consumes).
     pub changed_keys: Vec<&'static str>,
+    /// The export presets, as last read.
+    pub export_presets_memo: FileMemo<Vec<fthrust_core::export_presets::ExportPreset>>,
+    /// The settings preset names, as last read.
+    pub settings_presets_memo: FileMemo<Vec<String>>,
     /// Settings changed by a dragged control, written once it settles.
     pub settings_save_due: Option<std::time::Instant>,
     /// The theme likewise (colour pickers).
@@ -610,6 +614,36 @@ pub enum BrowseKind {
     SoundFile(String),
 }
 
+/// Parsed contents of a small file a page shows every frame, re-read only
+/// when the file's modification time or size changes. The General tab used
+/// to read and parse `export_presets.json` twice and `presets.json` once
+/// per frame.
+#[derive(Clone, Debug, Default)]
+pub struct FileMemo<T> {
+    key: Option<(Option<std::time::SystemTime>, u64)>,
+    value: Option<T>,
+}
+
+impl<T: Clone> FileMemo<T> {
+    /// The value for `path`, from `load` when the file changed.
+    pub fn get(&mut self, path: &std::path::Path, load: impl FnOnce() -> T) -> T {
+        let meta = std::fs::metadata(path).ok();
+        let key = (
+            meta.as_ref().and_then(|m| m.modified().ok()),
+            meta.as_ref().map_or(0, std::fs::Metadata::len),
+        );
+        match &self.value {
+            Some(v) if self.key == Some(key) => v.clone(),
+            _ => {
+                let v = load();
+                self.key = Some(key);
+                self.value = Some(v.clone());
+                v
+            }
+        }
+    }
+}
+
 /// How long a dragged value must stay put before it is written.
 pub const SAVE_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
@@ -674,6 +708,8 @@ impl AppState {
             window: WindowState::default(),
             source_label: "Source".into(),
             changed_keys: Vec::new(),
+            export_presets_memo: FileMemo::default(),
+            settings_presets_memo: FileMemo::default(),
             settings_save_due: None,
             theme_save_due: None,
             error_bar,

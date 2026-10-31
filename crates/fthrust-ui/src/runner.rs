@@ -67,6 +67,8 @@ pub fn run(
     instance: Option<Instance>,
     viewport: ViewportBuilder,
 ) -> Result<(), String> {
+    // Fidelity markers are only read by the bench's state dump.
+    crate::fidelity::set_recording(crate::ui_dump::requested());
     let event_loop = EventLoop::<Wake>::with_user_event()
         .build()
         .map_err(|e| e.to_string())?;
