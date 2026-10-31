@@ -120,8 +120,19 @@ impl ThemeStore {
     /// problem is logged and kept in [`startup_issues`](Self::startup_issues).
     /// A file that could not be read is never replaced: [`save`](Self::save)
     /// refuses.
+    ///
+    /// A theme import that was cut short between its renames (the app was
+    /// killed) is undone first: a missing icons, sounds or fonts folder is
+    /// put back from the import's staging directory.
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let mut issues = Vec::new();
+        let restored = archive::recover_crashed_import(&paths.theme_dir());
+        if !restored.is_empty() {
+            issues.push(format!(
+                "A theme import was interrupted when FTHRust last stopped. Your previous theme folders ({}) were put back.",
+                restored.join(", ")
+            ));
+        }
         for d in [
             paths.theme_dir(),
             paths.theme_icons_dir(),

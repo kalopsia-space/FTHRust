@@ -165,6 +165,54 @@ impl Drop for Staging {
     }
 }
 
+/// Undoes what an import left half done when the app stopped between its
+/// renames: a live folder that is missing while the copy parked in a
+/// `.import-*` directory's `old/` is still there is put back, and the
+/// leftover staging is removed. (A folder that exists is never touched: the
+/// swap got that far, and `theme.json` is written last.) Returns what was
+/// restored, worded for the user. Run before the live folders are created.
+pub(super) fn recover_crashed_import(theme_dir: &Path) -> Vec<String> {
+    let mut restored = Vec::new();
+    let Ok(entries) = std::fs::read_dir(theme_dir) else {
+        return restored;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(Staging::PREFIX)
+        {
+            continue;
+        }
+        let root = entry.path();
+        let mut complete = true;
+        for (_, name) in FOLDERS {
+            let live = theme_dir.join(name);
+            let parked = root.join("old").join(name);
+            if std::fs::symlink_metadata(&live).is_ok()
+                || std::fs::symlink_metadata(&parked).is_err()
+            {
+                continue;
+            }
+            match std::fs::rename(&parked, &live) {
+                Ok(()) => restored.push(name.to_owned()),
+                Err(e) => {
+                    complete = false;
+                    tracing::error!(
+                        "could not put back the theme {name} folder from {}: {e}",
+                        parked.display()
+                    );
+                }
+            }
+        }
+        // What could not be put back stays where it is.
+        if complete {
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+    restored
+}
+
 /// The three live folders after an import swapped them for the staged ones;
 /// puts the old ones back unless committed.
 struct Swapped<'a> {
