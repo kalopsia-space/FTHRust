@@ -4,23 +4,27 @@
 //! crash loses at most the GOP in progress. Ports the Windows reference's
 //! `continuous_recording_writer.cpp` (the Linux reference had no recorder).
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::ffi::aac::AacEncoder;
 use crate::ffi::mux::Muxer;
 use crate::ring::EncodedPacket;
+use crate::transactional_save::{RealFs, SaveFs};
 use crate::{MediaError, Result};
 
 /// The video stream's MP4 time base (90 kHz, like the reference).
 pub const VIDEO_TIME_BASE_DEN: i32 = 90_000;
 
-/// Audio track parameters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One AAC audio track.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecorderAudio {
     /// Sample rate.
     pub sample_rate: u32,
     /// Channel count.
     pub channels: u32,
+    /// Stream title (`title` and `handler_name` tags), e.g. `Default Mix`.
+    pub title: String,
 }
 
 /// What a recording is started with.
@@ -38,28 +42,40 @@ pub struct RecorderConfig {
     pub fps: u32,
     /// Configured bitrate, recorded as metadata.
     pub bitrate_kbps: u32,
-    /// AAC audio track, when wanted.
-    pub audio: Option<RecorderAudio>,
+    /// AAC audio tracks, in stream order.
+    pub audio: Vec<RecorderAudio>,
+}
+
+#[derive(Debug)]
+struct AudioTrack {
+    encoder: AacEncoder,
+    index: usize,
+    started: bool,
+    /// The encoder pts written as 0.
+    first_pts: Option<i64>,
 }
 
 /// An open recording.
 #[derive(Debug)]
 pub struct Recorder {
     mux: Muxer,
+    /// The file claimed for the recording, kept open to start writeback of
+    /// each committed fragment and to fsync the result.
+    file: File,
     path: PathBuf,
     video_index: usize,
     fps: u32,
     first_video_pts: Option<i64>,
+    first_video_wall_ns: Option<i64>,
     video_packets: u64,
-    audio: Option<(AacEncoder, usize)>,
-    audio_started: bool,
-    first_audio_pts: Option<i64>,
+    audio: Vec<AudioTrack>,
     failed: bool,
 }
 
 impl Recorder {
     /// Opens `path`, writes the recoverable header and returns a recorder
-    /// that accepts packets.
+    /// that accepts packets. When anything after claiming the name fails,
+    /// the file is removed again.
     pub fn start(path: &Path, cfg: &RecorderConfig) -> Result<Self> {
         crate::init()?;
         if cfg.extradata.is_empty() {
@@ -75,12 +91,12 @@ impl Recorder {
         }
         // Claim the name first so a recording never truncates an existing
         // file (the muxer opens with O_TRUNC).
-        match std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
         {
-            Ok(_) => {}
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(MediaError::Invalid(format!(
                     "recording path already exists: {}",
@@ -88,7 +104,13 @@ impl Recorder {
                 )));
             }
             Err(e) => return Err(MediaError::Io(e)),
-        }
+        };
+        Self::open(path, file, cfg).inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+    }
+
+    fn open(path: &Path, file: File, cfg: &RecorderConfig) -> Result<Self> {
         let mut mux = Muxer::new(path, true)?;
         mux.set_metadata("fthr_frame_rate", &format!("{}/1", cfg.fps))?;
         mux.set_metadata(
@@ -104,24 +126,33 @@ impl Recorder {
             i64::from(cfg.bitrate_kbps) * 1000,
             &cfg.extradata,
         )?;
-        let mut audio = None;
-        if let Some(a) = cfg.audio {
-            let enc = AacEncoder::new(a.sample_rate, a.channels, mux.wants_global_header())?;
-            let index = mux.add_audio_stream(&enc, "Default Mix")?;
-            audio = Some((enc, index));
+        let mut audio = Vec::new();
+        for a in &cfg.audio {
+            let encoder = AacEncoder::new(a.sample_rate, a.channels, mux.wants_global_header())?;
+            let index = mux.add_audio_stream(&encoder, &a.title)?;
+            audio.push(AudioTrack {
+                encoder,
+                index,
+                started: false,
+                first_pts: None,
+            });
         }
         mux.write_header()?;
-        tracing::info!(path = %path.display(), audio = audio.is_some(), "recoverable fragmented MP4 started");
+        tracing::info!(
+            path = %path.display(),
+            audio_tracks = audio.len(),
+            "recoverable fragmented MP4 started"
+        );
         Ok(Self {
             mux,
+            file,
             path: path.to_path_buf(),
             video_index,
             fps: cfg.fps,
             first_video_pts: None,
+            first_video_wall_ns: None,
             video_packets: 0,
             audio,
-            audio_started: false,
-            first_audio_pts: None,
             failed: false,
         })
     }
@@ -141,6 +172,9 @@ impl Recorder {
                             "Could not commit a completed recording fragment: {e}"
                         ))
                     })?;
+                    // The fragment is complete: let it reach the disk now
+                    // instead of with the next writeback sweep.
+                    crate::payload::start_writeback(&self.file);
                 }
                 first
             }
@@ -148,15 +182,23 @@ impl Recorder {
                 if !packet.keyframe {
                     return Ok(());
                 }
-                self.first_video_pts = Some(packet.pts);
-                packet.pts
+                // Decoding starts at 0 (a fragmented MP4 cannot start
+                // earlier); with a reorder delay the keyframe presents
+                // `pts - dts` ticks in, and time zero is that much before
+                // its capture.
+                let first = packet.dts.min(packet.pts);
+                let lead_ns = (packet.pts - first) * 1_000_000_000 / i64::from(self.fps.max(1));
+                self.first_video_pts = Some(first);
+                self.first_video_wall_ns = Some(packet.wall_time_ns - lead_ns);
+                first
             }
         };
         let pts = packet.pts - first;
+        let dts = packet.dts - first;
         let fps = self.fps as i32;
         let index = self.video_index;
         let bytes = packet.data.bytes()?;
-        self.guard(|m| m.write_packet(index, &bytes, pts, pts, 1, packet.keyframe, (1, fps)))
+        self.guard(|m| m.write_packet(index, &bytes, pts, dts, 1, packet.keyframe, (1, fps)))
             .map_err(|e| {
                 MediaError::Invalid(format!(
                     "The recording file could not be written; completed fragments already on disk remain playable: {e}"
@@ -166,26 +208,54 @@ impl Recorder {
         Ok(())
     }
 
-    /// Encodes and writes interleaved float32 samples. Audio arriving before
-    /// the first video keyframe is ignored so both tracks start together.
-    pub fn write_audio(&mut self, samples: &[f32]) -> Result<()> {
+    /// The capture time that plays at time zero: that of the first keyframe
+    /// written (less any reorder delay).
+    pub fn video_start_ns(&self) -> Option<i64> {
+        self.first_video_wall_ns
+    }
+
+    /// Samples the AAC encoder puts before the first sample it is given:
+    /// a track's first sample plays this far into the recording, so the
+    /// caller starts each track's audio that much after the first keyframe.
+    pub fn audio_priming_frames(&self) -> u32 {
+        self.audio
+            .first()
+            .map_or(0, |t| t.encoder.priming_samples())
+    }
+
+    /// Audio tracks configured.
+    pub fn audio_tracks(&self) -> usize {
+        self.audio.len()
+    }
+
+    /// Encodes and writes interleaved float32 samples to audio track
+    /// `track`. Audio arriving before the first video keyframe is ignored
+    /// so every track starts with the video.
+    pub fn write_audio(&mut self, track: usize, samples: &[f32]) -> Result<()> {
         self.check_live()?;
         if self.first_video_pts.is_none() || samples.is_empty() {
             return Ok(());
         }
-        let Some((enc, index)) = self.audio.as_mut() else {
-            return Ok(());
+        let Some(AudioTrack {
+            encoder,
+            index,
+            started,
+            first_pts,
+        }) = self.audio.get_mut(track)
+        else {
+            return Err(MediaError::Invalid(format!(
+                "the recording has no audio track {track}"
+            )));
         };
-        let index = *index;
-        self.audio_started = true;
-        let rate = enc.sample_rate() as i32;
+        *started = true;
+        let (index, rate) = (*index, encoder.sample_rate() as i32);
         let mux = &mut self.mux;
-        let first_audio_pts = &mut self.first_audio_pts;
         let mut write_err = None;
-        let result = enc.encode(samples, |p| {
+        let result = encoder.encode(samples, |p| {
             // Rebase to the first packet so the track starts at dts 0 (the
             // moov is already on disk, so a nonzero start cannot be edited).
-            let first = *first_audio_pts.get_or_insert(p.pts);
+            // That packet carries the encoder's priming.
+            let first = *first_pts.get_or_insert(p.pts);
             let pts = p.pts - first;
             if write_err.is_none()
                 && let Err(e) = mux.write_packet(index, &p.data, pts, pts, 0, true, (1, rate))
@@ -202,19 +272,25 @@ impl Recorder {
         Ok(())
     }
 
-    /// Flushes the last fragment, drains the audio encoder, writes the
-    /// trailer and returns the file size in bytes.
+    /// Flushes the last fragment, drains the audio encoders, writes the
+    /// trailer, flushes the file to disk and returns its size in bytes.
     pub fn finish(mut self) -> Result<u64> {
         self.check_live()?;
-        if let Some((mut enc, index)) = self.audio.take()
-            && self.audio_started
-        {
-            let rate = enc.sample_rate() as i32;
+        for track in std::mem::take(&mut self.audio) {
+            let AudioTrack {
+                mut encoder,
+                index,
+                started,
+                mut first_pts,
+            } = track;
+            if !started {
+                continue;
+            }
+            let rate = encoder.sample_rate() as i32;
             let mux = &mut self.mux;
-            let first_audio_pts = &mut self.first_audio_pts;
             let mut write_err = None;
-            enc.flush(|p| {
-                let first = *first_audio_pts.get_or_insert(p.pts);
+            encoder.flush(|p| {
+                let first = *first_pts.get_or_insert(p.pts);
                 let pts = p.pts - first;
                 if write_err.is_none()
                     && let Err(e) = mux.write_packet(index, &p.data, pts, pts, 0, true, (1, rate))
@@ -233,6 +309,18 @@ impl Recorder {
             })?;
         }
         self.mux.finish()?;
+        let synced = self
+            .file
+            .sync_all()
+            .and_then(|()| match self.path.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => RealFs.sync_directory(dir),
+                _ => Ok(()),
+            });
+        synced.map_err(|e| {
+            MediaError::Invalid(format!(
+                "The recording was written but could not be flushed to disk: {e}"
+            ))
+        })?;
         Ok(std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0))
     }
 

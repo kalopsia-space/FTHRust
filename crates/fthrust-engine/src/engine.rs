@@ -325,8 +325,19 @@ impl CaptureEngine {
         );
     }
 
-    /// Current status (audio and save fields are filled by the daemon).
+    /// Current status (save fields are filled by the daemon).
     pub fn status(&self) -> StatusSnapshot {
+        // The audio sources are read before the status lock is taken: their
+        // locks are shared with the capture callback and window extraction,
+        // and the capture thread needs the status lock for every frame.
+        let audio = if self.started {
+            self.audio.status()
+        } else {
+            AudioStatus {
+                system: SourceStatus::Disabled,
+                microphone: SourceStatus::Disabled,
+            }
+        };
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -348,14 +359,7 @@ impl CaptureEngine {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: if self.started {
-                self.audio.status()
-            } else {
-                AudioStatus {
-                    system: SourceStatus::Disabled,
-                    microphone: SourceStatus::Disabled,
-                }
-            },
+            audio,
             last_save: None,
         }
     }
@@ -496,6 +500,8 @@ pub struct EngineHandle {
 impl EngineHandle {
     /// Current capture status (no save fields).
     pub fn status(&self) -> StatusSnapshot {
+        // Read outside the status lock, as in `CaptureEngine::status`.
+        let audio = self.inner.audio.status();
         let s = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         StatusSnapshot {
             frames_captured: s.frames_captured,
@@ -517,7 +523,7 @@ impl EngineHandle {
             selected_output: s.selected_output.clone(),
             native_width: s.native_width,
             native_height: s.native_height,
-            audio: self.inner.audio.status(),
+            audio,
             last_save: None,
         }
     }
@@ -559,10 +565,11 @@ impl EngineHandle {
             .clone()
     }
 
-    /// Installs or removes the packet tap.
+    /// Installs or removes the packet tap. Installing one also asks the
+    /// encoder for a keyframe, so a recording starts at once.
     pub fn set_packet_tap(&self, tap: Option<Sender<EncodedPacket>>) {
-        if tap.is_some() {
-            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        let installing = tap.is_some();
+        if installing {
             self.inner.record_overflow.store(false, Ordering::SeqCst);
         }
         *self
@@ -570,6 +577,12 @@ impl EngineHandle {
             .packet_tap
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = tap;
+        // Only once the tap is in place: requested before it, the capture
+        // thread could encode that keyframe and find no tap yet, and the
+        // recording waited for the next scheduled keyframe (up to 2 s).
+        if installing {
+            self.inner.keyframe_request.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Whether the packet tap overflowed since it was installed (cleared on
@@ -1470,5 +1483,61 @@ const ZERO_COPY_SURFACES: usize = 4;
 fn log_zero_copy_off(logged: &mut bool, reason: &str) {
     if !std::mem::replace(logged, true) {
         tracing::info!(reason, "zero-copy capture unavailable; copying frames");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_recording_keyframe_is_requested_only_once_the_tap_is_in_place() {
+        // The capture thread consumes the keyframe request at its next frame
+        // and reads the tap after encoding it. Requested before the tap was
+        // installed, the keyframe could reach the ring but not the recorder,
+        // which then waited for the next scheduled keyframe (up to 2 s).
+        let script = Arc::new(Mutex::new(crate::backend::SyntheticScript::new(64, 64)));
+        let deps = EngineDeps {
+            backends: Arc::new(crate::backend::SyntheticFactory {
+                script,
+                candidates: vec![BackendKind::WlrScreencopy],
+            }),
+            audio: Arc::new(crate::audio::SyntheticAudio::new()),
+            backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+        };
+        let config = EngineConfig {
+            capture: fthrust_core::capture_config::CaptureConfig::default(),
+            max_buffer_mb: 0,
+            backend_override: None,
+        };
+        let engine = CaptureEngine::new(config, deps);
+        let handle = engine.handle();
+        for round in 0..2000 {
+            handle.set_packet_tap(None);
+            handle.inner.keyframe_request.store(false, Ordering::SeqCst);
+            let (tx, _rx) = crossbeam_channel::bounded(1);
+            let inner = handle.inner.clone();
+            let ready = Arc::new(std::sync::Barrier::new(2));
+            let watcher = {
+                let ready = ready.clone();
+                std::thread::spawn(move || {
+                    ready.wait();
+                    while !inner.keyframe_request.load(Ordering::SeqCst) {
+                        std::hint::spin_loop();
+                    }
+                    inner
+                        .packet_tap
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .is_some()
+                })
+            };
+            ready.wait();
+            handle.set_packet_tap(Some(tx));
+            assert!(
+                watcher.join().unwrap(),
+                "round {round}: the keyframe was requested before the tap was installed"
+            );
+        }
     }
 }

@@ -63,8 +63,12 @@ fn variable_timing_and_delayed_publication() {
     let target = wall - SECOND;
     let s = ring.snapshot(30_000, target, 0).unwrap();
     assert!(s.full_history);
-    assert!(s.packets.last().unwrap().wall_time_ns <= target);
-    assert_eq!(s.presentation_end_ns, target);
+    let last = s.packets.last().unwrap().wall_time_ns;
+    assert!(last <= target);
+    // Presentation ends with the newest selected frame.
+    assert_eq!(s.presentation_end_ns, last + SECOND / fps as i64);
+    assert!(s.presentation_end_ns <= target + SECOND / fps as i64);
+    assert_eq!(s.presentation_end_ns - s.presentation_start_ns, 30 * SECOND);
     assert_eq!(
         s.packets.last().unwrap().pts - s.presentation_start_pts + 1,
         30 * fps as i64
@@ -315,8 +319,42 @@ fn clip_length_snapshot_starts_on_a_keyframe_within_the_window() {
         assert!(s.full_history, "phase {extra}: the clip was cut short");
         assert!(s.packets[0].keyframe, "phase {extra}");
         assert!(
-            s.packets[0].wall_time_ns <= end - 45 * SECOND,
+            s.packets[0].wall_time_ns <= s.presentation_start_ns,
             "phase {extra}"
         );
     }
+}
+
+#[test]
+fn snapshot_anchors_on_the_newest_packet_when_the_encoder_lags() {
+    // The save asks for the window ending now, but the encoder's latency
+    // (lookahead, a busy GPU) means the newest packet is 2.5 s older. The
+    // clip, its audio window and its start keyframe must all follow the
+    // newest frame; anchored on the request time, the audio led the video by
+    // the latency and the start keyframe could land after the first frame.
+    let fps = 60i64;
+    let frame_ns = SECOND / fps;
+    let ring = EncodedRing::new(40_000, fps as u32, 0);
+    for frame in 0..=60 * fps {
+        ring.push(packet(frame, frame * SECOND / fps, frame % (2 * fps) == 0));
+    }
+    let newest = 60 * SECOND;
+    let s = ring.snapshot(30_000, newest + 2_500_000_000, 0).unwrap();
+    assert!(s.full_history);
+    assert_eq!(s.media_end_ns, newest);
+    assert_eq!(s.presentation_end_ns, newest + frame_ns);
+    assert_eq!(s.presentation_end_ns - s.presentation_start_ns, 30 * SECOND);
+    let presented = s.presentation_start_pts * SECOND / fps;
+    assert!(
+        (presented - s.presentation_start_ns).abs() <= frame_ns / 2,
+        "the first presented frame ({presented} ns) and the audio window start ({} ns) differ",
+        s.presentation_start_ns
+    );
+    assert!(s.packets[0].keyframe);
+    assert!(
+        s.packets[0].pts <= s.presentation_start_pts,
+        "the start keyframe (pts {}) comes after the first presented frame (pts {})",
+        s.packets[0].pts,
+        s.presentation_start_pts
+    );
 }

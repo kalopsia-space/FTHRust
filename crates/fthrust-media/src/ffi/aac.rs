@@ -122,6 +122,13 @@ impl AacEncoder {
         self.sample_rate
     }
 
+    /// Samples per channel the encoder puts before the first input sample
+    /// (its priming; the first packet starts that far before input pts 0).
+    pub fn priming_samples(&self) -> u32 {
+        // SAFETY: ctx is a valid, open codec context.
+        unsafe { (*self.ctx).initial_padding.max(0) as u32 }
+    }
+
     /// Allocates codec parameters describing this encoder (caller frees via
     /// [`AacEncoder::free_parameters`]).
     pub(crate) fn parameters(&self) -> Result<*mut ffi::AVCodecParameters> {
@@ -149,30 +156,45 @@ impl AacEncoder {
     }
 
     /// Encodes interleaved float32 samples; packets carry pts in samples.
-    /// Samples are buffered until a full encoder frame is available (the
+    /// Whole encoder frames are encoded straight from `interleaved`; only a
+    /// remainder shorter than a frame is buffered until the next call (the
     /// AAC encoder only accepts a short frame as the last one).
     pub fn encode(&mut self, interleaved: &[f32], mut sink: impl FnMut(RawPacket)) -> Result<()> {
-        self.pending.extend_from_slice(interleaved);
         let frame_samples = self.frame_size * self.channels;
-        let mut offset = 0;
-        while self.pending.len() - offset >= frame_samples {
-            self.send_frame(offset, self.frame_size)?;
+        let mut input = interleaved;
+        if !self.pending.is_empty() {
+            let take = (frame_samples - self.pending.len()).min(input.len());
+            self.pending.extend_from_slice(&input[..take]);
+            input = &input[take..];
+            if self.pending.len() < frame_samples {
+                return Ok(());
+            }
+            let pending = std::mem::take(&mut self.pending);
+            let sent = self.send_frame(&pending, self.frame_size);
+            self.pending = pending;
+            self.pending.clear();
+            sent?;
             self.receive(&mut sink)?;
-            offset += frame_samples;
         }
-        self.pending.drain(..offset);
+        let mut frames = input.chunks_exact(frame_samples);
+        for frame in &mut frames {
+            self.send_frame(frame, self.frame_size)?;
+            self.receive(&mut sink)?;
+        }
+        self.pending.extend_from_slice(frames.remainder());
         Ok(())
     }
 
-    /// Sends `n` frames starting at `offset` samples into `pending`.
-    fn send_frame(&mut self, offset: usize, n: usize) -> Result<()> {
+    /// Sends the first `n` frames of `src`.
+    fn send_frame(&mut self, src: &[f32], n: usize) -> Result<()> {
+        assert!(src.len() >= n * self.channels, "short AAC input frame");
         // SAFETY: frame and swr are valid; the source slice covers n frames
-        // of `channels` samples each (checked by the callers).
+        // of `channels` samples each (asserted above).
         unsafe {
             super::check(ffi::av_frame_make_writable(self.frame))?;
             (*self.frame).nb_samples = n as i32;
             (*self.frame).pts = self.next_pts;
-            let src = self.pending.as_ptr().add(offset) as *const u8;
+            let src = src.as_ptr() as *const u8;
             // FFmpeg 6.1 declares the plane arrays as `*mut`, 7.0+ as
             // `*const`; the inferred casts fit either binding.
             let mut src_data: [*const u8; 1] = [src];
@@ -195,8 +217,8 @@ impl AacEncoder {
     pub fn flush(&mut self, mut sink: impl FnMut(RawPacket)) -> Result<()> {
         let rest = self.pending.len() / self.channels;
         if rest > 0 {
-            self.send_frame(0, rest)?;
-            self.pending.clear();
+            let pending = std::mem::take(&mut self.pending);
+            self.send_frame(&pending, rest)?;
             self.receive(&mut sink)?;
         }
         // SAFETY: ctx is valid; a null frame starts draining.
