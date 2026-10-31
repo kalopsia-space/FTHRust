@@ -15,7 +15,7 @@ Things FTHRust can draw into your clips or onto your screen: a webcam, images, a
 
 **Settings → Visuals** holds everything that gets drawn **into** saved clips. On the right is the **Composite preview**, a mock frame where you arrange it all: drag a box to move it, and drag its edges to resize it. Boxes are kept on screen and at least 5% of the frame in size.
 
-Overlays are burned in when a clip is saved, so they're part of the file wherever it goes. Your live capture and the replay buffer stay clean.
+Overlays are burned in when a clip is saved, so they're part of the file wherever it goes. Your live capture and the replay buffer stay clean. If the burn fails, or its result comes out shorter than the clip, the clip stays as it was saved, without the overlays.
 
 **Preview background → Choose image** puts a screenshot of your game behind the preview, so you can place things around its HUD. **Use default** brings back the stock picture.
 
