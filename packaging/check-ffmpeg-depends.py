@@ -168,11 +168,9 @@ def main():
     used_not_linked = set()
 
     covered = linked_away = 0
-    closure_repos = set()
     for name in sorted(closure):
         infos = scripts.get(name, [])
         repos = [r for i in infos for r, _ in i["repos"] if r]
-        closure_repos.update(repos)
         if not infos and name in groups:
             continue  # a directory of scripts: its members are in the closure themselves
         if not infos:
