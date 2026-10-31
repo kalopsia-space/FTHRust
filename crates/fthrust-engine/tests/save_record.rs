@@ -828,3 +828,53 @@ fn a_clip_does_not_end_on_audio_the_source_has_not_delivered() {
     );
     r.engine.shutdown();
 }
+
+#[test]
+fn starting_a_recording_does_not_wait_on_the_engine() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // StartRecording ran on the daemon loop: the admission checks and the
+    // file creation, muxer and encoder setup all held up heartbeats and
+    // every other command. Now the record thread does all of it.
+    let mut r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(SlowStatusAudio {
+            inner: SyntheticAudio::new(),
+            delay: Duration::from_millis(300),
+        }),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 10);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("quick.mp4");
+    let t = Instant::now();
+    r.record.start(71, path.clone());
+    let took = t.elapsed();
+    assert!(took < Duration::from_millis(100), "start took {took:?}");
+    next_event(&r.events, Duration::from_secs(10), |e| {
+        matches!(e, Event::RecordingStarted { request_id: 71, .. })
+    });
+    r.record.start(72, tmp.path().join("second.mp4"));
+    let e = next_event(&r.events, Duration::from_secs(5), |e| {
+        matches!(e, Event::RecordingError { request_id: 72, .. })
+    });
+    assert!(
+        matches!(&e, Event::RecordingError { message, .. } if message.contains("already in progress")),
+        "{e:?}"
+    );
+    r.record.stop(73);
+    let e = next_event(&r.events, Duration::from_secs(10), |e| {
+        matches!(
+            e,
+            Event::RecordingStopped { .. } | Event::RecordingError { .. }
+        )
+    });
+    assert!(
+        matches!(e, Event::RecordingStopped { request_id: 73, .. }),
+        "{e:?}"
+    );
+    assert!(path.exists());
+    r.engine.shutdown();
+}

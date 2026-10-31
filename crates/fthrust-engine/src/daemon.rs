@@ -352,10 +352,7 @@ impl Service {
 
     fn shutdown(&mut self) {
         if let Some(r) = &self.record {
-            if r.state() != RecordingState::Idle {
-                r.stop(0);
-            }
-            r.join();
+            r.shutdown();
         }
         if let Some(e) = self.engine.as_mut() {
             e.shutdown();
