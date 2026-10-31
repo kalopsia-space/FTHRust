@@ -210,3 +210,25 @@ fn capture_follows_the_stored_preset_only_with_nvenc_chosen() {
     }
     assert_eq!(DEFAULT_PRESET, 4);
 }
+
+#[test]
+fn only_svt_av1_needs_low_delay_settings_for_capture() {
+    use fthrust_media::encoder_policy::low_delay_options;
+    // Low delay, with the constant bitrate SVT-AV1 needs for it.
+    assert_eq!(
+        low_delay_options("libsvtav1"),
+        &[("svtav1-params", "pred-struct=1:rc=2")]
+    );
+    for name in [
+        "libopenh264",
+        "libx264",
+        "libkvazaar",
+        "libx265",
+        "libaom-av1",
+        "librav1e",
+        "h264_vaapi",
+        "av1_nvenc",
+    ] {
+        assert!(low_delay_options(name).is_empty(), "{name}");
+    }
+}

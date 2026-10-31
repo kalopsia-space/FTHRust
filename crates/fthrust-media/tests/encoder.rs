@@ -542,6 +542,65 @@ fn software_h264_and_hevc_capture_hold_back_no_frames() {
 }
 
 #[test]
+fn software_av1_capture_holds_back_at_most_a_few_frames() {
+    // SVT-AV1's default random-access structure holds about 60 to 76
+    // frames, two seconds and more that a clip saved now would miss. Its
+    // own threads may deliver a packet a call or two late.
+    let (w, h) = (640u32, 360u32);
+    let cfg = EncoderConfig {
+        codec: Codec::Av1,
+        ..software_config(w, h, 30)
+    };
+    let Ok(mut enc) = Encoder::open(&cfg) else {
+        return eprintln!("skipping: no software AV1 encoder");
+    };
+    if enc.active_codec() != "libsvtav1" {
+        return eprintln!(
+            "skipping: the software AV1 encoder is {}",
+            enc.active_codec()
+        );
+    }
+    let mut out = Vec::new();
+    let mut held = Vec::new();
+    for i in 0..40u32 {
+        let bgra = support::synthetic_bgra(w, h, i);
+        enc.encode(
+            &bgra,
+            w as usize * 4,
+            w,
+            h,
+            i64::from(i) * SECOND / 30,
+            &mut out,
+        )
+        .unwrap();
+        held.push(i as usize + 1 - out.len());
+    }
+    eprintln!("frames held back: {held:?}");
+    assert!(held.iter().all(|&n| n <= 4), "{held:?}");
+    // Clips start on keyframes: every two seconds, and where a recording
+    // asks for one (frame 75), as with the other encoders.
+    for i in 40..150u32 {
+        if i == 75 {
+            enc.request_keyframe();
+        }
+        let bgra = support::synthetic_bgra(w, h, i);
+        enc.encode(
+            &bgra,
+            w as usize * 4,
+            w,
+            h,
+            i64::from(i) * SECOND / 30,
+            &mut out,
+        )
+        .unwrap();
+    }
+    enc.flush(&mut out).unwrap();
+    let keys: Vec<i64> = out.iter().filter(|p| p.keyframe).map(|p| p.pts).collect();
+    eprintln!("keyframes at {keys:?}");
+    assert_eq!(keys, [0, 60, 75, 135]);
+}
+
+#[test]
 fn a_failed_encode_keeps_the_keyframe_request() {
     if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
         return;

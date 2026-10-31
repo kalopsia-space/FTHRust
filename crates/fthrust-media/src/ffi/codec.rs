@@ -31,6 +31,10 @@ pub struct OpenParams {
     /// Pixel format of the frames the caller will send (NV12 for hardware,
     /// YUV420P for software).
     pub pix_fmt: ffi::AVPixelFormat,
+    /// Fail the open, instead of warning, when the encoder rejects an
+    /// option or its library a setting given in one (`AV_EF_EXPLODE`): for
+    /// settings tried with a fallback ([`RawEncoder::open_preferring`]).
+    pub strict_options: bool,
 }
 
 /// One packet received from the encoder.
@@ -230,8 +234,19 @@ impl RawEncoder {
                 }
                 let ret = ffi::av_opt_set((*ctx).priv_data, k.as_ptr(), v.as_ptr(), 0);
                 if ret < 0 {
+                    if params.strict_options {
+                        free(ctx);
+                        return Err(MediaError::Invalid(format!(
+                            "{name} does not accept {key}={value}"
+                        )));
+                    }
                     tracing::warn!(encoder = name, option = key, value = %value, "encoder option not accepted");
                 }
+            }
+            if params.strict_options {
+                // Wrappers such as libsvtav1's check the settings their
+                // library parses, and only warn about refused ones without.
+                (*ctx).err_recognition |= ffi::AV_EF_EXPLODE;
             }
             (*ctx).flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
 
@@ -253,6 +268,31 @@ impl RawEncoder {
                 name,
             })
         }
+    }
+
+    /// Opens a software encoder with the `preferred` options added, checked
+    /// strictly, and without them if that fails, so a setting the linked
+    /// library refuses or doesn't know costs only what it would have gained.
+    /// The flag says whether the preferred options were taken.
+    pub fn open_preferring(
+        name: &'static str,
+        params: &OpenParams,
+        preferred: &[(&'static str, &'static str)],
+    ) -> Result<(Self, bool)> {
+        if !preferred.is_empty() {
+            let mut strict = params.clone();
+            strict
+                .options
+                .extend(preferred.iter().map(|&(k, v)| (k, v.to_owned())));
+            strict.strict_options = true;
+            match Self::open(name, &strict, None) {
+                Ok(raw) => return Ok((raw, true)),
+                Err(e) => {
+                    tracing::debug!(encoder = name, error = %e, ?preferred, "preferred settings refused")
+                }
+            }
+        }
+        Ok((Self::open(name, params, None)?, false))
     }
 
     /// The encoder name this context was opened with.
@@ -436,6 +476,7 @@ mod tests {
             options: Vec::new(),
             gop_frames: None,
             pix_fmt: ffi::AVPixelFormat::AV_PIX_FMT_YUV420P,
+            strict_options: false,
         }
     }
 
@@ -515,6 +556,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn strict_options_fail_on_a_setting_the_library_does_not_know() {
+        crate::init().unwrap();
+        if !RawEncoder::exists("libsvtav1") {
+            return eprintln!("skipping: no libsvtav1 in this FFmpeg build");
+        }
+        let unknown = OpenParams {
+            options: vec![("svtav1-params", "no-such-setting=1".to_owned())],
+            ..params()
+        };
+        // Without strict checking the wrapper only warns.
+        assert!(RawEncoder::open("libsvtav1", &unknown, None).is_ok());
+        let strict = OpenParams {
+            strict_options: true,
+            ..unknown
+        };
+        assert!(RawEncoder::open("libsvtav1", &strict, None).is_err());
+    }
+
+    #[test]
+    fn preferred_settings_that_are_refused_fall_back() {
+        crate::init().unwrap();
+        if !RawEncoder::exists("libsvtav1") {
+            return eprintln!("skipping: no libsvtav1 in this FFmpeg build");
+        }
+        let open = |preferred| RawEncoder::open_preferring("libsvtav1", &params(), preferred);
+        // Low delay with variable bitrate: SVT-AV1 refuses the pair.
+        assert!(!open(&[("svtav1-params", "pred-struct=1")]).unwrap().1);
+        // An option the wrapper doesn't have.
+        assert!(!open(&[("no-such-option", "1")]).unwrap().1);
+        // The capture settings themselves are taken.
+        let low_delay = crate::encoder_policy::low_delay_options("libsvtav1");
+        assert!(open(low_delay).unwrap().1);
     }
 
     #[test]
