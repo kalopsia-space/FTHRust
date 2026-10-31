@@ -162,6 +162,8 @@ struct Shared {
     resolution_changed: bool,
     dmabuf_only: bool,
     frames: u64,
+    /// Frames copied into a newly allocated buffer (tests read it).
+    allocations: u64,
 }
 
 struct Slot {
@@ -177,7 +179,9 @@ impl Slot {
     /// The PipeWire side: copies `src` (rows `stride` apart when the chunk
     /// says so) into a recycled buffer and publishes it as the newest frame.
     /// The copy runs with the lock released, so the capture side never
-    /// waits for it.
+    /// waits for it. The buffer is the spare one or, when the source runs
+    /// faster than capture, the frame nobody took yet: the new one replaces
+    /// it anyway, so a fast source allocates nothing per frame.
     fn deliver(&self, src: &[u8], stride: Option<usize>, pts_ns: i64) {
         let (layout, mut frame) = {
             let mut shared = self.lock();
@@ -187,7 +191,15 @@ impl Slot {
             if let Some(stride) = stride {
                 layout.stride = stride;
             }
-            (layout, shared.spare.take().unwrap_or_default())
+            let recycled = shared
+                .spare
+                .take()
+                .or_else(|| shared.pending.take().map(|d| d.frame));
+            let frame = recycled.unwrap_or_else(|| {
+                shared.allocations += 1;
+                BgraFrame::default()
+            });
+            (layout, frame)
         };
         let copied = copy_rows(src, &layout, pts_ns, &mut frame);
         let mut shared = self.lock();
@@ -376,8 +388,11 @@ impl PipeWireVideoStream {
                     return Err(CaptureFailure::Failed("stream resolution changed".into()));
                 }
                 if let Some(delivered) = shared.pending.take() {
-                    // The previous frame becomes the next copy's buffer.
-                    if let Some(old) = self.last.take() {
+                    // The previous frame becomes the next copy's buffer,
+                    // unless one is already waiting.
+                    if let Some(old) = self.last.take()
+                        && shared.spare.is_none()
+                    {
                         shared.spare = Some(old.frame);
                     }
                     break Some(delivered);
@@ -760,6 +775,25 @@ mod tests {
         assert!(!view.repeated, "a repeat came first");
         assert_eq!(view.data[0], 2);
         producer.join().unwrap();
+    }
+
+    #[test]
+    fn a_source_faster_than_capture_allocates_nothing_per_frame() {
+        // A 120 Hz source captured at 60 fps: two deliveries per capture.
+        let mut stream = receiver(60);
+        negotiated(&stream, PixelLayout::Bgrx);
+        for i in 0..40u8 {
+            deliver(&stream, i);
+            deliver(&stream, i.wrapping_add(100));
+            let view = stream.capture().unwrap();
+            assert!(!view.repeated);
+            assert_eq!(view.data[0], i.wrapping_add(100), "the newest frame");
+        }
+        let allocations = stream.slot.lock().allocations;
+        assert!(
+            allocations <= 3,
+            "{allocations} buffers allocated for 80 frames"
+        );
     }
 
     #[test]
