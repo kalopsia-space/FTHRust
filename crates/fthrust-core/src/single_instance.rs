@@ -1,7 +1,8 @@
 //! One UI at a time (`core/single_instance.py`, `core/instance_activation.py`):
 //! an exclusive `flock` on `~/.fthr/fthr.lock` (fail-open when the lock
 //! cannot be taken for any reason but "held by another instance") and the
-//! one-way `activate` message a second launch sends to the owner.
+//! `activate` message a second launch sends to the owner, which answers
+//! [`ACTIVATED`] or, once it is quitting, [`EXITING`].
 
 use std::fs::File;
 use std::io::Write;
@@ -11,6 +12,12 @@ use nix::fcntl::{Flock, FlockArg};
 
 /// The activation message.
 pub const ACTIVATE: &[u8] = b"activate\n";
+
+/// The owner's answer: it shows its window.
+pub const ACTIVATED: &[u8] = b"ok\n";
+
+/// The owner's answer: it is shutting down (the lock goes when it is done).
+pub const EXITING: &[u8] = b"exiting\n";
 
 /// `<runtime>/instance.sock`.
 pub fn activation_socket_path(runtime_dir: &Path) -> PathBuf {

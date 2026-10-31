@@ -1114,3 +1114,23 @@ fn the_hang_check_spares_a_saving_or_quitting_engine() {
         "{fx:?}"
     );
 }
+
+/// Final review of the audit fixes: quitting while a recording finishes
+/// gives the engine the recording's time before it is signalled.
+#[test]
+fn a_stop_with_a_recording_finishing_gets_the_recordings_grace() {
+    use fthrust_ui::services::engine::{KILL_GRACE_S, RECORDING_EXIT_GRACE_S};
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 99, &mut now);
+    assert_eq!(sv.stop_grace(), KILL_GRACE_S);
+    sv.set_recording(true);
+    let fx = sv.handle(Input::Stop, now + 0.1);
+    assert!(
+        fx.iter().any(|e| matches!(
+            e,
+            Effect::Kill { graceful: true, grace_s } if *grace_s == RECORDING_EXIT_GRACE_S
+        )),
+        "{fx:?}"
+    );
+}

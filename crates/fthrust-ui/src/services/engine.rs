@@ -52,6 +52,9 @@ pub const KILL_GRACE_S: f64 = 2.0;
 /// capturing), so it gets about that long plus a margin. The UI fails a save
 /// that hasn't answered in 60 s anyway.
 pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
+/// The same with a manual recording still finishing: the engine gives a
+/// recording 15 s to stop when it shuts down.
+pub const RECORDING_EXIT_GRACE_S: f64 = 20.0;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]
@@ -258,6 +261,18 @@ impl Supervisor {
     /// Whether a clip save is in flight.
     pub fn save_busy(&self) -> bool {
         self.save_busy
+    }
+
+    /// How long a stop now gives the engine before it is signalled: a save
+    /// in flight or a recording still finishing gets its time.
+    pub fn stop_grace(&self) -> f64 {
+        if self.save_busy {
+            SAVE_EXIT_GRACE_S
+        } else if self.recording {
+            RECORDING_EXIT_GRACE_S
+        } else {
+            KILL_GRACE_S
+        }
     }
 
     /// The recording service reports whether a recording is not idle.
@@ -514,12 +529,9 @@ impl Supervisor {
                 // restart used to spawn a new engine after the stop).
                 self.no_more_starts(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
-                    // Quitting mid-save: let the engine finish the clip.
-                    let grace_s = if self.save_busy {
-                        SAVE_EXIT_GRACE_S
-                    } else {
-                        KILL_GRACE_S
-                    };
+                    // Quitting mid-save or mid-recording: let the engine
+                    // finish the file.
+                    let grace_s = self.stop_grace();
                     self.begin_stop(&mut out, true, grace_s);
                 }
             }
@@ -836,6 +848,12 @@ impl Supervisor {
             }
             Input::Tick => {}
         }
+        // A quit signal is seen here at once, before the shutdown sends
+        // `Quitting`; a logout ends the engine too, and its automatic
+        // restart must not start a new one.
+        if !self.final_stop && super::quitting() {
+            self.no_more_starts(&mut out);
+        }
         // Timers.
         if let Some(at) = self.restart_at
             && now >= at
@@ -938,20 +956,14 @@ impl Supervisor {
             };
             self.engine_gone(&mut out, detail.into(), now);
             // engine_gone marked it stopped; the process is still there. With
-            // a save in flight it gets the save's grace first: an engine that
-            // is busy finishing a clip is not cut off.
+            // a save in flight (or a recording) it gets that file's grace
+            // first: an engine that is busy finishing a clip is not cut off.
+            let grace_s = self.stop_grace();
             self.phase = Phase::Stopping;
             self.generation += 1;
-            out.push(if self.save_busy {
-                Effect::Kill {
-                    graceful: true,
-                    grace_s: SAVE_EXIT_GRACE_S,
-                }
-            } else {
-                Effect::Kill {
-                    graceful: false,
-                    grace_s: KILL_GRACE_S,
-                }
+            out.push(Effect::Kill {
+                graceful: grace_s > KILL_GRACE_S,
+                grace_s,
             });
         }
         out
@@ -1160,19 +1172,14 @@ impl EngineDriver {
     /// it is done, so a save in flight is finished rather than cut off by
     /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
-        let save_busy = self
+        let grace = self
             .supervisor
             .lock()
-            .map(|s| s.save_busy())
-            .unwrap_or(false);
+            .map(|s| s.stop_grace())
+            .unwrap_or(KILL_GRACE_S);
         let _ = self.inputs.send(Input::Stop);
         // The kill task's own bound: the graceful wait it was given, then
         // 1 s after SIGTERM and 0.5 s after SIGKILL, plus some slack.
-        let grace = if save_busy {
-            SAVE_EXIT_GRACE_S
-        } else {
-            KILL_GRACE_S
-        };
         let deadline = Instant::now() + Duration::from_secs_f64(grace + 3.0);
         // The supervisor picks the Stop up within one loop turn; give it
         // that long before trusting "no process" to mean "already gone".

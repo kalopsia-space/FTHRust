@@ -111,15 +111,21 @@ impl App {
         }
     }
 
-    /// The reference's shutdown order, then the window geometry is saved.
+    /// The reference's shutdown order, then the window geometry is saved,
+    /// the diagnostics session closed and, last, the instance lock let go:
+    /// a launch meanwhile is told this one is quitting and waits for the
+    /// lock, rather than being told the (closed) window was shown.
     pub fn on_exit(&mut self) {
+        let instance = self.services.as_mut().and_then(|s| s.take_instance());
+        if let Some(i) = &instance {
+            i.set_exiting();
+        }
         self.state.flush_saves(true);
         editor::sessions::shutdown(&mut self.state);
         if let Some(mut services) = self.services.take() {
             services.prepare_exit(&mut self.state);
             services.shutdown();
         }
-        services::diagnostics::emit(&self.state, "app", "exit", serde_json::json!({}));
         // winit on Wayland has no window position; keep size and state.
         let rect = self.state.window.last_inner;
         if rect.width > 0 && rect.height > 0 {
@@ -129,6 +135,16 @@ impl App {
                 self.state.window.maximized,
             );
         }
+        // Anything the shutdown changed.
+        self.state.flush_saves(true);
+        services::diagnostics::emit(&self.state, "app", "exit", serde_json::json!({}));
+        // The shutdown ran in order, whatever ended the window loop (a
+        // compositor that went away included): the next launch must not
+        // report this session as a crash.
+        if let Some(session) = &self.state.diagnostics {
+            session.close(true);
+        }
+        drop(instance);
     }
 
     /// The window clear colour (the theme background).

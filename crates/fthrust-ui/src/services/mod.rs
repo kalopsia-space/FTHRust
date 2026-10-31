@@ -1107,6 +1107,12 @@ impl Services {
         self.instance = Some(instance);
     }
 
+    /// Hands the instance lock over, so the app can let it go after the
+    /// last write of its shutdown.
+    pub fn take_instance(&mut self) -> Option<instance::Instance> {
+        self.instance.take()
+    }
+
     /// The outbox (for services started later).
     pub fn outbox(&self) -> &Outbox {
         &self.outbox
@@ -1652,7 +1658,18 @@ impl Services {
             return;
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while self.recording.busy() && std::time::Instant::now() < deadline {
+        loop {
+            match self.recording.state() {
+                // It started meanwhile.
+                recording::RecordState::Recording => self.toggle_recording(state),
+                recording::RecordState::Starting | recording::RecordState::Stopping => {}
+                // Idle, or waiting for a capture restart that quitting
+                // cancelled: nothing to wait for.
+                _ => break,
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
             match self
                 .events
                 .recv_timeout(std::time::Duration::from_millis(50))
@@ -1669,6 +1686,20 @@ impl Services {
             let now = self.now();
             let actions = self.recording.on_tick(now);
             self.run_rec_actions(state, actions);
+        }
+        // A recording still finishing gets its time when the engine stops
+        // (the engine gives it 15 s; the stop used to SIGTERM after 2 s,
+        // which cut that short).
+        let finishing = matches!(
+            self.recording.state(),
+            recording::RecordState::Starting
+                | recording::RecordState::Recording
+                | recording::RecordState::Stopping
+        );
+        if let Some(d) = &self.engine
+            && let Ok(mut sv) = d.supervisor().lock()
+        {
+            sv.set_recording(finishing);
         }
     }
 
@@ -1697,10 +1728,11 @@ impl Services {
         if let Some(scan) = self.scan.take() {
             scan.stop();
         }
-        self.instance.take();
         if let Some(rt) = self.runtime.take() {
             rt.shutdown_timeout(std::time::Duration::from_secs(3));
         }
+        // Last: a new launch waits for the lock.
+        self.instance.take();
     }
 }
 

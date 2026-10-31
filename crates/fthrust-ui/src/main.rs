@@ -85,14 +85,21 @@ fn main() {
     // launch adds nothing to the first one's log and touches none of its files.
     let runtime_dir = fthrust_core::runtime_dir().ok();
     let instance_ctx = egui::Context::default();
-    let instance = runtime_dir.as_ref().and_then(|dir| {
+    let instance = match runtime_dir.as_ref().map(|dir| {
         fthrust_ui::services::instance::become_primary(
             &paths.root().join("fthr.lock"),
             dir,
             &instance_ctx,
         )
-        .ok()
-    });
+    }) {
+        Some(Ok(i)) => Some(i),
+        // An instance that is still shutting down after the wait.
+        Some(Err(e)) => {
+            eprintln!("fthrust: {e}");
+            std::process::exit(1);
+        }
+        None => None,
+    };
     if instance.as_ref().is_some_and(|i| !i.is_primary()) {
         eprintln!("FTHR Clips is already running; activated the existing window");
         return;
@@ -148,8 +155,8 @@ fn main() {
         .with_maximized(placement.maximized);
     let diagnostics = state.diagnostics.clone();
     let result = fthrust_ui::runner::run(state, instance, viewport);
-    // The window loop has ended on its own terms: a clean exit removes the
-    // marker that makes the next launch report this one as a crash.
+    // The app's own shutdown closes the session (cleanly) before it lets the
+    // instance lock go; this covers a window that never opened.
     if let Some(session) = &diagnostics {
         session.close(result.is_ok());
     }
