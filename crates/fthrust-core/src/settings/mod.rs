@@ -5,7 +5,8 @@ mod migrate;
 
 pub use defaults::defaults;
 
-use crate::{CoreError, FthrPaths, Result, read_json, write_json_atomic};
+use crate::atomic_json::{Loaded, load_json};
+use crate::{CoreError, FthrPaths, Result, fsutil, write_json_atomic};
 use serde_json::{Map, Value};
 use std::path::{Component, Path, PathBuf};
 
@@ -17,6 +18,12 @@ pub struct SettingsStore {
     /// Built-in defaults for this home, used by `get_or_default`.
     defaults: Map<String, Value>,
     dirty: bool,
+    /// Why `save` is refused: the file on disk could not be read (or set
+    /// aside), so what is in memory is not built from it and must not
+    /// replace it.
+    save_blocked: Option<String>,
+    /// Problems met while loading, for the UI to report.
+    issues: Vec<String>,
 }
 
 /// Merges `over` into `base`, one level deep.
@@ -48,33 +55,52 @@ impl SettingsStore {
     /// A missing file yields the defaults. A file that fails to parse, or
     /// parses to something other than an object, is renamed to
     /// `settings.json.corrupt` (replacing an older one) and defaults are used.
+    ///
+    /// Loading does not fail on a damaged or unreadable file: the problem is
+    /// logged and kept in [`startup_issues`](Self::startup_issues). A file
+    /// that could not be read, or could not be set aside, is never replaced:
+    /// [`save`](Self::save) refuses, so defaults cannot overwrite the user's
+    /// settings.
     pub fn load(paths: FthrPaths) -> Result<Self> {
         let file = paths.settings_file();
         let base = defaults(&paths);
-        let (mut data, loaded, existed) = match read_json(&file) {
-            Ok(Some(Value::Object(loaded))) => {
+        let mut issues = Vec::new();
+        let mut save_blocked = None;
+        let (mut data, loaded, existed) = match load_json(&file) {
+            Loaded::Value(Value::Object(loaded)) => {
                 (merge_one_level(base.clone(), loaded.clone()), loaded, true)
             }
-            Ok(None) => (base.clone(), Map::new(), false),
+            Loaded::Missing => (base.clone(), Map::new(), false),
             // A transient read error (permissions, EIO, too many open files)
-            // must not rename the user's file: use defaults for this run and
-            // leave the file alone.
-            Err(CoreError::Io(e)) if e.kind() != std::io::ErrorKind::InvalidData => {
+            // must not touch the user's file: use defaults for this run and
+            // refuse to save over it.
+            Loaded::Unreadable(e) => {
                 tracing::warn!("could not read {}: {e}; using defaults", file.display());
+                save_blocked = Some(format!(
+                    "it could not be read ({e}); the default settings are used for this session"
+                ));
+                issues.push(format!(
+                    "settings.json could not be read ({e}). The default settings are used and the file is left as it is, so changes are not saved this session."
+                ));
                 (base.clone(), Map::new(), false)
             }
             // Non-object content, a parse failure or invalid UTF-8 is
             // quarantined, as the reference does.
-            Ok(Some(_)) | Err(_) => {
-                let mut name = file.as_os_str().to_owned();
-                name.push(".corrupt");
-                let target = PathBuf::from(name);
-                if let Err(e) = std::fs::rename(&file, &target) {
-                    tracing::warn!(
-                        "could not quarantine {} as {}: {e}",
-                        file.display(),
+            Loaded::Value(_) | Loaded::Corrupt => {
+                match fsutil::quarantine(&file) {
+                    Ok(target) => issues.push(format!(
+                        "settings.json was damaged. It was moved to {} and the default settings are used.",
                         target.display()
-                    );
+                    )),
+                    Err(e) => {
+                        tracing::warn!("could not quarantine {}: {e}", file.display());
+                        save_blocked = Some(format!(
+                            "it is damaged and could not be set aside ({e}); the default settings are used for this session"
+                        ));
+                        issues.push(format!(
+                            "settings.json is damaged and could not be set aside ({e}). The default settings are used and the file is left as it is, so changes are not saved this session."
+                        ));
+                    }
                 }
                 (base.clone(), Map::new(), false)
             }
@@ -85,12 +111,21 @@ impl SettingsStore {
             data,
             defaults: base,
             dirty: false,
+            save_blocked,
+            issues,
         };
         if changed {
             store.dirty = true;
             store.save()?;
         }
         Ok(store)
+    }
+
+    /// Problems met while loading (an unreadable or damaged file), worded for
+    /// the user. The app keeps running with what it could load; the UI
+    /// reports these.
+    pub fn startup_issues(&self) -> &[String] {
+        &self.issues
     }
 
     /// Returns the whole settings map, including in-memory `_` keys.
@@ -151,7 +186,16 @@ impl SettingsStore {
     }
 
     /// Writes the settings as indent-2 JSON, omitting keys that start with `_`.
+    ///
+    /// Fails with [`CoreError::Protected`] when the file could not be read at
+    /// load: the settings in memory are then defaults, not the user's.
     pub fn save(&mut self) -> Result<()> {
+        if let Some(reason) = &self.save_blocked {
+            return Err(CoreError::Protected {
+                path: self.paths.settings_file(),
+                reason: reason.clone(),
+            });
+        }
         let out: Map<String, Value> = self
             .data
             .iter()

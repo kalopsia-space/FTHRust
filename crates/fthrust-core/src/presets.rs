@@ -1,7 +1,8 @@
 //! Capture presets stored in `~/.fthr/presets.json`.
 
-use crate::atomic_json::{read_json, write_json_atomic};
+use crate::atomic_json::{Loaded, load_json, write_json_atomic};
 use crate::error::Result;
+use crate::fsutil;
 use crate::paths::FthrPaths;
 use serde_json::{Map, Value};
 use std::path::PathBuf;
@@ -40,26 +41,36 @@ impl PresetsStore {
         }
     }
 
-    /// Reads all presets; a missing, unreadable or non-object file is empty.
-    /// Retired keys are stripped and the file rewritten when any were present.
+    /// Reads all presets for display: a missing, unreadable or non-object
+    /// file is empty.
     fn read(&self) -> Map<String, Value> {
-        let mut all = match read_json(&self.path) {
-            Ok(Some(Value::Object(all))) => all,
-            Ok(None) => return Map::new(),
-            // A transient read error: keep the file, use nothing this time.
-            Err(crate::CoreError::Io(e)) if e.kind() != std::io::ErrorKind::InvalidData => {
+        self.read_checked().unwrap_or_default()
+    }
+
+    /// Reads all presets, failing when the file cannot be read: a caller that
+    /// writes back must not build the new file from nothing. A missing or
+    /// non-object file is empty. Retired keys are stripped and the file
+    /// rewritten when any were present.
+    fn read_checked(&self) -> Result<Map<String, Value>> {
+        let mut all = match load_json(&self.path) {
+            Loaded::Value(Value::Object(all)) => all,
+            Loaded::Missing => return Ok(Map::new()),
+            // A transient read error: keep the file and report it, so a save
+            // cannot replace the user's presets with just the new one.
+            Loaded::Unreadable(e) => {
                 tracing::warn!("could not read {}: {e}", self.path.display());
-                return Map::new();
+                return Err(crate::CoreError::Protected {
+                    path: self.path.clone(),
+                    reason: format!("it could not be read ({e})"),
+                });
             }
             // Corrupt or non-object content is quarantined so a later save
             // cannot silently overwrite the user's presets.
-            Ok(Some(_)) | Err(_) => {
-                let mut name = self.path.as_os_str().to_owned();
-                name.push(".corrupt");
-                if let Err(e) = std::fs::rename(&self.path, PathBuf::from(name)) {
+            Loaded::Value(_) | Loaded::Corrupt => {
+                if let Err(e) = fsutil::quarantine(&self.path) {
                     tracing::warn!("could not quarantine {}: {e}", self.path.display());
                 }
-                return Map::new();
+                return Ok(Map::new());
             }
         };
         let mut removed = false;
@@ -73,7 +84,7 @@ impl PresetsStore {
         if removed {
             let _ = write_json_atomic(&self.path, &Value::Object(all.clone()), true);
         }
-        all
+        Ok(all)
     }
 
     fn write(&self, all: Map<String, Value>) -> Result<()> {
@@ -98,16 +109,18 @@ impl PresetsStore {
         })
     }
 
-    /// Saves `values` under `name`, keeping only [`PRESET_KEYS`].
+    /// Saves `values` under `name`, keeping only [`PRESET_KEYS`]. Fails
+    /// without touching the file when it cannot be read.
     pub fn save(&self, name: &str, values: &Map<String, Value>) -> Result<()> {
-        let mut all = self.read();
+        let mut all = self.read_checked()?;
         all.insert(name.to_string(), Value::Object(filter_keys(values)));
         self.write(all)
     }
 
-    /// Deletes a preset; returns whether it existed.
+    /// Deletes a preset; returns whether it existed. Fails without touching
+    /// the file when it cannot be read.
     pub fn delete(&self, name: &str) -> Result<bool> {
-        let mut all = self.read();
+        let mut all = self.read_checked()?;
         let existed = all.remove(name).is_some();
         self.write(all)?;
         Ok(existed)

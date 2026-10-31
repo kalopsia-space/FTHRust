@@ -4,8 +4,9 @@
 use serde_json::{Map, Value, json};
 
 use super::{CATBOX_LEGAL_VERSION, truthy};
-use crate::FthrPaths;
+use crate::atomic_json::{Loaded, load_json};
 use crate::settings::SettingsStore;
+use crate::{FthrPaths, fsutil};
 
 /// Upload destinations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,27 +87,55 @@ pub fn defaults() -> Map<String, Value> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UploaderSettings {
     data: Map<String, Value>,
+    /// Why `save` is refused: the file could not be read at load, so what is
+    /// in memory is not built from it and must not replace it.
+    save_blocked: Option<String>,
 }
 
 impl Default for UploaderSettings {
     fn default() -> Self {
-        Self { data: defaults() }
+        Self {
+            data: defaults(),
+            save_blocked: None,
+        }
     }
 }
 
 impl UploaderSettings {
     /// Loads the file: defaults for anything missing, no `sftp_password` or
     /// `lustful_*` keys, a retired provider turns uploads off on Catbox, an
-    /// unreadable file gives the defaults.
+    /// unreadable or damaged file gives the defaults.
+    ///
+    /// A file that could not be read is never replaced ([`save`](Self::save)
+    /// refuses), and a damaged one is copied to `settings.json.corrupt`
+    /// before anything is saved over it: the file holds the upload
+    /// credentials.
     pub fn load(paths: &FthrPaths) -> Self {
-        let text = match std::fs::read_to_string(paths.uploader_settings_file()) {
-            Ok(t) => t,
-            Err(_) => return Self::default(),
-        };
-        let Ok(Value::Object(file)) = serde_json::from_str::<Value>(&text) else {
-            return Self::default();
-        };
-        Self::from_map(file)
+        let path = paths.uploader_settings_file();
+        match load_json(&path) {
+            Loaded::Missing => Self::default(),
+            Loaded::Value(Value::Object(file)) => Self::from_map(file),
+            Loaded::Value(_) | Loaded::Corrupt => {
+                match fsutil::keep_copy(&path) {
+                    Ok(copy) => tracing::warn!(
+                        "{} is damaged; a copy was kept as {}",
+                        path.display(),
+                        copy.display()
+                    ),
+                    Err(e) => tracing::warn!("{} is damaged and not copied: {e}", path.display()),
+                }
+                Self::default()
+            }
+            Loaded::Unreadable(e) => {
+                tracing::warn!("could not read {}: {e}; using defaults", path.display());
+                Self {
+                    save_blocked: Some(format!(
+                        "it could not be read ({e}); the default upload settings are used"
+                    )),
+                    ..Self::default()
+                }
+            }
+        }
     }
 
     /// Applies the load rules to a raw settings object.
@@ -125,13 +154,25 @@ impl UploaderSettings {
             data.insert("upload_enabled".into(), json!(false));
             data.insert("upload_provider".into(), json!("catbox"));
         }
-        Self { data }
+        Self {
+            data,
+            save_blocked: None,
+        }
     }
 
     /// Writes the file atomically with sorted keys, never the password. The
     /// file is private (`0600`) in a private directory (`0700`).
+    ///
+    /// Fails with [`CoreError::Protected`](crate::CoreError::Protected) when
+    /// the file could not be read at load.
     pub fn save(&self, paths: &FthrPaths) -> crate::Result<()> {
         let path = paths.uploader_settings_file();
+        if let Some(reason) = &self.save_blocked {
+            return Err(crate::CoreError::Protected {
+                path,
+                reason: reason.clone(),
+            });
+        }
         paths.ensure_uploader_dir()?;
         let mut keys: Vec<&String> = self.data.keys().collect();
         keys.sort();

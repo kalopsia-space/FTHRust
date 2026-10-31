@@ -9,8 +9,9 @@ mod migrate;
 pub use defaults::*;
 pub use migrate::BUILTIN_FONT_FAMILIES;
 
-use crate::atomic_json::{read_json, write_json_atomic};
+use crate::atomic_json::{Loaded, load_json, write_json_atomic};
 use crate::error::{CoreError, Result};
+use crate::fsutil;
 use crate::paths::FthrPaths;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -69,6 +70,11 @@ pub struct ThemeStore {
     paths: FthrPaths,
     /// Current in-memory theme.
     pub data: ThemeData,
+    /// Why `save` is refused: `theme.json` could not be read at load, so the
+    /// theme in memory is not built from it and must not replace it.
+    save_blocked: Option<String>,
+    /// Problems met while loading, for the UI to report.
+    issues: Vec<String>,
 }
 
 fn lower_ext(p: &Path) -> String {
@@ -104,9 +110,16 @@ fn copy_unless_same(source: &Path, dest: &Path) -> Result<()> {
 impl ThemeStore {
     /// Creates the theme folders and loads `theme.json`.
     ///
-    /// A missing or unparsable file yields defaults (no backup is made).
-    /// Migrations run in memory only; the file is not rewritten.
+    /// A missing or unparsable file yields defaults (a copy of an unparsable
+    /// one is kept as `theme.json.corrupt`). Migrations run in memory only;
+    /// the file is not rewritten.
+    ///
+    /// Loading does not fail when the file cannot be read: the problem is
+    /// logged and kept in [`startup_issues`](Self::startup_issues). A file
+    /// that could not be read is never replaced: [`save`](Self::save)
+    /// refuses.
     pub fn load(paths: FthrPaths) -> Result<Self> {
+        let mut issues = Vec::new();
         for d in [
             paths.theme_dir(),
             paths.theme_icons_dir(),
@@ -115,16 +128,68 @@ impl ThemeStore {
         ] {
             std::fs::create_dir_all(d)?;
         }
-        let data = match read_json(&paths.theme_file()) {
-            Ok(Some(v)) if v.is_object() => migrate::merge_and_migrate(&v),
-            Ok(_) | Err(CoreError::Json { .. }) => ThemeData::default(),
-            Err(e) => return Err(e),
+        let file = paths.theme_file();
+        let mut save_blocked = None;
+        let data = match load_json(&file) {
+            Loaded::Value(v) if v.is_object() => migrate::merge_and_migrate(&v),
+            Loaded::Missing => ThemeData::default(),
+            Loaded::Value(_) | Loaded::Corrupt => {
+                let kept = fsutil::keep_copy(&file);
+                match &kept {
+                    Ok(copy) => issues.push(format!(
+                        "theme.json was damaged. A copy was kept as {} and the default theme is used.",
+                        copy.display()
+                    )),
+                    Err(e) => {
+                        save_blocked = Some(format!(
+                            "it is damaged and a copy could not be kept ({e}); the default theme is used for this session"
+                        ));
+                        issues.push(format!(
+                            "theme.json is damaged and a copy could not be kept ({e}). The default theme is used and the file is left as it is."
+                        ));
+                    }
+                }
+                ThemeData::default()
+            }
+            Loaded::Unreadable(e) => {
+                tracing::warn!(
+                    "could not read {}: {e}; using the default theme",
+                    file.display()
+                );
+                save_blocked = Some(format!(
+                    "it could not be read ({e}); the default theme is used for this session"
+                ));
+                issues.push(format!(
+                    "theme.json could not be read ({e}). The default theme is used and the file is left as it is, so theme changes are not saved this session."
+                ));
+                ThemeData::default()
+            }
         };
-        Ok(Self { paths, data })
+        Ok(Self {
+            paths,
+            data,
+            save_blocked,
+            issues,
+        })
     }
 
-    /// Writes `theme.json` atomically (pretty, via `theme.json.tmp`).
+    /// Problems met while loading (a damaged or unreadable `theme.json`),
+    /// worded for the user.
+    pub fn startup_issues(&self) -> &[String] {
+        &self.issues
+    }
+
+    /// Writes `theme.json` atomically (pretty, via a temporary file).
+    ///
+    /// Fails with [`CoreError::Protected`] when the file could not be read at
+    /// load: the theme in memory is then the default one, not the user's.
     pub fn save(&self) -> Result<()> {
+        if let Some(reason) = &self.save_blocked {
+            return Err(CoreError::Protected {
+                path: self.paths.theme_file(),
+                reason: reason.clone(),
+            });
+        }
         std::fs::create_dir_all(self.paths.theme_dir())?;
         let value = serde_json::to_value(&self.data).map_err(|source| CoreError::Json {
             path: self.paths.theme_file(),

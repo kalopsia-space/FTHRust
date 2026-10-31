@@ -7,6 +7,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::validate::split_url;
+use crate::atomic_json::{Loaded, load_json};
 use crate::{FthrPaths, fsutil};
 
 /// One history entry (the uploader writes `status`, `provider`,
@@ -60,9 +61,41 @@ impl History {
         crate::write_json_atomic(&path, &Value::Object(self.entries.clone()), true)
     }
 
+    /// Reads the file for a read-modify-write cycle. A missing file is an
+    /// empty history, and so is one that is not a history (a copy is kept as
+    /// `upload_history.json.corrupt`); one that cannot be read at all is an
+    /// error, because writing back would replace it with just the new entry.
+    fn load_for_update(paths: &FthrPaths) -> crate::Result<Self> {
+        let path = paths.upload_history_file();
+        match load_json(&path) {
+            Loaded::Missing => Ok(Self::default()),
+            Loaded::Value(Value::Object(entries)) => Ok(Self { entries }),
+            Loaded::Value(_) | Loaded::Corrupt => {
+                match fsutil::keep_copy(&path) {
+                    Ok(copy) => tracing::warn!(
+                        "{} is damaged; a copy was kept as {}",
+                        path.display(),
+                        copy.display()
+                    ),
+                    Err(e) => {
+                        return Err(crate::CoreError::Protected {
+                            path,
+                            reason: format!("it is damaged and a copy could not be kept ({e})"),
+                        });
+                    }
+                }
+                Ok(Self::default())
+            }
+            Loaded::Unreadable(e) => Err(crate::CoreError::Protected {
+                path,
+                reason: format!("it could not be read ({e})"),
+            }),
+        }
+    }
+
     /// Load, change and save as one step under an exclusive lock on
     /// `upload_history.json.lock`: the app and the uploader both write the
-    /// file.
+    /// file. A file that cannot be read is left alone and the error returned.
     pub fn update(paths: &FthrPaths, f: impl FnOnce(&mut History)) -> crate::Result<History> {
         paths.ensure_uploader_dir()?;
         let mut lock_name = paths.upload_history_file().into_os_string();
@@ -74,7 +107,7 @@ impl History {
             .open(std::path::PathBuf::from(lock_name))?;
         let _lock = nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
             .map_err(|(_, e)| std::io::Error::from(e))?;
-        let mut h = History::load(paths);
+        let mut h = History::load_for_update(paths)?;
         f(&mut h);
         h.save(paths)?;
         Ok(h)

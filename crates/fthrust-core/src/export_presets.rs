@@ -1,7 +1,8 @@
 //! Export presets stored in `~/.fthr/export_presets.json`.
 
-use crate::atomic_json::{read_json, write_json_atomic};
+use crate::atomic_json::{Loaded, load_json, read_json, write_json_atomic};
 use crate::error::{CoreError, Result};
+use crate::fsutil;
 use crate::paths::FthrPaths;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -235,6 +236,32 @@ impl ExportPresetStore {
         (out, preserved)
     }
 
+    /// [`read_entries`](Self::read_entries) for a caller that writes the file
+    /// back: a file that cannot be read is an error (the new file would be
+    /// built from nothing and replace it), and one that is not a preset list
+    /// is copied to `export_presets.json.corrupt` before it is replaced.
+    fn read_entries_for_write(&self) -> Result<(Vec<ExportPreset>, Vec<Value>)> {
+        match load_json(&self.path) {
+            Loaded::Missing | Loaded::Value(Value::Array(_)) => {}
+            Loaded::Unreadable(e) => {
+                return Err(CoreError::Protected {
+                    path: self.path.clone(),
+                    reason: format!("it could not be read ({e})"),
+                });
+            }
+            Loaded::Value(_) | Loaded::Corrupt => {
+                if let Err(e) = fsutil::keep_copy(&self.path) {
+                    return Err(CoreError::Protected {
+                        path: self.path.clone(),
+                        reason: format!("it is damaged and a copy could not be kept ({e})"),
+                    });
+                }
+                return Ok((Vec::new(), Vec::new()));
+            }
+        }
+        Ok(self.read_entries())
+    }
+
     /// Looks a preset up by id, built-ins included.
     pub fn get(&self, id: &str) -> Result<Option<ExportPreset>> {
         Ok(self.all()?.into_iter().find(|p| p.preset_id == id))
@@ -250,7 +277,7 @@ impl ExportPresetStore {
                 "Built-in presets cannot be replaced".into(),
             ));
         }
-        let (mut list, preserved) = self.read_entries();
+        let (mut list, preserved) = self.read_entries_for_write()?;
         list.retain(|x| x.preset_id != p.preset_id);
         list.push(p.clone());
         self.write(&list, &preserved)?;
@@ -262,7 +289,7 @@ impl ExportPresetStore {
         if id == DISCORD_ID {
             return Ok(false);
         }
-        let (list, preserved) = self.read_entries();
+        let (list, preserved) = self.read_entries_for_write()?;
         let remaining: Vec<_> = list.iter().filter(|p| p.preset_id != id).cloned().collect();
         if remaining.len() == list.len() {
             return Ok(false);

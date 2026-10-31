@@ -1,5 +1,5 @@
-//! Small filesystem helpers shared by the stores: private atomic writes and
-//! private directories.
+//! Small filesystem helpers shared by the stores: private atomic writes,
+//! private directories and setting a damaged file aside.
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions, Permissions};
@@ -93,4 +93,27 @@ pub(crate) fn tighten_dir(dir: &Path) {
     {
         tracing::warn!(path = %dir.display(), error = %e, "could not restrict directory access");
     }
+}
+
+/// The path a damaged `path` is set aside to: `<path>.corrupt`.
+pub(crate) fn corrupt_copy_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".corrupt");
+    PathBuf::from(name)
+}
+
+/// Moves a damaged file to `<path>.corrupt` (replacing an older one) and
+/// returns where it went.
+pub(crate) fn quarantine(path: &Path) -> io::Result<PathBuf> {
+    let target = corrupt_copy_path(path);
+    fs::rename(path, &target)?;
+    Ok(target)
+}
+
+/// Copies a damaged file to `<path>.corrupt` (replacing an older one) so the
+/// original can then be overwritten, and returns where the copy went.
+pub(crate) fn keep_copy(path: &Path) -> io::Result<PathBuf> {
+    let target = corrupt_copy_path(path);
+    fs::copy(path, &target)?;
+    Ok(target)
 }
