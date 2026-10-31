@@ -6,10 +6,11 @@
 #   packaging/verify-appdir.sh <AppDir>
 #
 # Prints PASS/FAIL per check and RESULT: PASS|FAIL; exits 0 only on PASS.
-# MAX_GLIBC_OVERRIDE replaces the baseline ceiling (tests only).
+# MAX_GLIBC_OVERRIDE replaces the baseline ceiling and FFMPEG_MANIFEST_OVERRIDE
+# the FFmpeg manifest (tests only).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FFM="$HERE/ffmpeg_manifest_linux.json"
+FFM="${FFMPEG_MANIFEST_OVERRIDE:-$HERE/ffmpeg_manifest_linux.json}"
 MAX_GLIBC="${MAX_GLIBC_OVERRIDE:-$(jq -r .max_glibc "$HERE/linux_release_baseline.json")}"
 BINARIES=(fthrust fthrust-engine fthrust-uploader)
 DIR="${1:-}"
@@ -103,6 +104,19 @@ else
         fail glibc "$worst_file needs GLIBC_$worst, ceiling $MAX_GLIBC"
     fi
 fi
+
+# 6. ffmpeg-config: the configure line recorded in the manifest, which the
+# licence notices are generated from, is the one inside every bundled library.
+want="$(jq -r .configuration "$FFM")"
+problems=()
+scanned=0
+while IFS= read -r -d '' f; do
+    scanned=$((scanned + 1))
+    grep -aqF -- "$want" "$f" || problems+=("$(basename "$f")")
+done < <(find -L "$DIR" -type f \( -name 'libav*' -o -name 'libsw*' \) -print0)
+if [ -z "$want" ] || [ "$want" = null ]; then problems+=("the manifest records no configuration"); fi
+[ $scanned -gt 0 ] || problems+=("no FFmpeg libraries found")
+[ ${#problems[@]} -eq 0 ] && pass ffmpeg-config || fail ffmpeg-config "${problems[*]}"
 
 [ $failed -eq 0 ] && { echo "RESULT: PASS"; exit 0; }
 echo "RESULT: FAIL"

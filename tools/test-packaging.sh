@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|archive]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
-# patchelf and cc.
+# patchelf and cc; the archive group needs git.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FETCH="$ROOT/packaging/fetch-third-party.sh"
@@ -134,6 +134,12 @@ group_gate() {
     d="$(fixture pw)"; touch "$d/usr/lib/libpipewire-0.3.so.0"
     gate_expect gate_fails_bundled_pipewire 1 "FAIL linkage" "$d"
 
+    d="$(fixture config)"; jq '.configuration += " --enable-libfoo"' "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$WORK/manifest-config.json"
+    gate_expect gate_fails_config_mismatch 1 "FAIL ffmpeg-config" "$d" FFMPEG_MANIFEST_OVERRIDE="$WORK/manifest-config.json"
+
+    d="$(fixture noconfig)"; jq 'del(.configuration)' "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$WORK/manifest-noconfig.json"
+    gate_expect gate_fails_missing_config 1 "FAIL ffmpeg-config" "$d" FFMPEG_MANIFEST_OVERRIDE="$WORK/manifest-noconfig.json"
+
     d="$(fixture missing)"; rm "$d/THIRD_PARTY_NOTICES.md"
     gate_expect gate_fails_missing_notices 1 "FAIL files" "$d"
 
@@ -207,8 +213,60 @@ group_install() {
     if [ -z "$out" ]; then pass install_uninstall_removes_files; else fail install_uninstall_removes_files "left: $out"; fi
 }
 
+group_archive() {
+    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m out r ffc bsc
+    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d"
+    echo 'int main(void){return 0;}' > "$src/ffmpeg/main.c"
+    echo '#!/bin/sh' > "$src/scripts/scripts.d/50-x.sh"
+    for r in ffmpeg scripts; do
+        git -C "$src/$r" init -q
+        git -C "$src/$r" config uploadpack.allowAnySHA1InWant true
+        git -C "$src/$r" add -A
+        git -C "$src/$r" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+    done
+    ffc="$(git -C "$src/ffmpeg" rev-parse HEAD)"
+    bsc="$(git -C "$src/scripts" rev-parse HEAD)"
+    m="$WORK/source-manifest.json"
+    jq --arg a "$src/ffmpeg" --arg b "$ffc" --arg c "$src/scripts" --arg d "$bsc" \
+        '.corresponding_source = {ffmpeg: {repo: $a, commit: $b, describe: "n1-test"}, build_scripts: {repo: $c, commit: $d}}' \
+        "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$m"
+    out="$WORK/source-out/src.tar.xz"
+
+    if ! r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --out "$out" 2>&1)"; then
+        fail archive_builds "$r"; return
+    fi
+    local listing missing="" f readme
+    listing="$(tar -tJf "$out" | sed 's|^\./||')"
+    for f in ffmpeg-n1-test/main.c "FFmpeg-Builds-${bsc:0:12}/scripts.d/50-x.sh" README.txt; do
+        grep -qxF "$f" <<<"$listing" || missing="$missing $f"
+    done
+    if [ -z "$missing" ]; then pass archive_has_both_trees_and_readme; else fail archive_has_both_trees_and_readme "missing:$missing"; fi
+    readme="$(tar -xJOf "$out" ./README.txt)"
+    if grep -qF "$ffc" <<<"$readme" && grep -qF -- "--enable-libdav1d" <<<"$readme" && grep -qF "$(jq -r .source.sha256 "$m")" <<<"$readme"; then
+        pass archive_readme_names_commits_configuration_and_binary
+    else fail archive_readme_names_commits_configuration_and_binary "$readme"; fi
+    if (cd "$WORK/source-out" && sha256sum -c --quiet src.tar.xz.sha256 >/dev/null 2>&1); then pass archive_checksum; else fail archive_checksum "sha256 mismatch"; fi
+
+    jq '.corresponding_source.ffmpeg.commit = "0000000000000000000000000000000000000000"' "$m" > "$WORK/source-bad-commit.json"
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-bad-commit.json" --out "$WORK/source-out/bad.tar.xz" 2>&1)"; then
+        fail archive_unknown_commit_fails "exit 0"
+    elif grep -q "could not fetch" <<<"$r" && [ ! -e "$WORK/source-out/bad.tar.xz" ]; then pass archive_unknown_commit_fails
+    else fail archive_unknown_commit_fails "$r"; fi
+
+    jq '.corresponding_source.ffmpeg.commit = "v8.1"' "$m" > "$WORK/source-tag-pin.json"
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-tag-pin.json" --out "$WORK/source-out/tag.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_movable_pin "exit 0"
+    elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_movable_pin
+    else fail archive_rejects_a_movable_pin "$r"; fi
+
+    if r="$("$arch" --manifest "$m" --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_non_https_repo "exit 0"
+    elif grep -q "must be https" <<<"$r"; then pass archive_rejects_a_non_https_repo
+    else fail archive_rejects_a_non_https_repo "$r"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install archive)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"
