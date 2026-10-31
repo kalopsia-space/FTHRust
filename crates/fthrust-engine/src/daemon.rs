@@ -30,6 +30,9 @@ pub const SHUTDOWN_CAPTURE_WAIT: Duration = Duration::from_secs(2);
 pub const SHUTDOWN_STOP_WAIT: Duration = Duration::from_secs(15);
 /// Longest a shutdown waits for its last events to reach the client.
 pub const SHUTDOWN_FLUSH_WAIT: Duration = Duration::from_secs(1);
+/// Longest a shutdown waits for room in a full client queue for a result
+/// (`SaveResult`, `RecordingStopped`, `RecordingError`).
+pub const SHUTDOWN_RESULT_SEND: Duration = Duration::from_millis(500);
 /// How long the runtime may take to wind down once the service is done.
 /// Work still running then (a configure job stuck in a driver) is
 /// abandoned with the process.
@@ -395,11 +398,23 @@ fn emit(events: Option<&mpsc::Sender<Event>>, event: Event) {
     }
 }
 
-/// Sends an event during shutdown: to the client if there is one, and
-/// never past `deadline`.
-async fn deliver(client: Option<&Connection>, event: Event, deadline: Instant) {
-    if let Some(c) = client {
-        let _ = tokio::time::timeout_at(deadline, c.events.send(event)).await;
+/// Sends an event during shutdown, to the client if there is one, without
+/// letting a client that stopped reading hold the shutdown (and the
+/// signals queued behind the event) up: when its queue is full, a result
+/// gets [`SHUTDOWN_RESULT_SEND`] to make room and anything else is dropped.
+async fn deliver(client: Option<&Connection>, event: Event) {
+    let Some(c) = client else {
+        return;
+    };
+    let event = match c.events.try_send(event) {
+        Err(mpsc::error::TrySendError::Full(event)) => event,
+        _ => return,
+    };
+    if matches!(
+        event,
+        Event::SaveResult { .. } | Event::RecordingStopped { .. } | Event::RecordingError { .. }
+    ) {
+        let _ = tokio::time::timeout(SHUTDOWN_RESULT_SEND, c.events.send(event)).await;
     }
 }
 
@@ -624,7 +639,7 @@ async fn shut_down(
         match tokio::time::timeout(Duration::from_millis(20), internal_rx.recv()).await {
             Ok(Some(Internal::Worker(e))) => {
                 service.on_worker(&e);
-                deliver(client, e, deadline).await;
+                deliver(client, e).await;
             }
             Ok(Some(Internal::Stop(Stop::Signal))) => cut = true,
             Ok(Some(_)) | Err(_) => {}
@@ -640,7 +655,7 @@ async fn shut_down(
             internal = internal_rx.recv() => match internal {
                 Some(Internal::Worker(e)) => {
                     service.on_worker(&e);
-                    deliver(client, e, deadline).await;
+                    deliver(client, e).await;
                 }
                 Some(Internal::Stop(Stop::Signal)) => cut = true,
                 Some(_) => {}
@@ -669,7 +684,7 @@ async fn shut_down(
         match tokio::time::timeout_at(deadline, internal_rx.recv()).await {
             Ok(Some(Internal::Worker(e))) => {
                 service.on_worker(&e);
-                deliver(client, e, deadline).await;
+                deliver(client, e).await;
             }
             Ok(Some(Internal::Stop(Stop::Signal))) => {
                 tracing::warn!("signal received again; not waiting for the clip save");
@@ -690,7 +705,7 @@ async fn shut_down(
     let deadline = Instant::now() + Duration::from_millis(100);
     while let Ok(Some(internal)) = tokio::time::timeout_at(deadline, internal_rx.recv()).await {
         if let Internal::Worker(e) = internal {
-            deliver(client, e, deadline).await;
+            deliver(client, e).await;
         }
     }
 }
@@ -738,5 +753,46 @@ mod tests {
             let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
             assert_eq!(got, Ok(Some(Stop::Signal)), "signal {round}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_delivery_never_waits_long_on_a_full_queue() {
+        // A queue nobody reads, already full.
+        let (events, _unread) = mpsc::channel(1);
+        let conn = Connection {
+            commands: mpsc::channel(1).1,
+            events,
+            closed: tokio::sync::watch::channel(false).1,
+        };
+        conn.events.try_send(Event::Heartbeat).unwrap();
+        let t = std::time::Instant::now();
+        deliver(
+            Some(&conn),
+            Event::SaveProgress {
+                request_id: 1,
+                bytes_written: 1 << 20,
+            },
+        )
+        .await;
+        assert!(
+            t.elapsed() < Duration::from_millis(100),
+            "{:?}",
+            t.elapsed()
+        );
+        let t = std::time::Instant::now();
+        deliver(
+            Some(&conn),
+            Event::SaveResult {
+                request_id: 1,
+                result: Err("unread".into()),
+            },
+        )
+        .await;
+        let waited = t.elapsed();
+        assert!(
+            waited >= SHUTDOWN_RESULT_SEND - Duration::from_millis(20)
+                && waited < SHUTDOWN_RESULT_SEND + Duration::from_millis(500),
+            "{waited:?}"
+        );
     }
 }

@@ -418,3 +418,53 @@ async fn capture_stops_before_the_engine_waits_for_a_save() {
     );
     finished(&d, Duration::from_secs(10)).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_stops_reading_cannot_hold_up_the_shutdown() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // A UI that is alive but no longer reads: its queue and socket buffer
+    // fill up. Each event the shutdown forwarded waited on that queue until
+    // the step's deadline (2 s, 15 s, 60 s), and signals queued behind the
+    // event went unseen meanwhile.
+    let d = start(Arc::new(SlowAudio {
+        inner: SyntheticAudio::new(),
+        delay: Duration::from_secs(1),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 5,
+            path: d.tmp.path().join("unread.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 5 })
+    })
+    .await;
+    let save_started = Instant::now();
+    // From here on the client reads nothing, while the engine answers
+    // thousands of status requests: far more than its queue and the socket
+    // buffer hold.
+    for _ in 0..4000 {
+        client.send(Command::GetStatus).await.unwrap();
+    }
+    tokio::time::sleep_until((save_started + Duration::from_millis(300)).into()).await;
+    d.stops.send(Stop::Signal).await.unwrap();
+    // The save's audio windows take 2 s; its progress and result come after
+    // that, during the shutdown, into the full queue.
+    tokio::time::sleep_until((save_started + Duration::from_secs(3)).into()).await;
+    let signalled = Instant::now();
+    d.stops.send(Stop::Signal).await.unwrap();
+    finished(&d, Duration::from_secs(5)).await.unwrap();
+    assert!(
+        signalled.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        signalled.elapsed()
+    );
+    drop(client);
+}
