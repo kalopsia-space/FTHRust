@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use super::HotkeyBindings;
+use crate::fsutil;
 
 const SOCKET_ACTIONS: [&str; 6] = [
     "save_clip",
@@ -142,8 +143,49 @@ pub fn ensure_source_line(home: &Path) -> std::io::Result<()> {
     f.write_all(line.as_bytes())
 }
 
+/// Reads a user's Lua keybind file for editing: `None` when it does not
+/// exist. Any other failure to read it, and content that is not UTF-8,
+/// aborts: the file is the user's, and treating it as empty would rewrite it
+/// with nothing but the managed block.
+fn read_lua_config(path: &Path) -> std::io::Result<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not valid UTF-8; refusing to edit user config",
+                    path.display()
+                ),
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Replaces the Lua keybind file with `text` through a temporary file and a
+/// rename, after saving `previous` as `<name>.bak` next to it. A symlink
+/// (dotfile managers) is written through, not replaced, and the file keeps
+/// its mode. Nothing is replaced unless the backup was written.
+fn replace_lua_config(path: &Path, previous: Option<&str>, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0o644);
+    if let Some(previous) = previous.filter(|p| !p.is_empty()) {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak");
+        fsutil::write_atomic(&path.with_file_name(name), previous.as_bytes(), mode)?;
+    }
+    fsutil::write_atomic(&target, text.as_bytes(), mode)
+}
+
 /// Writes the managed block into a Lua keybind file; `Ok(true)` when the
-/// file changed. An incomplete block (begin without end) is refused.
+/// file changed. An incomplete block (begin without end) is refused, and so
+/// is a file that cannot be read or is not UTF-8 (only a missing one is
+/// created). The file is replaced atomically and its previous contents stay
+/// in `<name>.bak`.
 pub fn write_lua_block(
     path: &Path,
     bindings: &HotkeyBindings,
@@ -153,7 +195,8 @@ pub fn write_lua_block(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let original = std::fs::read_to_string(path).unwrap_or_default();
+    let previous = read_lua_config(path)?;
+    let original = previous.clone().unwrap_or_default();
     let mut existing = original.clone();
     if let Some(begin) = existing.find(LUA_BEGIN) {
         let Some(end_rel) = existing[begin..].find(LUA_END) else {
@@ -189,7 +232,7 @@ pub fn write_lua_block(
     if text == original {
         return Ok(false);
     }
-    std::fs::write(path, text)?;
+    replace_lua_config(path, previous.as_deref(), &text)?;
     Ok(true)
 }
 

@@ -248,3 +248,140 @@ fn source_line_is_added_next_to_reference_era_manual_binds() {
         1
     );
 }
+
+// A keybind file the app cannot read is the user's file, not an empty one.
+
+fn lua_path(dir: &Path) -> std::path::PathBuf {
+    dir.join("custom/keybinds.lua")
+}
+
+fn write_lua(path: &Path, bytes: &[u8]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn lua_leftovers(path: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn lua_file_that_is_not_utf8_is_never_rewritten() {
+    let d = tempfile::tempdir().unwrap();
+    let path = lua_path(d.path());
+    // A latin-1 comment in an otherwise valid user config.
+    let original = b"-- Mod\xe9 keys\nhl.bind(\"SUPER + Q\", hl.dsp.window.close())\n".to_vec();
+    write_lua(&path, &original);
+    let b = bindings(&[]);
+    let err = write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "left untouched");
+    assert_eq!(lua_leftovers(&path), ["keybinds.lua"], "no temp or backup");
+}
+
+#[test]
+fn lua_file_that_cannot_be_read_is_never_rewritten() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let path = lua_path(d.path());
+    let original = b"hl.bind(\"SUPER + Q\", hl.dsp.window.close())\n".to_vec();
+    write_lua(&path, &original);
+    // Write-only: unreadable, but the directory still lets a rewrite through,
+    // which is exactly what used to wipe it.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+    if std::fs::read(&path).is_ok() {
+        return; // running as root: the mode does not bind us
+    }
+    let b = bindings(&[]);
+    let r = write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(r.is_err(), "an unreadable file aborts the write");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(lua_leftovers(&path), ["keybinds.lua"]);
+}
+
+#[test]
+fn lua_rewrite_goes_through_a_temp_file_and_keeps_a_backup() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let path = lua_path(d.path());
+    let b = bindings(&[("save_clip", "Ctrl+Shift+S")]);
+    let user = "local hl = require('hl')\nhl.bind(\"SUPER + Q\", hl.dsp.window.close())\n";
+    write_lua(&path, user.as_bytes());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK)).unwrap());
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert!(first.starts_with(user.trim_end()) && first.contains("hotkeys begin (managed)"));
+    // The backup holds what the file said before this write.
+    let bak = path.with_file_name("keybinds.lua.bak");
+    assert_eq!(std::fs::read_to_string(&bak).unwrap(), user);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o640,
+        "the file keeps its mode"
+    );
+    // A second change backs up the first version; an identical write backs up nothing.
+    let b2 = bindings(&[("save_clip", "F5")]);
+    assert!(write_lua_block(&path, &b2, Path::new(EXE), Path::new(SOCK)).unwrap());
+    assert_eq!(std::fs::read_to_string(&bak).unwrap(), first);
+    assert!(!write_lua_block(&path, &b2, Path::new(EXE), Path::new(SOCK)).unwrap());
+    assert_eq!(std::fs::read_to_string(&bak).unwrap(), first);
+    assert_eq!(
+        lua_leftovers(&path),
+        ["keybinds.lua", "keybinds.lua.bak"],
+        "no temporary file is left behind"
+    );
+}
+
+#[test]
+fn lua_rewrite_follows_a_symlink_instead_of_replacing_it() {
+    let d = tempfile::tempdir().unwrap();
+    let dotfiles = d.path().join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    let real = dotfiles.join("keybinds.lua");
+    std::fs::write(&real, "-- mine\n").unwrap();
+    let path = lua_path(&d.path().join("hypr"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &path).unwrap();
+    let b = bindings(&[]);
+    assert!(write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK)).unwrap());
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the dotfile link survives"
+    );
+    let text = std::fs::read_to_string(&real).unwrap();
+    assert!(text.starts_with("-- mine") && text.contains("hotkeys begin (managed)"));
+    assert_eq!(
+        std::fs::read_to_string(path.with_file_name("keybinds.lua.bak")).unwrap(),
+        "-- mine\n"
+    );
+}
+
+#[test]
+fn a_new_lua_file_needs_no_backup() {
+    let d = tempfile::tempdir().unwrap();
+    let path = lua_path(d.path());
+    let b = bindings(&[]);
+    assert!(write_lua_block(&path, &b, Path::new(EXE), Path::new(SOCK)).unwrap());
+    assert_eq!(lua_leftovers(&path), ["keybinds.lua"]);
+}
+
+#[test]
+fn source_line_never_touches_a_hyprland_conf_it_cannot_read() {
+    // The `.conf` path only ever appends to hyprland.conf, and gives up on a
+    // file it cannot read as text, so it cannot wipe it.
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".config/hypr");
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = b"# Mod\xe9\nmonitor=,preferred,auto,1\n".to_vec();
+    std::fs::write(dir.join("hyprland.conf"), &original).unwrap();
+    ensure_source_line(home.path()).unwrap();
+    assert_eq!(std::fs::read(dir.join("hyprland.conf")).unwrap(), original);
+}
