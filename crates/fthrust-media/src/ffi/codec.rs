@@ -193,11 +193,21 @@ impl RawEncoder {
             (*ctx).colorspace = ffi::AVColorSpace::AVCOL_SPC_BT709;
             (*ctx).chroma_sample_location = ffi::AVChromaLocation::AVCHROMA_LOC_LEFT;
             if let Some(hw) = &hw {
-                let (device, mut frames) = hw.new_refs();
-                if let Some(converter) = &converter {
-                    ffi::av_buffer_unref(&mut frames);
-                    frames = converter.output_frames_ref();
-                }
+                // Fed by the converter, the encoder takes its output pool and
+                // leaves the upload pool uncreated until a CPU fallback.
+                let refs = match &converter {
+                    Some(converter) => hw
+                        .device_ref()
+                        .map(|device| (device, converter.output_frames_ref())),
+                    None => hw.new_refs(),
+                };
+                let (device, frames) = match refs {
+                    Ok(refs) => refs,
+                    Err(e) => {
+                        free(ctx);
+                        return Err(e);
+                    }
+                };
                 if device.is_null() || frames.is_null() {
                     let (mut device, mut frames) = (device, frames);
                     ffi::av_buffer_unref(&mut device);
@@ -279,6 +289,32 @@ impl RawEncoder {
         let (w, h) = self.size();
         self.converter = Some(VaapiConverter::new(hw, src_w, src_h, w, h)?);
         Ok(())
+    }
+
+    /// Replaces the converter with one for capture surfaces like `surface`,
+    /// built on their pool rather than an upload pool of its own.
+    pub(crate) fn bind_converter_to(&mut self, surface: &OwnedFrame) -> Result<()> {
+        let (w, h) = self.size();
+        self.converter = Some(VaapiConverter::for_surfaces(surface, w, h)?);
+        Ok(())
+    }
+
+    /// Whether the GPU converter takes uploaded frames (false for one bound
+    /// to capture surfaces, or none).
+    pub(crate) fn converter_takes_uploads(&self) -> bool {
+        self.converter
+            .as_ref()
+            .is_some_and(VaapiConverter::takes_uploads)
+    }
+
+    /// `(encoder upload pool, converter upload pool)` created yet (tests).
+    pub(crate) fn upload_pools_created(&self) -> (bool, bool) {
+        (
+            self.hw.as_ref().is_some_and(VaapiFrames::pool_created),
+            self.converter
+                .as_ref()
+                .is_some_and(VaapiConverter::upload_pool_created),
+        )
     }
 
     /// Drops the GPU converter; frames must be uploaded from then on.

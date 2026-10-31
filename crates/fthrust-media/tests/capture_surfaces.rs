@@ -186,3 +186,43 @@ fn dmabuf_targets_reject_bad_counts() {
     }
     assert_eq!(enc.dmabuf_targets(320, 180, 8).unwrap().len(), 8);
 }
+
+#[test]
+fn upload_pools_exist_only_while_frames_are_uploaded() {
+    let (w, h) = (320u32, 180u32);
+    let Some(mut enc) = open_gpu(w, h) else {
+        return;
+    };
+    // (encoder's NV12 upload pool, converter's BGRX upload pool): opening
+    // converts one probe frame through the converter; the GPU path never
+    // uploads NV12.
+    assert_eq!(enc.upload_pools_created(), (false, true));
+    enc.dmabuf_targets(w, h, 4).unwrap();
+    assert_eq!(
+        enc.upload_pools_created(),
+        (false, false),
+        "zero copy converts from the capture surfaces' own pool"
+    );
+    let red = solid(w, h, [0, 0, 255, 255]);
+    let mut out = Vec::new();
+    for i in 0..4 {
+        enc.write_surface(i, &red, w as usize * 4).unwrap();
+        enc.encode_surface(i, i as i64 * 33_000_000, &mut out)
+            .unwrap();
+    }
+    assert_eq!(enc.upload_pools_created(), (false, false));
+
+    // Back to shared memory: an upload converter again, and frames encode.
+    enc.release_dmabuf_targets();
+    enc.encode(&red, w as usize * 4, w, h, 200_000_000, &mut out)
+        .unwrap();
+    assert_eq!(enc.upload_pools_created(), (false, true));
+    enc.flush(&mut out).unwrap();
+    assert_eq!(out.len(), 5);
+    assert!(out.windows(2).all(|p| p[0].pts < p[1].pts));
+    let centre = ((h / 2 * w + w / 2) * 3) as usize;
+    for index in [0, 4] {
+        let (rgb, ..) = decode::decode_frame_rgb_bt709(&enc.extradata(), &out, index);
+        assert_rgb_near(&rgb[centre..][..3], [255, 0, 0], 6);
+    }
+}

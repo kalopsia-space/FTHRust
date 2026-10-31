@@ -10,15 +10,18 @@ use super::hw::VaapiFrames;
 use crate::{MediaError, Result};
 
 /// A filter graph `buffer -> scale_vaapi -> buffersink` fed from a BGRX
-/// hardware surface pool.
+/// hardware surface pool: its own, for uploads, or the capture surfaces'.
 pub(crate) struct VaapiConverter {
     // Declared before `pool` so the graph drops first.
     #[allow(dead_code)] // owns the filters the raw pointers below point into
     graph: ff::filter::Graph,
     src: *mut ffi::AVFilterContext,
     sink: *mut ffi::AVFilterContext,
-    pool: VaapiFrames,
-    staging: OwnedFrame,
+    /// The pool uploads go into; `None` for a converter of capture
+    /// surfaces, which takes no uploads.
+    pool: Option<VaapiFrames>,
+    /// The transfer upload's frame in system memory, made on first use.
+    staging: Option<OwnedFrame>,
     hw: OwnedFrame,
     src_w: u32,
     src_h: u32,
@@ -28,9 +31,29 @@ pub(crate) struct VaapiConverter {
 // owned and only used through `&mut self`.
 unsafe impl Send for VaapiConverter {}
 
+/// An owned buffer reference, released on drop.
+struct BufferRef(*mut ffi::AVBufferRef);
+
+impl Drop for BufferRef {
+    fn drop(&mut self) {
+        // SAFETY: the reference is owned; av_buffer_unref ignores null.
+        unsafe { ffi::av_buffer_unref(&mut self.0) }
+    }
+}
+
+fn check_sizes(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Result<()> {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Err(MediaError::Invalid(format!(
+            "cannot convert {src_w}x{src_h} to {dst_w}x{dst_h}"
+        )));
+    }
+    Ok(())
+}
+
 impl VaapiConverter {
     /// Builds the graph on the render node `device` opened, converting
-    /// `src_w`×`src_h` BGRA into `dst_w`×`dst_h` NV12 (BT.709, limited range).
+    /// uploaded `src_w`×`src_h` BGRA into `dst_w`×`dst_h` NV12 (BT.709,
+    /// limited range). The upload pool is created here: uploads follow.
     pub(crate) fn new(
         device: &VaapiFrames,
         src_w: u32,
@@ -38,81 +61,135 @@ impl VaapiConverter {
         dst_w: u32,
         dst_h: u32,
     ) -> Result<Self> {
-        let bgr0 = ffi::AVPixelFormat::AV_PIX_FMT_BGR0;
-        if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
-            return Err(MediaError::Invalid(format!(
-                "cannot convert {src_w}x{src_h} to {dst_w}x{dst_h}"
-            )));
-        }
-        let pool = device.pool_on(src_w, src_h, bgr0)?;
-
-        let mut graph = ff::filter::Graph::new();
-        let buffer = ff::filter::find("buffer")
-            .ok_or_else(|| MediaError::Invalid("buffer filter missing".into()))?;
-        let sink_filter = ff::filter::find("buffersink")
-            .ok_or_else(|| MediaError::Invalid("buffersink filter missing".into()))?;
-        let args = format!(
-            "video_size={src_w}x{src_h}:pix_fmt={}:time_base=1/1",
-            ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32
-        );
-        // The buffer source must receive hw_frames_ctx before it is
-        // initialised, so allocate it, set the parameters, then init.
-        // SAFETY: the graph and filter are live; the result is checked.
-        let src = unsafe {
-            ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr())
-        };
-        if src.is_null() {
-            return Err(MediaError::Invalid(
-                "could not allocate buffer source".into(),
-            ));
-        }
-        graph.add(&sink_filter, "out", "")?;
-        let sink = filter_ptr(&mut graph, "out")?;
-        let (mut dev, frames) = pool.new_refs();
-        // SAFETY: new_refs returned an owned device ref the graph does not need.
-        unsafe { ffi::av_buffer_unref(&mut dev) };
-        // SAFETY: src is a live buffer filter context; the parameters struct
-        // is allocated, filled and freed here, and the frames ref is released
-        // after buffersrc took its own reference.
-        unsafe {
-            let par = ffi::av_buffersrc_parameters_alloc();
-            if par.is_null() {
-                let mut frames = frames;
-                ffi::av_buffer_unref(&mut frames);
-                return Err(MediaError::Invalid(
-                    "buffersrc parameters alloc failed".into(),
-                ));
-            }
-            (*par).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32;
-            (*par).width = src_w as i32;
-            (*par).height = src_h as i32;
-            (*par).time_base = ffi::AVRational { num: 1, den: 1 };
-            (*par).hw_frames_ctx = frames;
-            let ret = ffi::av_buffersrc_parameters_set(src, par);
-            let mut frames = frames;
-            ffi::av_buffer_unref(&mut frames);
-            ffi::av_free(par as *mut _);
-            super::check(ret)?;
-            let cargs = std::ffi::CString::new(args).expect("no NUL");
-            super::check(ffi::avfilter_init_str(src, cargs.as_ptr()))?;
-        }
-        graph.output("in", 0)?.input("out", 0)?.parse(&format!(
-            "scale_vaapi=w={dst_w}:h={dst_h}:format=nv12:out_color_matrix=bt709:out_range=tv:out_chroma_location=left"
-        ))?;
-        graph.validate()?;
-
+        check_sizes(src_w, src_h, dst_w, dst_h)?;
+        let pool = device.pool_on(src_w, src_h, ffi::AVPixelFormat::AV_PIX_FMT_BGR0)?;
+        let (dev, frames) = pool.new_refs()?;
+        drop(BufferRef(dev));
+        let (graph, src, sink) = build_graph(BufferRef(frames), src_w, src_h, dst_w, dst_h)?;
         Ok(Self {
             graph,
             src,
             sink,
-            staging: OwnedFrame::video(bgr0, src_w, src_h)?,
+            pool: Some(pool),
+            staging: None,
             hw: OwnedFrame::empty()?,
-            pool,
             src_w,
             src_h,
         })
     }
 
+    /// A converter for capture surfaces like `surface`, VA-API frames of one
+    /// BGR0 pool, into `dst_w`×`dst_h` NV12. It builds on their pool, so it
+    /// creates none of its own and takes no uploads.
+    pub(crate) fn for_surfaces(surface: &OwnedFrame, dst_w: u32, dst_h: u32) -> Result<Self> {
+        // SAFETY: the frame is valid; only its header fields are read, and
+        // its frames context is referenced for the graph.
+        let (format, w, h, frames) = unsafe {
+            let f = surface.as_ptr();
+            let frames = if (*f).hw_frames_ctx.is_null() {
+                ptr::null_mut()
+            } else {
+                ffi::av_buffer_ref((*f).hw_frames_ctx)
+            };
+            ((*f).format, (*f).width, (*f).height, BufferRef(frames))
+        };
+        if format != ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32 || frames.0.is_null() {
+            return Err(MediaError::Invalid(
+                "a capture surface converter needs a VA-API surface".into(),
+            ));
+        }
+        let (src_w, src_h) = (w.max(0) as u32, h.max(0) as u32);
+        check_sizes(src_w, src_h, dst_w, dst_h)?;
+        let (graph, src, sink) = build_graph(frames, src_w, src_h, dst_w, dst_h)?;
+        Ok(Self {
+            graph,
+            src,
+            sink,
+            pool: None,
+            staging: None,
+            hw: OwnedFrame::empty()?,
+            src_w,
+            src_h,
+        })
+    }
+
+    /// Whether [`VaapiConverter::convert`] works: false for a converter of
+    /// capture surfaces.
+    pub(crate) fn takes_uploads(&self) -> bool {
+        self.pool.is_some()
+    }
+
+    /// Whether its upload pool has been created (tests).
+    pub(crate) fn upload_pool_created(&self) -> bool {
+        self.pool.as_ref().is_some_and(VaapiFrames::pool_created)
+    }
+}
+
+/// Builds `buffer -> scale_vaapi -> buffersink` for `src_w`×`src_h` frames
+/// of the frames context `frames`, scaling to `dst_w`×`dst_h` NV12.
+fn build_graph(
+    frames: BufferRef,
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+) -> Result<(
+    ff::filter::Graph,
+    *mut ffi::AVFilterContext,
+    *mut ffi::AVFilterContext,
+)> {
+    let mut graph = ff::filter::Graph::new();
+    let buffer = ff::filter::find("buffer")
+        .ok_or_else(|| MediaError::Invalid("buffer filter missing".into()))?;
+    let sink_filter = ff::filter::find("buffersink")
+        .ok_or_else(|| MediaError::Invalid("buffersink filter missing".into()))?;
+    let args = format!(
+        "video_size={src_w}x{src_h}:pix_fmt={}:time_base=1/1",
+        ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32
+    );
+    // The buffer source must receive hw_frames_ctx before it is
+    // initialised, so allocate it, set the parameters, then init.
+    // SAFETY: the graph and filter are live; the result is checked.
+    let src = unsafe {
+        ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr())
+    };
+    if src.is_null() {
+        return Err(MediaError::Invalid(
+            "could not allocate buffer source".into(),
+        ));
+    }
+    graph.add(&sink_filter, "out", "")?;
+    let sink = filter_ptr(&mut graph, "out")?;
+    // SAFETY: src is a live buffer filter context; the parameters struct is
+    // allocated, filled and freed here, and buffersrc takes its own
+    // reference to the frames context (ours goes with `frames`).
+    unsafe {
+        let par = ffi::av_buffersrc_parameters_alloc();
+        if par.is_null() {
+            return Err(MediaError::Invalid(
+                "buffersrc parameters alloc failed".into(),
+            ));
+        }
+        (*par).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32;
+        (*par).width = src_w as i32;
+        (*par).height = src_h as i32;
+        (*par).time_base = ffi::AVRational { num: 1, den: 1 };
+        (*par).hw_frames_ctx = frames.0;
+        let ret = ffi::av_buffersrc_parameters_set(src, par);
+        ffi::av_free(par as *mut _);
+        drop(frames);
+        super::check(ret)?;
+        let cargs = std::ffi::CString::new(args).expect("no NUL");
+        super::check(ffi::avfilter_init_str(src, cargs.as_ptr()))?;
+    }
+    graph.output("in", 0)?.input("out", 0)?.parse(&format!(
+        "scale_vaapi=w={dst_w}:h={dst_h}:format=nv12:out_color_matrix=bt709:out_range=tv:out_chroma_location=left"
+    ))?;
+    graph.validate()?;
+    Ok((graph, src, sink))
+}
+
+impl VaapiConverter {
     /// Source size this converter was built for.
     pub(crate) fn source_size(&self) -> (u32, u32) {
         (self.src_w, self.src_h)
@@ -135,11 +212,14 @@ impl VaapiConverter {
     /// Writes the rows straight into a mapped surface of the pool. False
     /// when mapping is unavailable, which also disables it for good.
     fn upload_mapped(&mut self, bgra: &[u8], stride: usize, row: usize, h: usize) -> bool {
-        if !self.pool.mapped_upload() {
+        let Some(pool) = &self.pool else {
+            return false;
+        };
+        if !pool.mapped_upload() {
             return false;
         }
-        let result = self.pool.get_surface(&mut self.hw).and_then(|()| {
-            let mapped = self.pool.map_for_write(&self.hw)?;
+        let result = pool.get_surface(&mut self.hw).and_then(|()| {
+            let mapped = pool.map_for_write(&self.hw)?;
             // SAFETY: the mapped frame owns h rows of linesize[0] >= row
             // bytes; the source length was checked by the caller.
             unsafe {
@@ -166,7 +246,7 @@ impl VaapiConverter {
                 true
             }
             Err(e) => {
-                self.pool.mapped_unavailable(&e);
+                pool.mapped_unavailable(&e);
                 false
             }
         }
@@ -174,11 +254,24 @@ impl VaapiConverter {
 
     /// The staging-frame path: copy into system memory, then transfer.
     fn upload_transfer(&mut self, bgra: &[u8], stride: usize, row: usize, h: usize) -> Result<()> {
-        self.staging.make_writable()?;
+        let Some(pool) = &self.pool else {
+            return Err(MediaError::Invalid(
+                "this converter takes no uploads".into(),
+            ));
+        };
+        let staging = match &mut self.staging {
+            Some(staging) => staging,
+            staging => staging.insert(OwnedFrame::video(
+                ffi::AVPixelFormat::AV_PIX_FMT_BGR0,
+                self.src_w,
+                self.src_h,
+            )?),
+        };
+        staging.make_writable()?;
         // SAFETY: the staging frame owns h rows of linesize[0] >= row bytes;
         // the source length was checked by the caller.
         unsafe {
-            let f = self.staging.as_ptr();
+            let f = staging.as_ptr();
             super::hw::copy_rows(
                 bgra.as_ptr(),
                 stride,
@@ -189,7 +282,7 @@ impl VaapiConverter {
             );
             (*f).pts = 0;
         }
-        self.pool.upload_transfer(&mut self.hw, &self.staging)
+        pool.upload_transfer(&mut self.hw, staging)
     }
 
     /// Uploads `bgra` (`stride` bytes per row) and converts it into `out`,
@@ -200,6 +293,11 @@ impl VaapiConverter {
         stride: usize,
         out: &mut OwnedFrame,
     ) -> Result<()> {
+        if !self.takes_uploads() {
+            return Err(MediaError::Invalid(
+                "a capture surface converter takes no uploads".into(),
+            ));
+        }
         let h = self.src_h as usize;
         let row = super::frame::check_bgra_geometry(bgra.len(), stride, self.src_w, h)?;
         if !self.upload_mapped(bgra, stride, row, h) {

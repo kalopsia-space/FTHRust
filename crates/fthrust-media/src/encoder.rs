@@ -503,14 +503,28 @@ impl Encoder {
 
     /// Frees the capture surfaces from [`Encoder::dmabuf_targets`] once the
     /// compositor no longer writes into them (zero copy fell back to shm).
+    /// The converter built on their pool goes too, so it frees with them;
+    /// the next shared-memory frame builds one for uploads.
     pub fn release_dmabuf_targets(&mut self) {
         self.surfaces = None;
+        if self.cpu.is_none() && !self.raw.converter_takes_uploads() {
+            self.raw.drop_converter();
+        }
+    }
+
+    /// Whether the encoder's own NV12 upload pool and the GPU converter's
+    /// BGRX upload pool have been created (tests): neither is while
+    /// capture writes into dmabuf surfaces.
+    #[doc(hidden)]
+    pub fn upload_pools_created(&self) -> (bool, bool) {
+        self.raw.upload_pools_created()
     }
 
     /// Allocates `count` `width`×`height` BGRX VA surfaces on the encoder's
     /// device, exported as dmabufs the compositor can copy captures into,
-    /// and rebuilds the GPU converter for that source size. Replaces any
-    /// earlier set. Errors unless conversion is on the GPU.
+    /// and builds the GPU converter on their pool, which replaces its
+    /// upload pool. Replaces any earlier set. Errors unless conversion is
+    /// on the GPU.
     pub fn dmabuf_targets(
         &mut self,
         width: u32,
@@ -528,16 +542,14 @@ impl Encoder {
             )));
         }
         self.surfaces = None;
-        if self.raw.converter_source_size() != Some((width, height)) {
-            self.raw.rebuild_converter(width, height)?;
-            self.gpu_proven = false;
-        }
         let device = self
             .raw
             .vaapi()
             .ok_or_else(|| MediaError::Invalid("no VA-API device".into()))?;
         let surfaces = CaptureSurfaces::new(device, width, height, count)?;
         let images = surfaces.images()?;
+        self.raw.bind_converter_to(surfaces.surface(0))?;
+        self.gpu_proven = false;
         self.surfaces = Some(surfaces);
         Ok(images)
     }
@@ -589,9 +601,8 @@ impl Encoder {
         }
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        let size = surfaces.size();
-        if self.raw.converter_source_size() != Some(size) {
-            self.raw.rebuild_converter(size.0, size.1)?;
+        if self.raw.converter_source_size() != Some(surfaces.size()) {
+            self.raw.bind_converter_to(surfaces.surface(index))?;
             self.gpu_proven = false;
         }
         // Nothing reaches the codec on a failure: restore the clock state
@@ -672,12 +683,19 @@ impl Encoder {
         // it pins no surface through the rebuild or the next convert.
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        if self.cpu.is_none() && self.raw.converter_source_size() != Some((width, height)) {
-            tracing::info!(
-                width,
-                height,
-                "source size changed; rebuilding the GPU converter"
-            );
+        if self.cpu.is_none()
+            && (self.raw.converter_source_size() != Some((width, height))
+                || !self.raw.converter_takes_uploads())
+        {
+            if self.raw.converter_takes_uploads() {
+                tracing::info!(
+                    width,
+                    height,
+                    "source size changed; rebuilding the GPU converter"
+                );
+            } else {
+                tracing::debug!(width, height, "building the GPU converter for uploads");
+            }
             // Frames from the rebuilt converter come from a new sink frames
             // context on the same VADisplay with the same NV12 format and
             // output size. h264_vaapi only uses avctx->hw_frames_ctx at init

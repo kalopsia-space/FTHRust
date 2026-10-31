@@ -1,5 +1,6 @@
 //! VA-API device and hardware-frame contexts.
 
+use std::cell::Cell;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
@@ -41,11 +42,18 @@ pub fn candidate_devices() -> Vec<String> {
     out
 }
 
-/// A VA-API device context plus an NV12 hardware frame pool.
+/// A VA-API device context plus a hardware frame pool on it. The pool is
+/// created on first use (a surface, or a reference for a codec or filter),
+/// so a pool nothing draws from costs no video memory: the encoder's NV12
+/// upload pool while the GPU converts, for one.
 #[derive(Debug)]
 pub struct VaapiFrames {
     device: *mut ffi::AVBufferRef,
-    frames: *mut ffi::AVBufferRef,
+    /// The frames context; null until first used.
+    frames: Cell<*mut ffi::AVBufferRef>,
+    width: u32,
+    height: u32,
+    sw_format: ffi::AVPixelFormat,
     /// The device path that opened.
     pub device_path: String,
     /// Whether uploads write into mapped surfaces; shared with every pool
@@ -57,8 +65,8 @@ pub struct VaapiFrames {
 unsafe impl Send for VaapiFrames {}
 
 impl VaapiFrames {
-    /// Opens the first usable render node and allocates a frame pool of
-    /// `width`×`height` NV12 surfaces.
+    /// Opens the first usable render node, for a pool of `width`×`height`
+    /// NV12 surfaces.
     pub fn create(width: u32, height: u32) -> Result<Self> {
         let mut last = None;
         for path in candidate_devices() {
@@ -70,18 +78,8 @@ impl VaapiFrames {
         Err(last.unwrap_or_else(|| MediaError::Invalid("no render node found".into())))
     }
 
-    /// Opens one render node and allocates the pool there.
+    /// Opens one render node, for an NV12 pool there.
     pub(crate) fn create_on(path: &str, width: u32, height: u32) -> Result<Self> {
-        Self::create_on_with(path, width, height, ffi::AVPixelFormat::AV_PIX_FMT_NV12)
-    }
-
-    /// Opens one render node and allocates a pool of `sw_format` surfaces.
-    pub(crate) fn create_on_with(
-        path: &str,
-        width: u32,
-        height: u32,
-        sw_format: ffi::AVPixelFormat,
-    ) -> Result<Self> {
         let cpath =
             CString::new(path).map_err(|_| MediaError::Invalid("device path has NUL".into()))?;
         let mut device: *mut ffi::AVBufferRef = ptr::null_mut();
@@ -96,55 +94,76 @@ impl VaapiFrames {
                 0,
             ))?;
         }
-        match alloc_pool(device, width, height, sw_format) {
-            Ok(frames) => Ok(Self {
-                device,
-                frames,
-                device_path: path.to_string(),
-                mapped: Arc::new(AtomicBool::new(true)),
-            }),
-            Err(e) => {
-                // SAFETY: device is an owned ref.
-                unsafe { ffi::av_buffer_unref(&mut device) };
-                Err(e)
-            }
-        }
+        Ok(Self {
+            device,
+            frames: Cell::new(ptr::null_mut()),
+            width,
+            height,
+            sw_format: ffi::AVPixelFormat::AV_PIX_FMT_NV12,
+            device_path: path.to_string(),
+            mapped: Arc::new(AtomicBool::new(true)),
+        })
     }
 
     /// A pool of `sw_format` surfaces on this device context, so frames from
-    /// both pools share one VADisplay.
+    /// both pools share one VADisplay. Created on first use, like this one.
     pub(crate) fn pool_on(
         &self,
         width: u32,
         height: u32,
         sw_format: ffi::AVPixelFormat,
     ) -> Result<Self> {
-        let frames = alloc_pool(self.device, width, height, sw_format)?;
-        // SAFETY: self.device is valid; av_buffer_ref returns an owned ref.
-        let device = unsafe { ffi::av_buffer_ref(self.device) };
-        if device.is_null() {
-            let mut frames = frames;
-            // SAFETY: frames is an owned ref.
-            unsafe { ffi::av_buffer_unref(&mut frames) };
-            return Err(MediaError::Invalid("av_buffer_ref failed".into()));
-        }
+        let device = self.device_ref()?;
         Ok(Self {
             device,
-            frames,
+            frames: Cell::new(ptr::null_mut()),
+            width,
+            height,
+            sw_format,
             device_path: self.device_path.clone(),
             mapped: Arc::clone(&self.mapped),
         })
     }
 
-    /// New references for a codec context (`hw_device_ctx`, `hw_frames_ctx`).
-    pub(crate) fn new_refs(&self) -> (*mut ffi::AVBufferRef, *mut ffi::AVBufferRef) {
-        // SAFETY: both refs are valid; av_buffer_ref returns owned refs.
-        unsafe {
-            (
-                ffi::av_buffer_ref(self.device),
-                ffi::av_buffer_ref(self.frames),
-            )
+    /// The frames context, created now if nothing has used it yet.
+    fn frames(&self) -> Result<*mut ffi::AVBufferRef> {
+        let frames = self.frames.get();
+        if !frames.is_null() {
+            return Ok(frames);
         }
+        let frames = alloc_pool(self.device, self.width, self.height, self.sw_format)?;
+        self.frames.set(frames);
+        Ok(frames)
+    }
+
+    /// Whether the pool has been created (tests).
+    pub(crate) fn pool_created(&self) -> bool {
+        !self.frames.get().is_null()
+    }
+
+    /// A new reference to the device context.
+    pub(crate) fn device_ref(&self) -> Result<*mut ffi::AVBufferRef> {
+        // SAFETY: the device ref is valid; av_buffer_ref returns an owned ref.
+        let device = unsafe { ffi::av_buffer_ref(self.device) };
+        if device.is_null() {
+            return Err(MediaError::Invalid("av_buffer_ref failed".into()));
+        }
+        Ok(device)
+    }
+
+    /// New references for a codec context or filter (`hw_device_ctx`,
+    /// `hw_frames_ctx`); this creates the pool.
+    pub(crate) fn new_refs(&self) -> Result<(*mut ffi::AVBufferRef, *mut ffi::AVBufferRef)> {
+        let frames = self.frames()?;
+        let mut device = self.device_ref()?;
+        // SAFETY: the frames ref is valid; av_buffer_ref returns an owned ref.
+        let frames = unsafe { ffi::av_buffer_ref(frames) };
+        if frames.is_null() {
+            // SAFETY: device is an owned ref.
+            unsafe { ffi::av_buffer_unref(&mut device) };
+            return Err(MediaError::Invalid("av_buffer_ref failed".into()));
+        }
+        Ok((device, frames))
     }
 
     /// Makes every upload go through `av_hwframe_transfer_data` (tests and
@@ -160,9 +179,10 @@ impl VaapiFrames {
 
     /// Takes a fresh surface from the pool into `hw`.
     pub(crate) fn get_surface(&self, hw: &mut OwnedFrame) -> Result<()> {
+        let frames = self.frames()?;
         hw.unref();
         // SAFETY: frames ref and the frame pointer are valid.
-        unsafe { super::check(ffi::av_hwframe_get_buffer(self.frames, hw.as_ptr(), 0)).map(|_| ()) }
+        unsafe { super::check(ffi::av_hwframe_get_buffer(frames, hw.as_ptr(), 0)).map(|_| ()) }
     }
 
     /// Maps the surface in `hw` for overwriting. The returned frame's planes
@@ -172,8 +192,7 @@ impl VaapiFrames {
         // SAFETY: both frames are valid; the format is set so the mapping
         // exposes the pool's software layout.
         unsafe {
-            let sw_format = (*((*self.frames).data as *mut ffi::AVHWFramesContext)).sw_format;
-            (*mapped.as_ptr()).format = sw_format as i32;
+            (*mapped.as_ptr()).format = self.sw_format as i32;
             super::check(ffi::av_hwframe_map(
                 mapped.as_ptr(),
                 hw.as_ptr(),
@@ -267,9 +286,10 @@ pub(crate) unsafe fn copy_rows(
 
 impl Drop for VaapiFrames {
     fn drop(&mut self) {
-        // SAFETY: refs are owned and dropped once.
+        // SAFETY: refs are owned and dropped once; av_buffer_unref ignores
+        // a pool that was never created.
         unsafe {
-            ffi::av_buffer_unref(&mut self.frames);
+            ffi::av_buffer_unref(self.frames.as_ptr());
             ffi::av_buffer_unref(&mut self.device);
         }
     }
@@ -309,9 +329,10 @@ fn alloc_pool(
     }
 }
 
-/// Whether a VA-API device can be created on any candidate render node.
+/// Whether a VA-API device and a surface pool on it can be created on any
+/// candidate render node.
 pub fn vaapi_available() -> bool {
-    crate::init().is_ok() && VaapiFrames::create(64, 64).is_ok()
+    crate::init().is_ok() && VaapiFrames::create(64, 64).is_ok_and(|v| v.frames().is_ok())
 }
 
 /// The device number (`st_rdev`) of the character device at `path`.
