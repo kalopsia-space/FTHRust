@@ -471,6 +471,59 @@ async fn a_client_that_stops_reading_cannot_hold_up_the_shutdown() {
     drop(client);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_keeps_hearing_from_an_engine_finishing_a_save() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // During the shutdown the engine sent nothing until the save's result,
+    // so the UI's hang check (15 s without an event) took an engine
+    // finishing a long save for a hung one and killed it, losing the save.
+    let d = start(Arc::new(SlowAudio {
+        inner: SyntheticAudio::new(),
+        delay: Duration::from_secs(3),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 6,
+            path: d.tmp.path().join("long-save.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 6 })
+    })
+    .await;
+    client.send(Command::Shutdown).await.unwrap();
+    let mut last = Instant::now();
+    let (mut longest, mut heartbeats) = (Duration::ZERO, 0);
+    loop {
+        let e = tokio::time::timeout(Duration::from_secs(20), client.events().recv())
+            .await
+            .expect("an event within 20 s")
+            .expect("the engine hung up before the save's result");
+        longest = longest.max(last.elapsed());
+        last = Instant::now();
+        match e {
+            Event::Heartbeat => heartbeats += 1,
+            Event::SaveResult { request_id: 6, .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        heartbeats >= 3,
+        "{heartbeats} heartbeats while the save ran"
+    );
+    assert!(
+        longest < Duration::from_millis(1500),
+        "{longest:?} without a word from the engine"
+    );
+    finished(&d, Duration::from_secs(10)).await.unwrap();
+}
+
 /// Sets the record thread's test-only finish delay for one test.
 struct SlowRecordingFinish;
 

@@ -642,13 +642,17 @@ pub async fn serve_until(
 /// capture and audio, so this engine never captures next to the one a
 /// relaunched UI starts; stop listening, so that engine can bind; then let
 /// the save and the recording's file finish. Each step has its own limit, a
-/// signal during them skips what is left.
+/// signal during them skips what is left, and the client gets a heartbeat
+/// every [`HEARTBEAT`] throughout, so a UI waiting for the engine does not
+/// take a long save for a hang.
 async fn shut_down(
     mut service: Service,
     server: EngineServer,
     client: Option<&Connection>,
     internal_rx: &mut mpsc::Receiver<Internal>,
 ) {
+    let mut heartbeat = tokio::time::interval(HEARTBEAT);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut cut = false;
     let deadline = Instant::now() + SHUTDOWN_CAPTURE_WAIT;
     while !cut
@@ -665,6 +669,7 @@ async fn shut_down(
                 Some(_) => {}
                 None => break,
             },
+            _ = heartbeat.tick() => deliver(client, Event::Heartbeat).await,
             () = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
     }
@@ -684,6 +689,7 @@ async fn shut_down(
                 Some(_) => {}
                 None => break,
             },
+            _ = heartbeat.tick() => deliver(client, Event::Heartbeat).await,
             () = tokio::time::sleep_until(deadline) => {
                 tracing::warn!("capture did not stop within {SHUTDOWN_STOP_WAIT:?}; going on");
                 // Whatever is stuck there will not finish a recording either.
@@ -723,6 +729,7 @@ async fn shut_down(
                 Some(_) => {}
                 None => break,
             },
+            _ = heartbeat.tick() => deliver(client, Event::Heartbeat).await,
             () = tokio::time::sleep_until(deadline) => {
                 tracing::warn!(
                     "the clip save or the recording did not finish within {SHUTDOWN_SAVE_WAIT:?}; shutting down without it"
