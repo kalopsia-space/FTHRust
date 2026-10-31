@@ -6,8 +6,11 @@
 //! refused when the final name or a leftover partial already exists.
 //! `renameat2(RENAME_NOREPLACE)` falls back to `link` + `unlink` on
 //! filesystems that reject the flag (the reference failed there outright),
-//! and to a checked plain rename where hard links are missing too. A clip
-//! that is written but cannot be published stays as its `.partial`.
+//! and to a checked plain rename where hard links are missing too
+//! ([`fthrust_core::clip_files::rename_no_replace`]). A clip that is written
+//! but cannot take its name is never deleted: it gets a visible
+//! `<stem>_unpublished` name, or stays as its `.partial`, which the startup
+//! sweep publishes later.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -21,6 +24,25 @@ pub fn temporary_path_for(final_path: &Path) -> PathBuf {
     let mut name = final_path.as_os_str().to_owned();
     name.push(PARTIAL_SUFFIX);
     PathBuf::from(name)
+}
+
+/// `<stem>_unpublished.<ext>`, then `_unpublished_2` …: the visible name a
+/// finished clip takes when its own could not be had.
+pub fn unpublished_path_for(final_path: &Path, attempt: u32) -> PathBuf {
+    let stem = final_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = final_path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let tag = if attempt <= 1 {
+        "_unpublished".to_owned()
+    } else {
+        format!("_unpublished_{attempt}")
+    };
+    final_path.with_file_name(format!("{stem}{tag}{ext}"))
 }
 
 /// Which step of a save failed.
@@ -55,9 +77,10 @@ pub struct SaveError {
     pub operation_error: Option<io::Error>,
     /// An error removing the temporary file after the failure.
     pub cleanup_error: Option<io::Error>,
-    /// Whether the finished clip was left at the temporary path: a written
-    /// and flushed file that could not be published is never deleted.
-    pub kept_temporary: bool,
+    /// Where a finished clip that could not take its name is: an
+    /// `_unpublished` name next to it, or the temporary path. A written and
+    /// flushed clip is never deleted.
+    pub kept_as: Option<PathBuf>,
 }
 
 impl std::fmt::Display for SaveError {
@@ -112,10 +135,17 @@ impl std::fmt::Display for SaveError {
                     "Could not atomically finalize clip '{final_path}' from '{temporary}': {}",
                     op()
                 )?;
-                if self.kept_temporary {
-                    write!(f, ". The finished clip was kept as '{temporary}'.")?;
+                match &self.kept_as {
+                    Some(kept) if *kept == self.temporary_path => {
+                        write!(f, ". The finished clip was kept as '{temporary}'.")
+                    }
+                    Some(kept) => write!(
+                        f,
+                        ". The finished clip was saved as '{}' instead.",
+                        kept.display()
+                    ),
+                    None => Ok(()),
                 }
-                Ok(())
             }
         }
     }
@@ -143,54 +173,22 @@ pub struct RealFs;
 
 impl RealFs {
     /// No-replace move by hard link plus unlink, for filesystems that reject
-    /// `RENAME_NOREPLACE`. Fails with `AlreadyExists` when `to` exists.
-    /// Once the link exists the file is published, so a failed unlink only
-    /// leaves a second name for it (logged).
+    /// `RENAME_NOREPLACE` ([`fthrust_core::clip_files::link_then_unlink`]).
     pub fn link_then_unlink(from: &Path, to: &Path) -> io::Result<()> {
-        fs::hard_link(from, to)?;
-        if let Err(e) = fs::remove_file(from) {
-            tracing::warn!(
-                "published {} but could not remove the temporary name {}: {e}",
-                to.display(),
-                from.display()
-            );
-        }
-        Ok(())
+        fthrust_core::clip_files::link_then_unlink(from, to)
     }
 
-    /// The move for filesystems without `RENAME_NOREPLACE`: `link` (a hard
-    /// link plus unlink in production), and where the filesystem has no
-    /// hard links either (some FUSE mounts, exFAT) a plain rename once `to`
-    /// is checked to be free. That last step is not atomic against another
-    /// writer creating `to` in between, but save names are unique per save
-    /// and refusing would leave the clip unpublished.
+    /// The move for filesystems without `RENAME_NOREPLACE`, with `link` in
+    /// place of the hard link (tests):
+    /// [`fthrust_core::clip_files::publish_without_noreplace`].
     #[doc(hidden)]
     pub fn publish_without_noreplace(
         from: &Path,
         to: &Path,
         link: impl FnOnce(&Path, &Path) -> io::Result<()>,
     ) -> io::Result<()> {
-        match link(from, to) {
-            Err(e) if links_unsupported(&e) => {
-                if RealFs.exists(to)? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{} already exists", to.display()),
-                    ));
-                }
-                fs::rename(from, to)
-            }
-            other => other,
-        }
+        fthrust_core::clip_files::publish_without_noreplace(from, to, link)
     }
-}
-
-/// Whether a failed `link` means the filesystem has no hard links.
-fn links_unsupported(e: &io::Error) -> bool {
-    matches!(
-        e.raw_os_error(),
-        Some(libc::EPERM | libc::EOPNOTSUPP | libc::ENOSYS)
-    )
 }
 
 impl SaveFs for RealFs {
@@ -203,14 +201,7 @@ impl SaveFs for RealFs {
     }
 
     fn rename_no_replace(&self, from: &Path, to: &Path) -> io::Result<()> {
-        use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
-        match renameat2(AT_FDCWD, from, AT_FDCWD, to, RenameFlags::RENAME_NOREPLACE) {
-            Ok(()) => Ok(()),
-            Err(nix::errno::Errno::EINVAL | nix::errno::Errno::ENOSYS) => {
-                Self::publish_without_noreplace(from, to, Self::link_then_unlink)
-            }
-            Err(e) => Err(io::Error::from(e)),
-        }
+        fthrust_core::clip_files::rename_no_replace(from, to)
     }
 
     fn remove(&self, path: &Path) -> io::Result<()> {
@@ -245,9 +236,10 @@ where
 /// Runs a save: refuses existing final or partial files, calls `writer`
 /// with the temporary path, fsyncs it, renames it into place with
 /// no-replace semantics and fsyncs the directory (a directory sync failure
-/// is tolerated). A writer or flush failure removes the temporary file; a
-/// failed rename keeps it, since it is then the finished clip, and the
-/// error says where it is.
+/// is tolerated). A writer or flush failure removes the temporary file. A
+/// failed rename never does, since it is then the finished clip: it is
+/// moved to a visible `<stem>_unpublished` name if one can be had, else
+/// kept, and the error says which name it has.
 pub fn run_with<W>(fs: &dyn SaveFs, final_path: &Path, writer: W) -> Result<PathBuf, SaveError>
 where
     W: FnOnce(&Path) -> Result<(), String>,
@@ -261,7 +253,7 @@ where
             writer_error,
             operation_error,
             cleanup_error: None,
-            kept_temporary: false,
+            kept_as: None,
         };
     match fs.exists(final_path) {
         Ok(true) => return Err(fail(Failure::DestinationExists, String::new(), None)),
@@ -293,17 +285,42 @@ where
     }
     if let Err(e) = fs.rename_no_replace(&temporary_path, final_path) {
         // The temporary file is the finished, flushed clip and may be the
-        // only copy: keep it rather than lose the clip.
+        // only copy: never delete it.
         let mut err = fail(Failure::Rename, String::new(), Some(e));
-        err.kept_temporary = fs.exists(&temporary_path).unwrap_or(true);
+        err.kept_as = keep_finished(fs, &temporary_path, final_path);
         return Err(err);
     }
-    let parent = final_path.parent().unwrap_or(Path::new(""));
+    sync_directory_of(fs, final_path);
+    Ok(final_path.to_path_buf())
+}
+
+/// Where a finished clip that could not take its own name goes: a free
+/// visible `_unpublished` name next to it, else it stays at `temporary`
+/// (`None` when that is gone too).
+fn keep_finished(fs: &dyn SaveFs, temporary: &Path, final_path: &Path) -> Option<PathBuf> {
+    for attempt in 1..=3 {
+        let beside = unpublished_path_for(final_path, attempt);
+        match fs.rename_no_replace(temporary, &beside) {
+            Ok(()) => {
+                sync_directory_of(fs, &beside);
+                return Some(beside);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(_) => break,
+        }
+    }
+    fs.exists(temporary)
+        .unwrap_or(true)
+        .then(|| temporary.to_path_buf())
+}
+
+/// Fsyncs the directory holding `path`; a failure is only logged.
+fn sync_directory_of(fs: &dyn SaveFs, path: &Path) {
+    let parent = path.parent().unwrap_or(Path::new(""));
     if let Err(e) = fs.sync_directory(parent) {
         tracing::warn!(
             "directory sync after publishing {} failed: {e}",
-            final_path.display()
+            path.display()
         );
     }
-    Ok(final_path.to_path_buf())
 }
