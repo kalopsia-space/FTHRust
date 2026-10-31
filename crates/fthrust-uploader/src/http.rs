@@ -468,6 +468,13 @@ async fn multipart_post(
     }
     let mut response = match send_watched(request, &watch, limit).await {
         Ok(Ok(response)) => response,
+        // Nothing went out: trying again cannot change what the request is.
+        Ok(Err(e)) if e.is_builder() => {
+            return Err(Failure::Permanent(format!(
+                "The upload request could not be built: {}",
+                sentence(&describe(&e))
+            )));
+        }
         Ok(Err(e)) => {
             return Err(Failure::Transient(format!(
                 "Could not reach {who}: {}",
@@ -564,6 +571,21 @@ async fn upload_catbox(
     Ok(m)
 }
 
+/// Why a request to `url` with the Auth header `auth` can never be built
+/// (the message for the settings), if so. reqwest only finds out when the
+/// request is sent, and then calls it an error like any other.
+fn unusable(url: &str, auth: Option<&str>) -> Option<&'static str> {
+    if reqwest::Url::parse(url).is_err() {
+        return Some("The server URL is not a valid address. Check the server URL.");
+    }
+    if auth.is_some_and(|a| reqwest::header::HeaderValue::from_str(a).is_err()) {
+        return Some(
+            "The Auth header has characters that can't be sent. Enter it again in the upload settings.",
+        );
+    }
+    None
+}
+
 async fn upload_custom(
     env: &Env,
     settings: &Map<String, Value>,
@@ -573,6 +595,9 @@ async fn upload_custom(
         validate::custom_url(setting(settings, "upload_server_url")).map_err(Failure::Settings)?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))
         .map_err(Failure::Settings)?;
+    if let Some(problem) = unusable(&url, auth.as_deref()) {
+        return Err(Failure::Settings(problem.into()));
+    }
     let (status, text, location) = multipart_post(
         env.io_timeout,
         "your server",
@@ -819,6 +844,9 @@ pub async fn test_catbox(env: &Env) -> (bool, String) {
 pub async fn test_custom(settings: &Map<String, Value>) -> Result<(bool, String), String> {
     let url = validate::custom_url(setting(settings, "upload_server_url"))?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))?;
+    if let Some(problem) = unusable(&url, auth.as_deref()) {
+        return Err(problem.into());
+    }
     let client = client(TEST_TIMEOUT, Some(TEST_TIMEOUT), false)?;
     let mut request = client.head(&url);
     if let Some(a) = &auth {

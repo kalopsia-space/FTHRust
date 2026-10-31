@@ -616,6 +616,40 @@ async fn retry_transient_only() {
     assert!(msg.starts_with("Could not reach your server: "), "{msg}");
 }
 
+/// A header or an address that can never be sent is the settings' fault,
+/// found on the first attempt: not a network error to wait out and repeat.
+#[tokio::test]
+async fn a_request_that_cannot_be_built_is_not_retried() {
+    let bad_url = "The server URL is not a valid address. Check the server URL.";
+    let bad_header =
+        "The Auth header has characters that can't be sent. Enter it again in the upload settings.";
+    for (url, auth, message) in [
+        (Some("http://exa mple.invalid/up"), "", bad_url),
+        (None, "Bearer a\u{1}b", bad_header),
+    ] {
+        let srv = server(vec![]);
+        let h = home(json!({
+            "upload_provider": "custom",
+            "upload_server_url": url.unwrap_or(&srv.url),
+            "upload_auth_header": auth,
+        }));
+        let mut env = h.env("x");
+        env.retry_delays = vec![Duration::from_secs(1); 3];
+        let started = std::time::Instant::now();
+        let r = h.respond(&env).await;
+        assert_eq!((r.ok, r.message.as_str()), (false, message));
+        assert!(r.settings_problem, "{message}");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{message}: retried ({:?})",
+            started.elapsed()
+        );
+        assert!(srv.seen().is_empty());
+        // The connection test says the same, at once.
+        assert_eq!(h.test(&env).await, (false, message.to_owned()), "{message}");
+    }
+}
+
 #[tokio::test]
 async fn retry_never_past_deadline() {
     let srv = server(vec![(503, "busy"), (200, "https://cdn.example/ok")]);
