@@ -490,6 +490,10 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
     let output = scroll_area.show_viewport(&mut area, |ui, viewport| {
         ui.set_width(area_rect.width());
         let origin = ui.cursor().min;
+        // egui hands over the visible part in content coordinates (0,0 is the
+        // content's top left); the rows below are laid out from `origin` in
+        // screen coordinates, which moves up as the area scrolls.
+        let viewport = viewport.translate(origin.to_vec2());
         let x0 = origin.x;
         let mut y = origin.y;
         if let Some(empty) = state.library.empty.clone() {

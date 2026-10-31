@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use egui::{Pos2, Rect, Vec2};
 use fthrust_core::library_index::{Filter, LibraryRecord, MediaKind, Sort};
+use fthrust_ui::fidelity::Marker;
 use fthrust_ui::shell;
 use fthrust_ui::state::{AppState, DialogKind, DialogResult, Page, StatusStyle, StatusText};
 use fthrust_ui::tokens::Color;
@@ -381,5 +382,126 @@ fn renaming_a_linked_import_asks_first() {
     assert!(
         import_dir.join("moved.mp4").exists() && !clip.exists(),
         "renamed after yes"
+    );
+}
+
+/// `n_new` clips on one day and `n_old` on the day before, all within an hour
+/// of noon UTC so that any local offset keeps the two days apart.
+fn two_day_records(root: &std::path::Path, n_new: usize, n_old: usize) -> Vec<LibraryRecord> {
+    const MINUTE: i128 = 60 * 1_000_000_000;
+    const DAY: i128 = 24 * 60 * MINUTE;
+    let noon: i128 = 1_800_014_400 * 1_000_000_000; // 2027-01-15 12:00 UTC
+    let make = |i: usize, at: i128, tag: &str| {
+        let path = root.join(format!("Desktop/{tag}_clip_{i:03}.mp4"));
+        LibraryRecord {
+            path: path.clone(),
+            identity: path,
+            root_ids: vec![0],
+            imported: false,
+            kind: MediaKind::Video,
+            size: 1,
+            mtime_ns: at - i as i128 * MINUTE,
+        }
+    };
+    (0..n_new)
+        .map(|i| make(i, noon, "new"))
+        .chain((0..n_old).map(|i| make(i, noon - DAY, "old")))
+        .collect()
+}
+
+/// The cards and day headers drawn this frame (screen rects).
+fn drawn(markers: &[Marker]) -> Vec<(String, Rect)> {
+    markers
+        .iter()
+        .filter(|m| m.name.starts_with("clipCard[") || m.name.starts_with("sectionHeader["))
+        .map(|m| (m.name.clone(), m.rect))
+        .collect()
+}
+
+/// The stretches of `top..bottom` that nothing in `rects` covers and that are
+/// taller than the page's own spacing (20 px between sections).
+fn blank_bands(rects: &[(String, Rect)], top: f32, bottom: f32) -> Vec<(f32, f32)> {
+    const SPACING: f32 = 24.0;
+    let mut spans: Vec<(f32, f32)> = rects
+        .iter()
+        .map(|(_, r)| (r.min.y.max(top), r.max.y.min(bottom)))
+        .filter(|(a, b)| a < b)
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bands = Vec::new();
+    let mut reached = top;
+    for (a, b) in spans {
+        if a - reached > SPACING {
+            bands.push((reached, a));
+        }
+        reached = reached.max(b);
+    }
+    if bottom - reached > SPACING {
+        bands.push((reached, bottom));
+    }
+    bands
+}
+
+#[test]
+fn the_grid_draws_its_cards_and_headers_at_every_scroll_offset() {
+    let (tmp, mut s) = state(serde_json::json!({}));
+    let root = tmp.path().join("clips");
+    // 60 clips over two days: 40 on the newer one.
+    s.library.records = two_day_records(&root, 40, 20);
+    s.library_dirty = true;
+    let tokens = s.tokens.clone();
+    let offset = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
+    let seen = offset.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        seen.set(s.library_scroll);
+    });
+    h.run_steps(3);
+    let area_top = {
+        let m = markers_after(&mut h);
+        m.iter().find(|m| m.name == "filterBar").unwrap().rect.max.y + 8.0
+    };
+    let area_bottom = 900.0;
+    h.hover_at(Pos2::new(700.0, 500.0));
+    let mut headers_seen = std::collections::BTreeSet::new();
+    let mut last = -1.0f32;
+    for step in 0..30 {
+        let m = markers_after(&mut h);
+        for m in m.iter().filter(|m| m.name.starts_with("sectionHeader[")) {
+            headers_seen.insert(m.name.clone());
+        }
+        let on_screen = drawn(&m);
+        let blank = blank_bands(&on_screen, area_top, area_bottom);
+        assert!(
+            blank.is_empty(),
+            "step {step}, scrolled {:.0} px: nothing is drawn at {blank:?} (drawn: {:?})",
+            offset.get(),
+            on_screen
+                .iter()
+                .map(|(n, r)| (n.clone(), r.min.y as i32))
+                .collect::<Vec<_>>()
+        );
+        if (offset.get() - last).abs() < 0.5 && step > 0 {
+            break; // the end of the content
+        }
+        last = offset.get();
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(10);
+    }
+    assert!(
+        offset.get() > 6000.0,
+        "scrolled to the end of the content: {}",
+        offset.get()
+    );
+    assert_eq!(
+        headers_seen.len(),
+        2,
+        "both day headers were drawn: {headers_seen:?}"
     );
 }
