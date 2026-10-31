@@ -193,6 +193,16 @@ impl AudioProvider for PipeWireAudio {
         Some(blocks.pcm())
     }
 
+    fn captured_until(&self, kind: AudioSourceKind) -> Option<i64> {
+        self.shared
+            .source(kind)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .ring
+            .as_ref()?
+            .captured_until()
+    }
+
     fn status(&self) -> AudioStatus {
         AudioStatus {
             system: self

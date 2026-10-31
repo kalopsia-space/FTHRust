@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use fthrust_core::capture_health::flags;
@@ -15,13 +15,15 @@ use fthrust_media::recorder::{Recorder, RecorderAudio, RecorderConfig};
 use fthrust_media::ring::EncodedPacket;
 use fthrust_wayland::backend::monotonic_ns;
 
-use crate::audio::AudioSourceKind;
+use crate::audio::{AudioProvider, AudioSourceKind};
 use crate::engine::EngineHandle;
 
 /// Title of the desktop track.
 pub const SYSTEM_TRACK: &str = "Default Mix";
 /// Title of the microphone track.
 pub const MICROPHONE_TRACK: &str = "Microphone";
+/// Longest a save waits for its audio sources to deliver the clip's end.
+pub const SAVE_AUDIO_WAIT: Duration = Duration::from_millis(300);
 
 /// A save request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +147,26 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "an internal error".to_string())
 }
 
+/// Waits until every source in `kinds` that reports its progress has
+/// delivered audio up to `end_ns`, or `timeout` passes. Audio reaches the
+/// ring a capture latency after it plays, so without this a window ending
+/// now ends on silence.
+pub fn wait_for_audio(
+    audio: &dyn AudioProvider,
+    kinds: &[AudioSourceKind],
+    end_ns: i64,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    while kinds
+        .iter()
+        .any(|k| audio.captured_until(*k).is_some_and(|t| t < end_ns))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn run_save(
     engine: &EngineHandle,
     req: &SaveRequest,
@@ -189,7 +211,7 @@ fn run_save(
     let audio = engine.audio();
     let mut errors = Vec::new();
     let mut tracks_data: Vec<(&'static str, Vec<f32>)> = Vec::new();
-    let wanted: Vec<(AudioSourceKind, &'static str, bool)> = vec![
+    let wanted: Vec<(AudioSourceKind, &'static str)> = [
         (
             AudioSourceKind::System,
             SYSTEM_TRACK,
@@ -200,11 +222,21 @@ fn run_save(
             MICROPHONE_TRACK,
             !config.capture.microphone_endpoint_id.is_empty(),
         ),
-    ];
-    for (kind, title, enabled) in wanted {
-        if !enabled {
-            continue;
-        }
+    ]
+    .into_iter()
+    .filter(|(_, _, enabled)| *enabled)
+    .map(|(kind, title, _)| (kind, title))
+    .collect();
+    // The video waited for its last frame; the audio waits for its sources
+    // to deliver the same moment, so the clip does not end on padding.
+    let kinds: Vec<AudioSourceKind> = wanted.iter().map(|(kind, _)| *kind).collect();
+    wait_for_audio(
+        audio.as_ref(),
+        &kinds,
+        snapshot.presentation_end_ns,
+        SAVE_AUDIO_WAIT,
+    );
+    for (kind, title) in wanted {
         match audio.window(kind, snapshot.presentation_end_ns, duration_ms) {
             Some(samples) if !samples.is_empty() => tracks_data.push((title, samples)),
             _ => errors.push(format!("{title}: the audio source is not capturing")),

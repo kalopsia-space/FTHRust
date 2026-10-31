@@ -124,6 +124,11 @@ impl AudioRing {
         self.window_blocks(end_ns, duration_ms).pcm()
     }
 
+    /// Capture time of the end of the newest block, `None` when empty.
+    pub fn captured_until(&self) -> Option<i64> {
+        self.blocks.back().map(|b| b.start_ns + block_ns(b))
+    }
+
     /// Blocks held.
     pub fn len(&self) -> usize {
         self.blocks.len()
@@ -152,6 +157,14 @@ pub trait AudioProvider: Send + Sync {
     fn status(&self) -> AudioStatus;
     /// Stops capturing (bounded).
     fn stop(&self);
+    /// Capture time up to which `kind` has delivered audio (the end of its
+    /// newest block), or `None` when it is not capturing or cannot say.
+    /// Saves and recordings wait on it, bounded, so they do not end on
+    /// silence the source simply has not delivered yet.
+    fn captured_until(&self, kind: AudioSourceKind) -> Option<i64> {
+        let _ = kind;
+        None
+    }
 }
 
 /// A 440 Hz tone at amplitude 0.3 on both sources, produced in 10 ms
@@ -260,6 +273,15 @@ impl AudioProvider for SyntheticAudio {
             ring.window_blocks(end_ns, duration_ms)
         };
         Some(blocks.pcm())
+    }
+
+    fn captured_until(&self, kind: AudioSourceKind) -> Option<i64> {
+        let inner = self.inner.lock().unwrap();
+        match kind {
+            AudioSourceKind::System => inner.system.as_ref(),
+            AudioSourceKind::Microphone => inner.microphone.as_ref(),
+        }?
+        .captured_until()
     }
 
     fn status(&self) -> AudioStatus {

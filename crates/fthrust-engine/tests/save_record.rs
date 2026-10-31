@@ -692,3 +692,139 @@ fn a_slow_audio_status_does_not_stall_capture() {
     );
     r.engine.shutdown();
 }
+
+/// A desktop source whose blocks reach the ring `lag` after they were
+/// captured, like a real capture stream's latency.
+struct LaggyAudio {
+    ring: Arc<Mutex<Option<fthrust_engine::audio::AudioRing>>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+    lag_ns: i64,
+}
+
+impl LaggyAudio {
+    fn new(lag: Duration) -> Self {
+        Self {
+            ring: Arc::new(Mutex::new(None)),
+            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            lag_ns: lag.as_nanos() as i64,
+        }
+    }
+}
+
+impl fthrust_engine::audio::AudioProvider for LaggyAudio {
+    fn start(&self, cfg: &fthrust_engine::audio::AudioConfig) -> Vec<(String, String)> {
+        use std::sync::atomic::Ordering;
+        *self.ring.lock().unwrap() = cfg
+            .system
+            .as_ref()
+            .map(|_| fthrust_engine::audio::AudioRing::new(cfg.keep_seconds));
+        self.running.store(true, Ordering::SeqCst);
+        let (ring, running, lag) = (self.ring.clone(), self.running.clone(), self.lag_ns);
+        std::thread::spawn(move || {
+            const BLOCK_NS: i64 = 10_000_000;
+            let mut phase = 0u64;
+            let mut next = fthrust_wayland::backend::monotonic_ns() - lag;
+            while running.load(Ordering::SeqCst) {
+                let delivered_up_to = fthrust_wayland::backend::monotonic_ns() - lag;
+                while next + BLOCK_NS <= delivered_up_to {
+                    let samples: Vec<f32> = (0..480u64)
+                        .flat_map(|i| {
+                            let t = (phase + i) as f32 / 48_000.0;
+                            let v = (t * 440.0 * std::f32::consts::TAU).sin() * 0.3;
+                            [v, v]
+                        })
+                        .collect();
+                    phase += 480;
+                    if let Some(r) = ring.lock().unwrap().as_mut() {
+                        r.push(fthrust_media::audio_timing::AudioBlock {
+                            start_ns: next,
+                            samples,
+                        });
+                    }
+                    next += BLOCK_NS;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        Vec::new()
+    }
+    fn window(
+        &self,
+        kind: fthrust_engine::audio::AudioSourceKind,
+        end_ns: i64,
+        duration_ms: u32,
+    ) -> Option<Vec<f32>> {
+        if kind != fthrust_engine::audio::AudioSourceKind::System {
+            return None;
+        }
+        Some(
+            self.ring
+                .lock()
+                .unwrap()
+                .as_ref()?
+                .window(end_ns, duration_ms),
+        )
+    }
+    fn captured_until(&self, kind: fthrust_engine::audio::AudioSourceKind) -> Option<i64> {
+        if kind != fthrust_engine::audio::AudioSourceKind::System {
+            return None;
+        }
+        self.ring.lock().unwrap().as_ref()?.captured_until()
+    }
+    fn status(&self) -> fthrust_ipc::AudioStatus {
+        let system = if self.ring.lock().unwrap().is_some() {
+            fthrust_ipc::SourceStatus::Streaming
+        } else {
+            fthrust_ipc::SourceStatus::Disabled
+        };
+        fthrust_ipc::AudioStatus {
+            system,
+            microphone: fthrust_ipc::SourceStatus::Disabled,
+        }
+    }
+    fn stop(&self) {
+        self.running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *self.ring.lock().unwrap() = None;
+    }
+}
+
+#[test]
+fn a_clip_does_not_end_on_audio_the_source_has_not_delivered() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Capture audio reaches the ring a latency after it plays. The save waited
+    // for the video's last frame but took the audio window at once, so the
+    // clip ended on zero padding where the source had not delivered yet.
+    let mut r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(LaggyAudio::new(Duration::from_millis(150))),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("tail.mp4");
+    r.save.submit(SaveRequest {
+        request_id: 41,
+        path: path.clone(),
+        seconds: 2,
+    });
+    let done = next_event(&r.events, Duration::from_secs(20), |e| {
+        matches!(e, Event::SaveResult { request_id: 41, .. })
+    });
+    assert!(
+        matches!(&done, Event::SaveResult { result: Ok(c), .. } if c.audio_included),
+        "{done:?}"
+    );
+    let pcm = fthrust_media::audio_decode::decode_to_pcm(&path).unwrap();
+    let frames = pcm.samples.len() / 2;
+    let tail = &pcm.samples[(frames - 48 * 80) * 2..(frames - 48 * 10) * 2];
+    let rms = (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt();
+    assert!(
+        rms > 0.1,
+        "the clip's last 80 ms hold silence (rms {rms}) where the tone plays on"
+    );
+    r.engine.shutdown();
+}
