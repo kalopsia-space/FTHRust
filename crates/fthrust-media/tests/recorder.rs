@@ -381,7 +381,9 @@ fn the_first_audio_sample_plays_after_the_encoder_priming() {
     let decoded = fthrust_media::audio_decode::decode_to_pcm(&out).unwrap();
     let heard = decoded
         .samples
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .position(|f| f[0].abs() > 0.2)
         .expect("the tone is in the recording");
     let expected = onset + priming;
