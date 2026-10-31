@@ -696,36 +696,50 @@ fn default_bindings_drive_the_editor() {
     assert!(r.s.editor_sessions.is_empty());
 }
 
-/// Runs `f` and returns what it logged at WARN or above, one string per event.
+/// Runs `f` and returns what it logged at WARN or above on this thread, one
+/// string per event.
+///
+/// One subscriber for the whole test binary, writing into a buffer per
+/// thread: a scoped subscriber per test (`with_default`) shares the
+/// callsites' cached interest with the tests running beside it, and these
+/// captures missed their line in about half the parallel runs.
 fn logged_warnings(f: impl FnOnce()) -> Vec<String> {
-    use std::sync::Mutex;
-    use tracing_subscriber::fmt::MakeWriter;
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Sink {
+    use std::cell::RefCell;
+    use std::sync::Once;
+    thread_local! {
+        static CAPTURE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
+    struct ThreadSink;
+    impl std::io::Write for ThreadSink {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
+            CAPTURE.with(|c| {
+                if let Some(v) = c.borrow_mut().as_mut() {
+                    v.extend_from_slice(buf);
+                }
+            });
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-    impl<'a> MakeWriter<'a> for Sink {
-        type Writer = Sink;
-        fn make_writer(&'a self) -> Sink {
-            self.clone()
-        }
-    }
-    let sink = Sink::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(sink.clone())
-        .with_max_level(tracing::Level::WARN)
-        .with_ansi(false)
-        .finish();
-    tracing::subscriber::with_default(subscriber, f);
-    let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
-    text.lines().map(str::to_owned).collect()
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(|| ThreadSink)
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("one subscriber per binary");
+    });
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
+    f();
+    let bytes = CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[test]
