@@ -1029,6 +1029,9 @@ group_workflow() {
     else fail workflow_publish_waits_for_the_build_and_the_source "$(grep 'needs:' <<<"$publish")"; fi
     if grep -qF 'ARCHIVE_GITHUB_TOKEN: ${{ github.token }}' <<<"$srcjob"; then pass workflow_source_job_sends_the_job_token_to_the_archive_script
     else fail workflow_source_job_sends_the_job_token_to_the_archive_script "no ARCHIVE_GITHUB_TOKEN in the source job"; fi
+    # the job's token is handed to the archive script by hand; the checkout has no reason to leave it in .git/config
+    if grep -A4 'actions/checkout@' <<<"$srcjob" | grep -qx '          persist-credentials: false'; then pass workflow_source_checkout_keeps_no_credentials
+    else fail workflow_source_checkout_keeps_no_credentials "no persist-credentials: false on the source job's checkout"; fi
     if grep -qx '          compression-level: 0' <<<"$srcjob"; then pass workflow_uploads_the_xz_without_compressing_it_again
     else fail workflow_uploads_the_xz_without_compressing_it_again "no compression-level: 0 in the source job"; fi
     if grep -q 'apt-get update && sudo apt-get install -y --no-install-recommends subversion' <<<"$srcjob"; then pass workflow_source_job_updates_apt_before_installing_svn

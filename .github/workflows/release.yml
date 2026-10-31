@@ -91,6 +91,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The archive script gets the job's token by hand (below); nothing else needs it left in .git/config.
+          persist-credentials: false
       # LAME is pinned to a Subversion revision, which needs svn.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends subversion
       - name: Archive the source
