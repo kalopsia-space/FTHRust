@@ -143,6 +143,27 @@ fn feed(r: Result<(), ff::Error>) -> Result<(), Stop> {
     }
 }
 
+/// What one read from a graph sink gave.
+#[derive(Debug, PartialEq, Eq)]
+enum Pulled {
+    Frame,
+    /// Nothing until more input arrives.
+    Empty,
+    End,
+}
+
+/// Classifies a sink read. Any error but "nothing yet" and the end is the
+/// graph failing, and ends the export: reading on would write a clip
+/// missing everything from that point.
+fn pulled(r: Result<(), ff::Error>) -> Result<Pulled, Stop> {
+    match r {
+        Ok(()) => Ok(Pulled::Frame),
+        Err(ff::Error::Eof) => Ok(Pulled::End),
+        Err(ff::Error::Other { errno }) if errno == ff::util::error::EAGAIN => Ok(Pulled::Empty),
+        Err(e) => Err(Stop::Failed(format!("The filter graph failed: {e}"))),
+    }
+}
+
 /// Seconds of a timestamp in a time base.
 fn secs(ts: i64, tb: ff::Rational) -> f64 {
     ts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator().max(1))
@@ -661,8 +682,8 @@ pub(super) fn attempt(
                     let (_, _, tb) = sink_props(g, sink);
                     let mut ctx = g.get(sink).expect("sink");
                     let mut frame = ff::frame::Video::empty();
-                    match ctx.sink().frame(&mut frame) {
-                        Ok(()) => {
+                    match pulled(ctx.sink().frame(&mut frame))? {
+                        Pulled::Frame => {
                             *last_output = Instant::now();
                             let t = secs(frame.pts().unwrap_or(0), tb);
                             on_progress((t / expected * 100.0).clamp(0.0, 99.0));
@@ -696,11 +717,11 @@ pub(super) fn attempt(
                                 }
                             }
                         }
-                        Err(ff::Error::Eof) => {
+                        Pulled::End => {
                             *video_eof = true;
                             break;
                         }
-                        Err(_) => break,
+                        Pulled::Empty => break,
                     }
                 },
                 Out::Audio {
@@ -712,8 +733,8 @@ pub(super) fn attempt(
                     let (_, _, sink_tb) = sink_props(g, sink);
                     let mut ctx = g.get(sink).expect("sink");
                     let mut frame = ff::frame::Audio::empty();
-                    match ctx.sink().frame(&mut frame) {
-                        Ok(()) => {
+                    match pulled(ctx.sink().frame(&mut frame))? {
+                        Pulled::Frame => {
                             *last_output = Instant::now();
                             let etb = enc.time_base();
                             // The sink keeps the input's time base unless a
@@ -723,11 +744,11 @@ pub(super) fn attempt(
                             enc.send_frame(&frame)?;
                             drain_packets(|p| enc.receive_packet(p).is_ok(), octx, *ost, etb)?;
                         }
-                        Err(ff::Error::Eof) => {
+                        Pulled::End => {
                             *eof = true;
                             break;
                         }
-                        Err(_) => break,
+                        Pulled::Empty => break,
                     }
                 },
                 Out::Copy { .. } => {}
@@ -931,4 +952,32 @@ pub(super) fn attempt(
     }
     octx.write_trailer()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_waiting_and_the_end_are_not_sink_errors() {
+        assert_eq!(pulled(Ok(())).unwrap(), Pulled::Frame);
+        assert_eq!(pulled(Err(ff::Error::Eof)).unwrap(), Pulled::End);
+        let again = ff::Error::Other {
+            errno: ff::util::error::EAGAIN,
+        };
+        assert_eq!(pulled(Err(again)).unwrap(), Pulled::Empty);
+        for e in [
+            ff::Error::Other {
+                errno: ff::util::error::EINVAL,
+            },
+            ff::Error::Other {
+                errno: ff::util::error::ENOMEM,
+            },
+            ff::Error::InvalidData,
+        ] {
+            assert!(
+                matches!(pulled(Err(e)), Err(Stop::Failed(m)) if m.starts_with("The filter graph failed: "))
+            );
+        }
+    }
 }

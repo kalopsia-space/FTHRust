@@ -556,6 +556,97 @@ fn a_stream_copy_trim_stops_reading_at_its_end() {
     );
 }
 
+/// A video-only re-encode through `graph` (its output pad is `[v]`).
+fn graph_job(src: &Path, out: PathBuf, graph: &str, expected_duration_s: f64) -> Job {
+    use fthrust_core::export::graph::{AudioOut, GraphPlan, MapRef, VideoOut};
+    Job {
+        expected_duration_s,
+        copy_metadata: false,
+        ..rewrite_job(
+            src,
+            out,
+            GraphPlan {
+                seek_s: None,
+                duration_s: None,
+                filter_graph: Some(graph.to_owned()),
+                video_map: MapRef::Label("v".into()),
+                audio_map: None,
+                video: VideoOut::Encode,
+                audio: AudioOut::None,
+                audio_filter: None,
+                shortest: false,
+            },
+        )
+    }
+}
+
+#[test]
+fn a_truncated_export_fails_instead_of_replacing_anything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "three.mp4", 3, 0) else {
+        return;
+    };
+    let out = tmp.path().join("short.mp4");
+    // The graph ends the video after 0.2 s of a 3 s clip, as an encoder or
+    // filter that gives up early would; the first frame still decodes.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=0.2[v]",
+        3.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(r.detail.contains("s long"), "{}", r.detail);
+    assert!(!out.exists());
+    assert!(leftovers(tmp.path()).is_empty());
+
+    // The same graph is fine when that is the length asked for.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]trim=duration=0.2[v]",
+        0.2,
+    ));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn an_export_never_needs_more_than_the_clip_has() {
+    // Finalize asks for the requested clip length, which a replay buffer
+    // holding less than that does not reach.
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "two.mp4", 2, 1) else {
+        return;
+    };
+    let out = tmp.path().join("whole.mp4");
+    let (r, _, _) = run_job(&graph_job(&src, out.clone(), "[0:v]null[v]", 30.0));
+    assert_eq!(r.state, ExportState::Completed, "{}", r.detail);
+}
+
+#[test]
+fn a_filter_graph_error_fails_the_export_with_its_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some(src) = clip(tmp.path(), "bad.mp4", 2, 0) else {
+        return;
+    };
+    let out = tmp.path().join("bad_out.mp4");
+    // `colorspace` refuses HLG input when it filters the first frame, which
+    // surfaces where the export pulls frames from the graph.
+    let (r, _, _) = run_job(&graph_job(
+        &src,
+        out.clone(),
+        "[0:v]setparams=color_trc=arib-std-b67,colorspace=all=bt709[v]",
+        2.0,
+    ));
+    assert_eq!(r.state, ExportState::Failed, "{}", r.detail);
+    assert!(
+        r.detail.starts_with("The filter graph failed: "),
+        "{}",
+        r.detail
+    );
+    assert!(!out.exists());
+}
+
 #[test]
 fn a_corrupt_packet_does_not_abort_the_export() {
     let tmp = tempfile::tempdir().unwrap();

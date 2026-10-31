@@ -237,6 +237,9 @@ fn finish(job: &Job, staged: &Path, cancel: &AtomicBool) -> ExportResult {
         }
         return ExportResult::new(ExportState::Failed, e);
     }
+    if let Err(e) = check_duration(job, staged) {
+        return ExportResult::new(ExportState::Failed, e);
+    }
     if let Some(target) = job.target_size_mb
         && size as f64 > target * 1_048_576.0
     {
@@ -262,6 +265,44 @@ fn finish(job: &Job, staged: &Path, cancel: &AtomicBool) -> ExportResult {
         );
     }
     ExportResult::new(ExportState::Completed, "")
+}
+
+/// Seconds of `path`: its video stream's length, else the container's.
+fn duration_s(path: &Path) -> Option<f64> {
+    use ffmpeg_next as ff;
+    let ictx = ff::format::input(&path).ok()?;
+    let video = ictx.streams().best(ff::media::Type::Video).and_then(|s| {
+        let tb = s.time_base();
+        (s.duration() > 0 && tb.denominator() > 0)
+            .then(|| s.duration() as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))
+    });
+    let container =
+        (ictx.duration() > 0).then(|| ictx.duration() as f64 / f64::from(ff::ffi::AV_TIME_BASE));
+    video.or(container)
+}
+
+/// Fails an output that ends well before the length it should have, so a
+/// truncated export never replaces anything. That length is the job's,
+/// capped at what the source has from the seek point on: a replay buffer
+/// holding less than a save asked for makes a shorter clip, whose rewrite
+/// is still whole. Half a second plus 1% covers frame and audio rounding.
+fn check_duration(job: &Job, staged: &Path) -> Result<(), String> {
+    let mut required = job.expected_duration_s;
+    if let Some(source) = duration_s(&job.source) {
+        required = required.min(source - job.plan.seek_s.unwrap_or(0.0));
+    }
+    if required <= 0.0 {
+        return Ok(());
+    }
+    let Some(got) = duration_s(staged) else {
+        return Ok(());
+    };
+    if got + 0.5 + required * 0.01 < required {
+        return Err(format!(
+            "Export is {got:.1} s long but should be {required:.1} s"
+        ));
+    }
+    Ok(())
 }
 
 /// Python's `{:g}` for the size target.
