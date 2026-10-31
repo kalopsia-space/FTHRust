@@ -74,6 +74,9 @@ chmod 644 "$desktop"
 install -m 644 "$PKG/$APP_ID.png" "$icon"
 install -m 644 "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$licenses/"
 cp -r "$ROOT/licenses" "$licenses/licenses"
+# THIRD_PARTY_NOTICES.md links to it (see packaging/check-notice-links.sh).
+mkdir -p "$licenses/packaging"
+install -m 644 "$PKG/ffmpeg_manifest_linux.json" "$licenses/packaging/"
 
 echo "installed FTHRust Clips to $dest"
 if [ -z "${DESTDIR:-}" ]; then

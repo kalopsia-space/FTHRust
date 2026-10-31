@@ -323,7 +323,8 @@ Manual recording writes fragmented MP4 continuously.
 
 ### 6.4 UI
 
-egui 0.37 on eframe with the wgpu backend, winit on Wayland. A single
+egui 0.37 rendered by egui-wgpu inside our own winit runner (`runner.rs`,
+winit on Wayland; eframe is not used). A single
 `Tokens` struct holds the 25 colour tokens, font faces and sizes, radii
 and motion timings from `docs/reference/reference-ui-inventory.md`
 section 2, and a `Theme` loaded from `theme.json` overrides them.
@@ -362,12 +363,13 @@ Seek keeps the reference's proxy-transcode cache under
 
 Out-of-window surfaces: the capture-card notification and Gary overlay
 are layer-shell surfaces drawn by egui over wgpu using
-`fthrust-wayland`, not eframe viewports, because winit cannot place or
+`fthrust-wayland`, not extra winit windows, because winit cannot place or
 pin windows on Wayland. On a compositor without layer-shell the capture
 card falls back to a desktop notification and Gary overlay is disabled
 with a logged notice.
 
-Webcam: V4L2 through `nokhwa`. Screenshots: Screenshot portal, never a
+Webcam: V4L2 through libavdevice (the FFmpeg the app already links; no
+separate camera crate). Screenshots: Screenshot portal, never a
 window grab (fixes the black screenshots of the reference).
 
 Game detection on Wayland: `ext-foreign-toplevel-list` gives app-id and
