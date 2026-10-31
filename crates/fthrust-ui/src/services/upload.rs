@@ -864,12 +864,19 @@ fn unsaved_entry(
     }
 }
 
+/// Why an automatic delete leaves a clip alone, as the bar says it.
+const KEPT_BUSY: &str =
+    "an export or share of it is queued or running. Delete it yourself when that has finished.";
+const KEPT_OPEN: &str = "it is open in the editor. Delete it yourself once you have closed it.";
+
 /// Auto-delete: removes the file an upload confirmed, `sent`, the way the bin
-/// button would (`library::page::remove_clip`). The uploader leaves this to
-/// the app because only the app knows what has become of the clip since the
-/// upload began: an export or share that reads it keeps it (and the bar says
-/// so), and an editor opened on it closes with it. Nothing outside the clips
-/// folder is ever removed, imported libraries least of all.
+/// button would (`library::page::remove_clip`), only more carefully. The
+/// uploader leaves this to the app because only the app knows what has become
+/// of the clip since the upload began: an export or share that reads it keeps
+/// it, and so does an editor session on it, open or parked, which the bin
+/// button (pressed by the user) would close but an automatic delete must not
+/// pull a clip out from under; the bar says so in both cases. Nothing outside
+/// the clips folder is ever removed, imported libraries least of all.
 fn delete_uploaded(state: &mut AppState, sent: &Path) {
     // Switched off while the upload ran: the setting counts at this moment.
     if !state.uploader_settings.flag("upload_auto_delete") {
@@ -884,18 +891,26 @@ fn delete_uploaded(state: &mut AppState, sent: &Path) {
         return;
     }
     let name = file_name(sent);
-    match crate::library::page::remove_clip(state, sent) {
-        Ok(()) => {}
-        Err(NotDeleted::Busy) => notice(
+    let kept = |state: &mut AppState, why: &str| {
+        notice(
             state,
             "UPLOAD WARNING",
-            &format!(
-                "{name} was uploaded, but not deleted: an export or share of it is queued or running. Delete it yourself when that has finished."
-            ),
+            &format!("{name} was uploaded, but not deleted: {why}"),
             Vec::new(),
             format!("upload-warning:{}", sent.display()),
             false,
-        ),
+        )
+    };
+    // The export first: closing an editor would not free the clip from it.
+    if crate::editor::sessions::exporting(state, sent) {
+        return kept(state, KEPT_BUSY);
+    }
+    if crate::editor::sessions::holds(state, sent) {
+        return kept(state, KEPT_OPEN);
+    }
+    match crate::library::page::remove_clip(state, sent) {
+        Ok(()) => {}
+        Err(NotDeleted::Busy) => kept(state, KEPT_BUSY),
         Err(NotDeleted::Failed(e)) => notice(
             state,
             "UPLOAD WARNING",

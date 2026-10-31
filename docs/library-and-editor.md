@@ -16,7 +16,7 @@ Your clips, how to cut them down, and how to get them out of the app in a shape 
 The **Clips** page shows everything in your clips folder, grouped by day, newest first. A day's heading is its weekday and date (`Fri, Jan 15`); the same date in two different years is two groups. Each card shows a thumbnail with the clip's length, its name, and its resolution, frame rate and bitrate (`1080p · 60 FPS · 25 Mbps`).
 
 - **Click a clip** to open it in the editor.
-- **Hover a card and press F2** to rename it. A renamed clip keeps its tag, description and saved editor draft, and a parked editor for it follows the new name. A clip can't be renamed or deleted while one of its exports or shares is queued or running; the app says so and leaves it alone. The [uploader's](uploads.md) auto-delete keeps to the same rule.
+- **Hover a card and press F2** to rename it. A renamed clip keeps its tag, description and saved editor draft, and a parked editor for it follows the new name. A clip can't be renamed or deleted while one of its exports or shares is queued or running; the app says so and leaves it alone. The [uploader's](uploads.md) auto-delete keeps to the same rule, and also leaves a clip that is open in an editor alone (the bin button closes the editors of a clip it deletes).
 - **Right-click** for *Open in editor*, *Show in file manager*, *Copy path*, *Upload*, *Open uploaded link* and *Delete clip*.
 - The **share button** on a card uploads the clip, or copies its link if it's already uploaded. It needs the [uploader](uploads.md) to be enabled.
 - The **bin button** deletes the clip after asking. Deleting is permanent; there's no trash.

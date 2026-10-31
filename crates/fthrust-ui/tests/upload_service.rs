@@ -691,6 +691,69 @@ fn auto_delete_keeps_a_clip_that_a_share_still_reads_and_says_so() {
     );
 }
 
+/// A delete the user presses closes the editors that hold the clip, but an
+/// automatic one does not pull a clip out from under the user: an editor
+/// session on it, open or parked in the rail, keeps it, and the bar says so
+/// (the editor draws no bar, so the notice is there when it is closed).
+#[test]
+fn auto_delete_keeps_a_clip_that_an_editor_session_holds_and_says_so() {
+    use fthrust_ui::editor::sessions::Session;
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/h.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    r.state.error_bar.enabled = false;
+    let parked = r.clip("parked.mp4");
+    let open = r.clip("open.mp4");
+    for clip in [&parked, &open] {
+        r.state.library.upsert(clip, false);
+    }
+    // One is a session of the rail, the other only the open editor.
+    r.state.editor_slots.push(Session {
+        path: parked.clone(),
+        state: None,
+    });
+    r.state.editor = Some(Editor::for_tests(&open, 10_000, Lifecycle::Paused));
+    r.svc.enqueue(&mut r.state, parked.clone());
+    r.svc.enqueue(&mut r.state, open.clone());
+    r.settle();
+    for clip in [&parked, &open] {
+        assert!(
+            clip.exists(),
+            "{} was deleted under an editor",
+            clip.display()
+        );
+        assert!(r.state.library.record(clip).is_some());
+    }
+    assert_eq!(r.state.editor_slots.len(), 1, "a session was closed");
+    assert!(r.state.editor.is_some(), "the open editor was closed");
+    let details: Vec<String> = r
+        .state
+        .error_bar
+        .entries()
+        .iter()
+        .map(|e| {
+            assert_eq!(e.title, "UPLOAD WARNING");
+            e.detail.clone()
+        })
+        .collect();
+    assert_eq!(
+        details,
+        vec![
+            "parked.mp4 was uploaded, but not deleted: it is open in the editor. Delete it yourself once you have closed it.",
+            "open.mp4 was uploaded, but not deleted: it is open in the editor. Delete it yourself once you have closed it.",
+        ]
+    );
+    // Nothing holds it any more: the next upload of such a clip deletes it.
+    r.state.editor_slots.clear();
+    r.state.editor = None;
+    let free = r.clip("free.mp4");
+    r.svc.enqueue(&mut r.state, free.clone());
+    r.settle();
+    assert!(!free.exists());
+}
+
 /// The setting counts when the upload ends: switched off meanwhile, the clip
 /// stays.
 #[test]
