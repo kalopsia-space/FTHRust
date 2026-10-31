@@ -73,7 +73,7 @@ impl SaveWorker {
             .name("fthrust-save".into())
             .spawn(move || {
                 for req in rx {
-                    let result = run_save(&engine, &req, &worker_events);
+                    let result = run_save_guarded(&engine, &req, &worker_events);
                     let _ = worker_events.send(Event::SaveResult {
                         request_id: req.request_id,
                         result,
@@ -110,6 +110,39 @@ impl SaveWorker {
     pub fn is_busy(&self) -> bool {
         self.busy.load(Ordering::Relaxed)
     }
+}
+
+/// [`run_save`] with a panic turned into a failed save, so the worker keeps
+/// serving requests and its busy flag is cleared. A `.partial` the
+/// panicking save left behind is removed.
+fn run_save_guarded(
+    engine: &EngineHandle,
+    req: &SaveRequest,
+    events: &Sender<Event>,
+) -> Result<SavedClip, String> {
+    let partial = fthrust_media::transactional_save::temporary_path_for(&req.path);
+    let partial_existed = partial.exists();
+    let run = std::panic::AssertUnwindSafe(|| run_save(engine, req, events));
+    match std::panic::catch_unwind(run) {
+        Ok(result) => result,
+        Err(panic) => {
+            let why = panic_message(panic.as_ref());
+            tracing::error!(path = %req.path.display(), "clip save panicked: {why}");
+            if !partial_existed {
+                let _ = std::fs::remove_file(&partial);
+            }
+            Err(format!("The clip could not be saved: {why}"))
+        }
+    }
+}
+
+/// The text of a panic payload.
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "an internal error".to_string())
 }
 
 fn run_save(

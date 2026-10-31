@@ -70,6 +70,35 @@ impl fthrust_engine::audio::AudioProvider for SlowAudio {
     }
 }
 
+/// Synthetic audio whose first window extraction panics.
+struct PanicOnceAudio {
+    inner: SyntheticAudio,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+impl fthrust_engine::audio::AudioProvider for PanicOnceAudio {
+    fn start(&self, cfg: &fthrust_engine::audio::AudioConfig) -> Vec<(String, String)> {
+        self.inner.start(cfg)
+    }
+    fn window(
+        &self,
+        kind: fthrust_engine::audio::AudioSourceKind,
+        end_ns: i64,
+        duration_ms: u32,
+    ) -> Option<Vec<f32>> {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("injected window failure");
+        }
+        self.inner.window(kind, end_ns, duration_ms)
+    }
+    fn status(&self) -> fthrust_ipc::AudioStatus {
+        self.inner.status()
+    }
+    fn stop(&self) {
+        self.inner.stop()
+    }
+}
+
 fn rig(cfg: EngineConfig, audio: SyntheticAudio, interval: Duration) -> Rig {
     rig_with(cfg, Arc::new(audio), interval)
 }
@@ -529,5 +558,59 @@ fn record_backlog_overflow_ends_the_recording_with_an_error() {
     };
     assert!(message.contains("behind"), "{message}");
     assert_eq!(record.state(), RecordingState::Idle);
+    r.engine.shutdown();
+}
+
+#[test]
+fn a_panicking_save_is_answered_and_frees_the_worker() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // A panic in the save thread used to kill it with its busy flag set: no
+    // SaveResult, and every later save refused as "already in progress".
+    let mut r = rig_with(
+        config(|c| c.microphone_endpoint_id.clear()),
+        Arc::new(PanicOnceAudio {
+            inner: SyntheticAudio::new(),
+            armed: std::sync::atomic::AtomicBool::new(true),
+        }),
+        Duration::from_millis(16),
+    );
+    r.engine.start().unwrap();
+    wait_frames(&r.engine, 60);
+    let tmp = tempfile::tempdir().unwrap();
+    let first = tmp.path().join("first.mp4");
+    r.save.submit(SaveRequest {
+        request_id: 31,
+        path: first.clone(),
+        seconds: 1,
+    });
+    match next_event(&r.events, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveResult { request_id: 31, .. })
+    }) {
+        Event::SaveResult {
+            result: Err(msg), ..
+        } => assert!(msg.contains("injected window failure"), "{msg}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!r.save.is_busy());
+    assert!(!first.exists());
+    assert!(
+        !fthrust_media::transactional_save::temporary_path_for(&first).exists(),
+        "no partial file left behind"
+    );
+    let second = tmp.path().join("second.mp4");
+    r.save.submit(SaveRequest {
+        request_id: 32,
+        path: second.clone(),
+        seconds: 1,
+    });
+    match next_event(&r.events, Duration::from_secs(20), |e| {
+        matches!(e, Event::SaveResult { request_id: 32, .. })
+    }) {
+        Event::SaveResult { result: Ok(_), .. } => {}
+        other => panic!("{other:?}"),
+    }
+    assert!(second.exists());
     r.engine.shutdown();
 }
