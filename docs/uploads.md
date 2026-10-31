@@ -103,6 +103,8 @@ The link isn't copied to your clipboard automatically.
 | Upload history and links | `~/.fthr/uploader/upload_history.json` |
 | SFTP host keys you've trusted | `~/.fthr/uploader/known_hosts` |
 
+The `uploader` folder is private to you (`0700`) and the files in it are `0600`, since the settings hold the Catbox user hash and the Your server header in plain text. Older profiles are tightened the next time the app starts. If a file there can't be read, the app leaves it alone instead of replacing it with an empty one, and a file that isn't valid JSON is copied to `<name>.corrupt` before anything is written over it.
+
 The uploader only reads clips inside your clips folder and folders you've imported. It refuses any other path it's given.
 
 ## When an upload fails

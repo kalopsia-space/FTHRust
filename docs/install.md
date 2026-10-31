@@ -140,5 +140,5 @@ This build uses your system's FFmpeg (8.x) and PipeWire instead of a bundled FFm
 
 1. Delete the AppImage or the unpacked tarball folder (and its symlink), or run `packaging/install.sh --uninstall` with the `--prefix` you installed to.
 2. Delete `~/.fthr` for settings, logs and caches. Leave it if you might come back.
-3. If you used Hyprland's managed hotkeys, delete `~/.config/hypr/fthr-hotkeys.conf` and the `source = …fthr-hotkeys.conf` line the app added to `hyprland.conf`. On Lua configs, remove the block between the `FTHR Clips hotkeys begin/end (managed)` markers in `custom/keybinds.lua`.
+3. If you used Hyprland's managed hotkeys, delete `~/.config/hypr/fthr-hotkeys.conf` and the `source = …fthr-hotkeys.conf` line the app added to `hyprland.conf`. On Lua configs, remove the block between the `FTHR Clips hotkeys begin/end (managed)` markers in `custom/keybinds.lua`, and the `custom/keybinds.lua.bak` copy beside it.
 4. Your clips in `~/Videos/FTHR Clips` are yours. Keep or delete them as you like.

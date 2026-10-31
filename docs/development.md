@@ -67,7 +67,7 @@ Handy variables while developing:
 
 | Variable | Effect |
 |---|---|
-| `RUST_LOG=debug` | App log detail (to stderr). |
+| `RUST_LOG=debug` | App log detail (to stderr and `~/.fthr/logs/fthr.log`). Without it: info for `fthrust*` targets, warn for the rest. |
 | `FTHRUST_LOG=debug` | Engine log detail (to `~/.fthr/logs/engine.log`). |
 | `FTHR_CAPTURE_BACKEND=ext\|wlr\|portal\|synthetic` | Forces a capture backend. `synthetic` draws a test pattern and needs no compositor support. |
 | `FTHRUST_SYNTHETIC_BACKEND=1`, `FTHRUST_SYNTHETIC_SIZE=1920x1080` | Turns on the synthetic backend and sets its frame size. |
