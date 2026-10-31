@@ -51,6 +51,39 @@ struct SessionInfo {
     stopped: bool,
 }
 
+impl SessionInfo {
+    fn on_event(&mut self, event: ext_image_copy_capture_session_v1::Event) {
+        use ext_image_copy_capture_session_v1::Event;
+        match event {
+            Event::BufferSize { width, height } => self.pending_size = Some((width, height)),
+            Event::ShmFormat { format } => self.pending_formats.push(match format {
+                WEnum::Value(f) => f as u32,
+                WEnum::Unknown(v) => v,
+            }),
+            Event::DmabufDevice { device } => self.dmabuf.device(&device),
+            Event::DmabufFormat { format, modifiers } => self.dmabuf.format(format, &modifiers),
+            Event::Done => {
+                if let Some((w, h)) = self.pending_size.take() {
+                    self.width = w;
+                    self.height = h;
+                }
+                if !self.pending_formats.is_empty() {
+                    self.shm_formats = std::mem::take(&mut self.pending_formats);
+                }
+                self.dmabuf.done();
+                self.done_serial += 1;
+            }
+            Event::Stopped => self.stopped = true,
+            _ => {}
+        }
+    }
+
+    /// Whether a constraints batch newer than `serial` has completed.
+    fn batch_after(&self, serial: u64) -> bool {
+        self.done_serial > serial
+    }
+}
+
 #[derive(Default)]
 struct PendingFrame {
     ready: bool,
@@ -124,30 +157,7 @@ impl Dispatch<ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1, (
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        use ext_image_copy_capture_session_v1::Event;
-        let s = &mut state.session;
-        match event {
-            Event::BufferSize { width, height } => s.pending_size = Some((width, height)),
-            Event::ShmFormat { format } => s.pending_formats.push(match format {
-                WEnum::Value(f) => f as u32,
-                WEnum::Unknown(v) => v,
-            }),
-            Event::DmabufDevice { device } => s.dmabuf.device(&device),
-            Event::DmabufFormat { format, modifiers } => s.dmabuf.format(format, &modifiers),
-            Event::Done => {
-                if let Some((w, h)) = s.pending_size.take() {
-                    s.width = w;
-                    s.height = h;
-                }
-                if !s.pending_formats.is_empty() {
-                    s.shm_formats = std::mem::take(&mut s.pending_formats);
-                }
-                s.dmabuf.done();
-                s.done_serial += 1;
-            }
-            Event::Stopped => s.stopped = true,
-            _ => {}
-        }
+        state.session.on_event(event);
     }
 }
 
@@ -189,6 +199,8 @@ pub struct ExtImageCopy {
     cancel: Arc<AtomicBool>,
     frame_period: Duration,
     pending_frame: Option<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1>,
+    /// The constraints batch the in-flight frame's buffer was made for.
+    requested_serial: u64,
     slots: SlotState,
     pending_slot: usize,
     last_geometry: Option<BufferGeometry>,
@@ -326,6 +338,7 @@ impl ExtImageCopy {
             cancel,
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1))),
             pending_frame: None,
+            requested_serial: 0,
             slots: SlotState::default(),
             pending_slot: 0,
             last_geometry: None,
@@ -543,14 +556,15 @@ impl ExtImageCopy {
         }
     }
 
-    /// Waits for a constraints batch newer than `after_serial`.
+    /// Waits for a constraints batch newer than `after_serial`; returns at
+    /// once when one has already arrived.
     fn wait_constraints(
         &mut self,
         deadline: Instant,
         after_serial: u64,
     ) -> Result<(), CaptureFailure> {
         self.wait_until(deadline, |s| {
-            s.session.stopped || s.session.done_serial > after_serial
+            s.session.stopped || s.session.batch_after(after_serial)
         })?;
         if self.ops.state().session.stopped {
             return Err(CaptureFailure::Failed(
@@ -595,6 +609,7 @@ impl ExtImageCopy {
             .ensure(&qh, geometry, slot)
             .map_err(|e| CaptureFailure::Failed(e.to_string()))?;
         self.pending_slot = slot;
+        self.requested_serial = self.ops.state().session.done_serial;
         self.ops.state_mut().pending = PendingFrame::default();
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(buffer);
@@ -616,6 +631,7 @@ impl ExtImageCopy {
         }
         let slot = mode.ring.next_request();
         self.pending_slot = slot;
+        self.requested_serial = self.ops.state().session.done_serial;
         self.ops.state_mut().pending = PendingFrame::default();
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(&self.dmabuf.as_ref().expect("dmabuf mode").buffers[slot]);
@@ -662,11 +678,14 @@ impl ExtImageCopy {
         }
         if let Some(reason) = state.pending.failed {
             use ext_image_copy_capture_frame_v1::FailureReason;
+            // The compositor sends the new constraints batch before it fails
+            // the frame, so the batch to wait for is the first one after the
+            // buffer was made, which has usually arrived already.
+            let serial = self.requested_serial;
             return match reason {
                 FailureReason::BufferConstraints if self.dmabuf.is_some() => {
                     // Wait briefly for the new batch so the caller sees
                     // fresh constraints; a missing batch is not an error.
-                    let serial = state.session.done_serial;
                     match self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial) {
                         Ok(()) | Err(CaptureFailure::Timeout) => {}
                         Err(e) => return Err(e),
@@ -674,7 +693,6 @@ impl ExtImageCopy {
                     Err(CaptureFailure::DmabufInvalidated)
                 }
                 FailureReason::BufferConstraints => {
-                    let serial = state.session.done_serial;
                     self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial)?;
                     self.request_frame()?;
                     self.wait_until(Instant::now() + FRAME_DEADLINE, |s| {
@@ -858,6 +876,33 @@ mod tests {
             device: 1,
             formats: vec![(DRM_FORMAT_XRGB8888, vec![0, 5])],
         }
+    }
+
+    fn batch(s: &mut SessionInfo, width: u32, height: u32) {
+        use ext_image_copy_capture_session_v1::Event;
+        s.on_event(Event::BufferSize { width, height });
+        s.on_event(Event::ShmFormat {
+            format: WEnum::Value(wl_shm::Format::Xrgb8888),
+        });
+        s.on_event(Event::Done);
+    }
+
+    #[test]
+    fn a_batch_sent_before_the_failure_is_not_waited_for() {
+        let mut s = SessionInfo::default();
+        batch(&mut s, 1920, 1080);
+        // The frame's buffer is made for this batch.
+        let requested = s.done_serial;
+        // Mode switch: the compositor sends the new batch, then fails the
+        // frame with buffer_constraints.
+        batch(&mut s, 2560, 1440);
+        assert!(
+            s.batch_after(requested),
+            "the retry may go ahead without waiting"
+        );
+        assert_eq!((s.width, s.height), (2560, 1440));
+        // Only a failure that came before its batch waits for it.
+        assert!(!s.batch_after(s.done_serial));
     }
 
     #[test]
