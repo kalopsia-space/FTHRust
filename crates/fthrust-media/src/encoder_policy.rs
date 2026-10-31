@@ -86,6 +86,22 @@ pub fn encoder_candidates(codec: Codec, encoder: EncoderPref) -> Vec<&'static st
     out
 }
 
+/// The preset value the settings start at (P4, Balanced).
+pub const DEFAULT_PRESET: u8 = 4;
+
+/// The preset capture uses with `backend` chosen: the stored `preset`
+/// where the settings show the preset picker (only for NVENC chosen
+/// explicitly), else [`DEFAULT_PRESET`]. A preset picked for NVENC would
+/// otherwise follow the user to a backend that never shows it (P7 then
+/// Software runs Kvazaar or SVT-AV1 at their slowest).
+pub fn capture_preset(backend: EncoderPref, preset: u8) -> u8 {
+    if backend == EncoderPref::Nvenc {
+        preset
+    } else {
+        DEFAULT_PRESET
+    }
+}
+
 /// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).
 pub fn is_hardware(codec_name: &str) -> bool {
     ["nvenc", "vaapi", "amf", "qsv"]

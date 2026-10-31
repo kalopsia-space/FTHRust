@@ -192,3 +192,21 @@ fn software_encoders_get_automatic_threads_hardware_keeps_its_default() {
         }
     }
 }
+
+#[test]
+fn capture_follows_the_stored_preset_only_with_nvenc_chosen() {
+    use fthrust_media::encoder_policy::{DEFAULT_PRESET, capture_preset};
+    assert_eq!(capture_preset(EncoderPref::Nvenc, 7), 7);
+    assert_eq!(capture_preset(EncoderPref::Nvenc, 1), 1);
+    // No picker for these (Automatic shows none either).
+    for backend in [
+        EncoderPref::Auto,
+        EncoderPref::Vaapi,
+        EncoderPref::Qsv,
+        EncoderPref::Software,
+    ] {
+        assert_eq!(capture_preset(backend, 7), DEFAULT_PRESET, "{backend:?}");
+        assert_eq!(capture_preset(backend, 1), DEFAULT_PRESET, "{backend:?}");
+    }
+    assert_eq!(DEFAULT_PRESET, 4);
+}
