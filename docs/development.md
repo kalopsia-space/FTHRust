@@ -134,14 +134,14 @@ Useful `bench.sh up` options:
 
 | Option | Does |
 |---|---|
-| `--engine synthetic\|real` | A test pattern (the default), or real screen capture of the headless output. |
+| `--engine synthetic\|real` | A test pattern (the default), or real screen capture of the headless output (the `wlr` backend). |
 | `--release` | Uses the release build. |
 | `--app PATH` | Runs another `fthrust`, such as one extracted from an AppImage. |
 | `--settings FILE` | Merges a JSON file over the bench's settings. |
 | `--pipewire` | Starts a private PipeWire and WirePlumber, so desktop audio comes up. |
 | `--seed DIR` | Copies a clips folder into the bench before the app starts. |
 
-Keep `BENCH_DIR` short: the Wayland socket path inside it must fit in 108 bytes. [`tools/uidrive/README.md`](../tools/uidrive/README.md) has the full command list and interactive use.
+The bench works in a fresh private directory under `/tmp`; `BENCH_DIR` chooses another one, which must be absent, empty or left by an earlier bench (anything else is refused rather than emptied). Keep it short: the Wayland socket path inside it must fit in 108 bytes. [`tools/uidrive/README.md`](../tools/uidrive/README.md) has the full command list and interactive use.
 
 ### Refreshing the docs screenshots
 

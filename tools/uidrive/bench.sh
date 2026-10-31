@@ -12,14 +12,16 @@
 #   bench.sh run SCENARIO [up options]
 # `up` prints eval-able BENCH=, BENCH_SOCKET=, BENCH_APP= lines. Nothing here
 # reads the caller's WAYLAND_DISPLAY, XDG_RUNTIME_DIR or HOME for the app.
+# The bench directory is a fresh private /tmp/uidrive-XXXXXX unless BENCH_DIR
+# names one; a BENCH_DIR that exists is only reused (and emptied) when an
+# earlier bench created it (it holds a .uidrive-bench marker) or it is empty.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
+MARKER=.uidrive-bench
 
 die() { echo "bench: $*" >&2; exit 1; }
-
-cmd=${1:-}; shift || true
 
 parse_up() {
   PROFILE=debug; ENGINE=synthetic; SIZE=1920x1080; APP=""; SETTINGS=""; CAGE=cage; RENDERER=auto; PIPEWIRE=0; SEED=""
@@ -41,14 +43,58 @@ parse_up() {
   [ -n "$APP" ] || APP="$ROOT/target/$PROFILE/fthrust"
 }
 
+# The environment the engine runs with, by --engine mode. `wlr` is a name
+# FTHR_CAPTURE_BACKEND accepts (wlr, ext, portal, synthetic; anything else is
+# ignored), and cage speaks wlr-screencopy.
+engine_env() {
+  case "$1" in
+    synthetic) echo "FTHRUST_SYNTHETIC_BACKEND=1 FTHR_CAPTURE_BACKEND=synthetic FTHRUST_SYNTHETIC_SIZE=$2" ;;
+    real) echo "FTHR_CAPTURE_BACKEND=wlr" ;;
+    *) die "--engine must be synthetic or real" ;;
+  esac
+}
+
+# Sets BENCH to an empty private directory marked as ours. Without BENCH_DIR it
+# is a fresh mktemp directory (unpredictable name, mode 0700). With BENCH_DIR
+# it is that path, which must be absolute, not a symlink and owned by the
+# caller; an existing one is emptied only when it carries our marker (a bench
+# made it) or is already empty. Anything else is refused untouched, because the
+# old `rm -rf "$BENCH_DIR"` would delete whatever it was pointed at.
+prepare_bench_dir() {
+  if [ -z "${BENCH_DIR:-}" ]; then
+    BENCH=$(mktemp -d /tmp/uidrive-XXXXXX) || die "cannot create a bench directory in /tmp"
+  else
+    BENCH=$BENCH_DIR
+    case "$BENCH" in
+      /*) ;;
+      *) die "BENCH_DIR must be an absolute path: $BENCH_DIR" ;;
+    esac
+    BENCH=${BENCH%/}
+    [ -n "$BENCH" ] || die "BENCH_DIR must not be /"
+    [ ! -L "$BENCH" ] || die "BENCH_DIR must not be a symlink: $BENCH"
+    if [ -e "$BENCH" ]; then
+      [ -d "$BENCH" ] || die "BENCH_DIR exists and is not a directory: $BENCH"
+      [ -O "$BENCH" ] || die "BENCH_DIR is not owned by you: $BENCH"
+      if [ ! -f "$BENCH/$MARKER" ] && [ -n "$(ls -A -- "$BENCH")" ]; then
+        die "refusing to reuse $BENCH: it is not empty and no earlier bench made it (no $MARKER inside). Remove it yourself or pick another BENCH_DIR."
+      fi
+      find "$BENCH" -mindepth 1 -delete
+    else
+      mkdir -p -- "$BENCH"
+    fi
+    chmod 700 -- "$BENCH"
+  fi
+  : > "$BENCH/$MARKER"
+}
+
 bench_up() {
   parse_up "$@"
   command -v "$CAGE" >/dev/null 2>&1 || die "cage not found at '$CAGE' (pacman -S cage)"
   command -v grim >/dev/null 2>&1 || die "grim not found (needed for screenshots)"
   [ -x "$APP" ] || die "app binary not found: $APP (cargo build -p fthrust-ui -p fthrust-engine)"
   [ -x "$(dirname "$APP")/fthrust-engine" ] || die "engine binary missing next to $APP"
-  BENCH=${BENCH_DIR:-/tmp/uidrive-$$}
-  rm -rf "$BENCH"
+  ENGINE_ENV=$(engine_env "$ENGINE" "$SIZE")
+  prepare_bench_dir
   mkdir -p "$BENCH/home/.fthr" "$BENCH/clips" "$BENCH/shots" "$BENCH/logs"
   mkdir -m 700 "$BENCH/rt"
   # Seed settings: sounds off, clips under the bench, then the caller's file on top.
@@ -62,11 +108,6 @@ if extra:
 pathlib.Path(bench, "home", ".fthr", "settings.json").write_text(json.dumps(s))
 PY
   [ -z "$SEED" ] || cp -a "$SEED"/. "$BENCH/clips/"
-  case "$ENGINE" in
-    synthetic) ENGINE_ENV="FTHRUST_SYNTHETIC_BACKEND=1 FTHR_CAPTURE_BACKEND=synthetic FTHRUST_SYNTHETIC_SIZE=$SIZE" ;;
-    real) ENGINE_ENV="FTHR_CAPTURE_BACKEND=screencopy" ;;
-    *) die "--engine must be synthetic or real" ;;
-  esac
   # A private session bus with NO service directories: nothing can be
   # activated on it (no portal, no notification daemon), so portal calls
   # fail at once and never reach the user's session.
@@ -141,24 +182,30 @@ XML
   echo "BENCH_APP=$APP"
 }
 
+# Stops everything `up` started. Every step tolerates a process that is
+# already gone or a pid file that vanished: under `set -e` one failed kill
+# used to end the teardown early, leaving dbus-daemon behind and, from the
+# EXIT trap in bench_run, replacing the scenario's own exit code.
 bench_down() {
-  local b=${BENCH:-}
+  local b=${BENCH:-} pid d
   [ -n "$b" ] || die "BENCH is not set"
   if [ -f "$b/cage.pid" ]; then
-    local pid; pid=$(cat "$b/cage.pid")
-    pkill -TERM -P "$pid" 2>/dev/null || true
-    kill -TERM "$pid" 2>/dev/null || true
-    for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
-    kill -KILL "$pid" 2>/dev/null || true
-    pkill -KILL -P "$pid" 2>/dev/null || true
+    pid=$(cat "$b/cage.pid" 2>/dev/null || true)
+    if [ -n "$pid" ]; then
+      pkill -TERM -P "$pid" 2>/dev/null || true
+      kill -TERM "$pid" 2>/dev/null || true
+      for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      kill -KILL "$pid" 2>/dev/null || true
+      pkill -KILL -P "$pid" 2>/dev/null || true
+    fi
   fi
-  for d in wireplumber pipewire; do
-    [ -f "$b/$d.pid" ] && kill -TERM "$(cat "$b/$d.pid")" 2>/dev/null; rm -f "$b/$d.pid"
+  for d in wireplumber pipewire dbus; do
+    if [ -f "$b/$d.pid" ]; then
+      pid=$(cat "$b/$d.pid" 2>/dev/null || true)
+      [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
+      rm -f "$b/$d.pid"
+    fi
   done
-  if [ -f "$b/dbus.pid" ]; then
-    kill -TERM "$(cat "$b/dbus.pid")" 2>/dev/null || true
-    rm -f "$b/dbus.pid"
-  fi
   rm -f "$b/cage.pid"
 }
 
@@ -181,9 +228,16 @@ bench_run() {
   exit $code
 }
 
-case "$cmd" in
-  up) bench_up "$@" ;;
-  down) bench_down ;;
-  run) bench_run "$@" ;;
-  *) die "usage: bench.sh up|down|run" ;;
-esac
+main() {
+  local cmd=${1:-}
+  shift || true
+  case "$cmd" in
+    up) bench_up "$@" ;;
+    down) bench_down ;;
+    run) bench_run "$@" ;;
+    *) die "usage: bench.sh up|down|run" ;;
+  esac
+}
+
+# bench-unit.sh sources this file to test the functions above.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi
