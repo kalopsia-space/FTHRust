@@ -217,6 +217,13 @@ fn delete_clip(state: &mut AppState, path: &Path) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
         return;
     }
+    if crate::editor::sessions::exporting(state, path) {
+        state.dialogs.push_message(
+            crate::editor::sessions::EXPORT_BUSY,
+            "Finish or cancel this clip\u{2019}s exports before deleting the source.",
+        );
+        return;
+    }
     let imports = imported_roots(state);
     let owned = state.library.clips_root.clone();
     let result = match classify_media_path(path, &owned, &imports) {
@@ -235,6 +242,7 @@ fn delete_clip(state: &mut AppState, path: &Path) {
             state.thumb_meta.remove(path);
             state.readiness.forget(path);
             state.library_dirty = true;
+            crate::editor::sessions::clip_deleted(state, path);
         }
         Err(e) => state.dialogs.push_message("File change failed", e),
     }
@@ -263,11 +271,19 @@ fn rename_clip(state: &mut AppState, path: &Path, stem: &str) {
         state.dialogs.push_message("Clip is busy", UPLOADING_BUSY);
         return;
     }
+    if crate::editor::sessions::exporting(state, path) {
+        state.dialogs.push_message(
+            crate::editor::sessions::EXPORT_BUSY,
+            "Finish or cancel this clip\u{2019}s exports before renaming it.",
+        );
+        return;
+    }
     let old_key = upload_key(state, path);
     match fthrust_core::audio_manifest::rename_clip(path, stem) {
         Ok(new_path) => {
             if new_path != path {
                 move_metadata(state, path, &new_path);
+                crate::editor::sessions::clip_renamed(state, path, &new_path);
                 // Keep the returned link attached to the renamed clip.
                 state.upload_keys.remove(path);
                 let new_key = upload_key(state, &new_path);

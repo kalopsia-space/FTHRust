@@ -301,6 +301,125 @@ fn delete_owned_clip_confirms_and_clears_draft() {
     assert!(store.get(&a).unwrap().editor_draft.is_none());
 }
 
+/// What the library's rename and delete dialogs answer.
+fn library_answers(r: &mut Rig, tag: String) {
+    r.s.dialogs
+        .results
+        .push(DialogResult::Answer { tag, yes: true });
+    fthrust_ui::library::page::consume_results(&mut r.s);
+}
+
+fn rename_tag(path: &Path, stem: &str) -> String {
+    format!("rename-clip:{}\u{1f}{stem}", path.display())
+}
+
+fn delete_tag(path: &Path) -> String {
+    format!("delete-clip:{}", path.display())
+}
+
+#[test]
+fn renaming_a_clip_in_the_library_moves_its_parked_session_with_it() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    r.park();
+    assert_eq!(r.s.editor_slots.len(), 1);
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    let renamed = a.with_file_name("renamed.mp4");
+    assert!(renamed.exists() && !a.exists());
+    assert_eq!(r.s.editor_slots[0].path, renamed, "the session follows");
+    assert_eq!(r.s.editor_sessions[0].stem, "renamed", "and so does its rail button");
+    assert!(sessions::restore(&mut r.s, 1), "{:?}", r.messages());
+    r.settle();
+    assert_eq!(r.s.editor.as_ref().unwrap().path, renamed);
+    assert!(r.messages().is_empty(), "{:?}", r.messages());
+}
+
+#[test]
+fn deleting_a_clip_in_the_library_closes_its_parked_session() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    r.park();
+    assert_eq!(r.s.editor_sessions.len(), 1);
+    library_answers(&mut r, delete_tag(&a));
+    assert!(!a.exists());
+    assert!(r.s.editor_slots.is_empty(), "no session for a deleted clip");
+    assert!(r.s.editor_sessions.is_empty(), "no rail button either");
+    let store = fthrust_core::clip_metadata::ClipMetadataStore::open(&r.s.paths).unwrap();
+    assert!(store.get(&a).unwrap().editor_draft.is_none());
+}
+
+/// A queue whose exports run until they are cancelled.
+fn endless_queue() -> fthrust_ui::services::export::ExportQueue {
+    use fthrust_media::export::{ExportResult, ExportState};
+    fthrust_ui::services::export::ExportQueue::with_runner(Arc::new(
+        move |_job, cancel, _, _| {
+            while !cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            ExportResult {
+                state: ExportState::Completed,
+                detail: String::new(),
+            }
+        },
+    ))
+}
+
+#[test]
+fn a_clip_under_export_is_neither_renamed_nor_deleted_from_the_library() {
+    let mut r = rig();
+    let Some(a) = r.clip("a.mp4") else {
+        return;
+    };
+    r.s.export_queue = endless_queue();
+    sessions::open(&mut r.s, &a);
+    r.settle();
+    fthrust_ui::editor::export_ui::export_now(&mut r.s);
+    assert!(r.s.export_queue.active_for(&a), "an export is queued");
+    r.park();
+    // Rename.
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    assert!(a.exists(), "the source stays where the export reads it");
+    assert!(!a.with_file_name("renamed.mp4").exists());
+    assert_eq!(
+        r.messages(),
+        vec![(
+            "Export in progress".to_owned(),
+            "Finish or cancel this clip\u{2019}s exports before renaming it.".to_owned()
+        )]
+    );
+    r.s.dialogs.messages.clear();
+    // Delete.
+    library_answers(&mut r, delete_tag(&a));
+    assert!(a.exists(), "the source is kept");
+    assert_eq!(r.s.editor_slots.len(), 1, "the session stays");
+    assert_eq!(
+        r.messages(),
+        vec![(
+            "Export in progress".to_owned(),
+            "Finish or cancel this clip\u{2019}s exports before deleting the source.".to_owned()
+        )]
+    );
+    // A share in progress counts the same.
+    r.s.dialogs.messages.clear();
+    r.s.export_queue.shutdown(Duration::from_secs(5));
+    assert!(!r.s.export_queue.active_for(&a), "the export was cancelled");
+    r.s.active_shares.push(a.clone());
+    library_answers(&mut r, delete_tag(&a));
+    assert!(a.exists(), "a running share keeps the source too");
+    r.s.active_shares.clear();
+    // Once nothing runs the rename goes through.
+    library_answers(&mut r, rename_tag(&a, "renamed"));
+    assert!(a.with_file_name("renamed.mp4").exists());
+}
+
 #[test]
 fn delete_of_linked_import_is_refused() {
     let mut r = rig();

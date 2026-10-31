@@ -19,7 +19,7 @@ pub const MAX_SESSIONS: usize = 3;
 /// Dialog tag prefix of the delete confirmation.
 const DELETE_TAG: &str = "editor-delete:";
 /// Title of the export guards.
-const EXPORT_BUSY: &str = "Export in progress";
+pub const EXPORT_BUSY: &str = "Export in progress";
 
 /// One editor session.
 #[derive(Clone, Debug, PartialEq)]
@@ -359,6 +359,55 @@ fn imported_roots(state: &AppState) -> Vec<PathBuf> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// An export is queued or running for `path`, or one of its shares is: the
+/// job reads the clip by this path, so it must keep its name and its file.
+pub fn exporting(state: &AppState, path: &Path) -> bool {
+    state.export_queue.active_for(path) || state.active_shares.iter().any(|p| same_path(p, path))
+}
+
+/// The library renamed `old` to `new`: the editor sessions that hold the
+/// clip follow it (its draft moved with the rest of its metadata), so the
+/// rail still opens the clip.
+pub fn clip_renamed(state: &mut AppState, old: &Path, new: &Path) {
+    let mut moved = false;
+    for slot in state.editor_slots.iter_mut() {
+        if same_path(&slot.path, old) {
+            slot.path = new.to_path_buf();
+            moved = true;
+        }
+    }
+    if let Some(e) = state.editor.as_mut()
+        && same_path(&e.path, old)
+    {
+        e.path = new.to_path_buf();
+    }
+    if moved {
+        sync(state);
+    }
+}
+
+/// The library deleted `path`: the editor sessions that hold it close (no
+/// rail button for a clip that is gone) and its draft goes, as when the
+/// editor deletes its own clip.
+pub fn clip_deleted(state: &mut AppState, path: &Path) {
+    let held: Vec<usize> = state
+        .editor_slots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| same_path(&s.path, path))
+        .map(|(i, _)| i)
+        .collect();
+    // From the back: closing one renumbers those after it.
+    for i in held.into_iter().rev() {
+        close(state, i + 1);
+    }
+    if let Some(st) = store(state)
+        && let Err(e) = st.clear_editor_draft(path)
+    {
+        tracing::warn!(error = %e, "editor draft not cleared");
+    }
 }
 
 /// A share of the open clip is running (its window holds the editor).
