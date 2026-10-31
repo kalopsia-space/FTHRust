@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice|desktop]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice|desktop|deps|profile]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -401,6 +401,30 @@ group_ffnotice() {
     else fail ffnotice_committed_notices_have_the_section "run tools/gen-notices.sh"; fi
 }
 
+group_deps() {
+    local chk="$ROOT/tools/check-workspace-deps.sh" w="$WORK/ws" out
+    if out="$("$chk" 2>&1)"; then pass deps_every_workspace_dependency_is_used; else fail deps_every_workspace_dependency_is_used "$out"; fi
+    mkdir -p "$w/crates/a"
+    printf '[workspace]\nmembers = ["crates/*"]\n\n[workspace.dependencies]\nserde = "1"\nunused-thing = "2"\nlocal = { version = "1", features = ["x"] }\n\n[profile.dev]\ndebug = 0\n' > "$w/Cargo.toml"
+    printf '[package]\nname = "a"\n\n[dependencies]\nserde.workspace = true\nlocal = { workspace = true, features = ["y"] }\n' > "$w/crates/a/Cargo.toml"
+    if out="$("$chk" "$w" 2>&1)"; then fail deps_flags_an_unused_entry "exit 0"
+    elif grep -q "unused-thing" <<<"$out" && ! grep -qE "serde|local" <<<"$out"; then pass deps_flags_an_unused_entry
+    else fail deps_flags_an_unused_entry "$out"; fi
+}
+
+# The release profile: fat LTO and one codegen unit (a third off the binaries),
+# no panic = "abort" while catch_unwind carries the engine, export, finalize
+# and upload paths.
+group_profile() {
+    local rel
+    rel="$(sed -n '/^\[profile.release\]/,/^\[/p' "$ROOT/Cargo.toml")"
+    if grep -qx 'lto = "fat"' <<<"$rel" && grep -qx 'codegen-units = 1' <<<"$rel" && grep -qx 'strip = "debuginfo"' <<<"$rel"; then pass profile_release_is_fat_lto_one_codegen_unit
+    else fail profile_release_is_fat_lto_one_codegen_unit "[profile.release] is: $(tr '\n' ' ' <<<"$rel")"; fi
+    if grep -rq 'catch_unwind' "$ROOT"/crates/*/src && grep -qE '^panic *= *"abort"' <<<"$rel"; then
+        fail profile_release_keeps_unwinding "panic = \"abort\" while catch_unwind is in use"
+    else pass profile_release_keeps_unwinding; fi
+}
+
 group_desktop() {
     local name title
     name="$(sed -n 's/^Name=//p' "$ROOT/packaging/space.kalopsia.fthrust.desktop")"
@@ -412,7 +436,7 @@ group_desktop() {
 }
 
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice desktop)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice desktop deps profile)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"

@@ -22,7 +22,7 @@ jobs:
       # The FFmpeg the AppImage ships (packaging/ffmpeg_manifest_linux.json),
       # not Ubuntu's 6.1, so tests and release see the same libraries.
       # LD_LIBRARY_PATH is set on the test step only.
-      FFMPEG_LIB: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib
+      PINNED_FFMPEG_LIB: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib
       PKG_CONFIG_PATH: ${{ github.workspace }}/packaging/.cache/ffmpeg/lib/pkgconfig
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -48,6 +48,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo deny --locked check
       - run: tools/check-upload-isolation.sh
+      - run: tools/check-workspace-deps.sh
       - run: tools/check-assets.sh
       - run: tools/check-version.sh
       - name: No bytecode or build output is tracked
@@ -74,7 +75,7 @@ jobs:
       - run: cargo test --locked --workspace
         env:
           WGPU_BACKEND: vulkan
-          LD_LIBRARY_PATH: ${{ env.FFMPEG_LIB }}
+          LD_LIBRARY_PATH: ${{ env.PINNED_FFMPEG_LIB }}
 
   # The bench's own crate and launcher, which the scenarios below depend on.
   uidrive-tools:

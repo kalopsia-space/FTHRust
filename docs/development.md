@@ -163,10 +163,11 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 | Script | Does |
 |---|---|
 | `tools/check-upload-isolation.sh` | Fails if `reqwest`, `russh`, `russh-sftp` or `keyring` end up in the app's or engine's dependency tree. Network and keyring code belongs in `fthrust-uploader` only. |
+| `tools/check-workspace-deps.sh` | Fails if a `[workspace.dependencies]` entry in the root `Cargo.toml` is used by no crate. |
 | `tools/check-assets.sh` | Checks bundled assets against their manifests (and against the original app's copies, if `reference/` exists). |
 | `tools/check-version.sh` | The workspace version is the only version: every crate inherits it, a release tag must equal `v<version>`, and built binaries must report it. |
 | `tools/gen-notices.sh [--check]` | Regenerates `THIRD_PARTY_NOTICES.md` with cargo-about, or checks it's current. |
-| `tools/test-packaging.sh` | Tests the packaging scripts and gates (groups `fetch`, `gate`, `version`, `install`, `notes`, `archive`, `links`, `ffnotice`). |
+| `tools/test-packaging.sh` | Tests the packaging scripts and gates (groups `fetch`, `gate`, `version`, `install`, `notes`, `archive`, `links`, `ffnotice`, `desktop`, `deps`, `profile`). |
 | `tools/uidrive/bench-unit.sh` | Tests the bench launcher's own rules (engine backend names, bench directory, teardown); needs no compositor. |
 | `packaging/check-notice-links.sh FILE...` | Fails on a relative markdown link whose target is missing. CI runs it on the README, `CHANGES.md` and `docs/`; the packaging scripts run it on the notices of every package. |
 | `cargo deny check` | Licence allow-list, security advisories and crate sources, per `deny.toml`. |
@@ -177,7 +178,7 @@ This writes `docs/images/*.png`. It needs `ffmpeg`, `pipewire` and `wireplumber`
 
 `.github/workflows/ci.yml` runs on pull requests and pushes to `main` (and by hand, and when the release workflow calls it), once per change: a newer push to the same branch cancels the running one. Every job has a timeout, and every third-party action is pinned to a commit SHA with its version in a comment; Dependabot (`.github/dependabot.yml`) proposes the updates, for the actions and for both Cargo workspaces. There are three jobs:
 
-- **check** (Ubuntu 24.04): the quick checks first (`cargo fmt --all --check`, `cargo deny`, the isolation, asset and version scripts, no tracked bytecode, doc links, the notices and the packaging tests), then `cargo clippy`, the engine build and the full test suite. It builds and tests against the pinned BtbN FFmpeg that the AppImage ships, not Ubuntu's. cargo-deny and cargo-about are installed prebuilt, the build is cached with `Swatinem/rust-cache`, and every cargo command is `--locked`.
+- **check** (Ubuntu 24.04): the quick checks first (`cargo fmt --all --check`, `cargo deny`, the isolation, asset, version and workspace-dependency scripts, no tracked bytecode, doc links, the notices and the packaging tests), then `cargo clippy`, the engine build and the full test suite. It builds and tests against the pinned BtbN FFmpeg that the AppImage ships, not Ubuntu's. cargo-deny and cargo-about are installed prebuilt, the build is cached with `Swatinem/rust-cache`, and every cargo command is `--locked`.
 - **uidrive-tools** (Ubuntu 24.04): `bench-unit.sh`, and the bench crate's `cargo fmt`, `clippy` and tests, including its live headless-cage test.
 - **uidrive** (Ubuntu 24.04): builds release binaries and runs the `smoke`, `save_clip`, `export`, `overlays` and `upload` scenarios on the bench with a software renderer and a software encoder (there's no GPU on the runners). If one fails, the bench folder is uploaded as the `uidrive-bench` artifact.
 
