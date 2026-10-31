@@ -63,6 +63,10 @@ pub enum PortalFailure {
     /// The cancel flag was set.
     #[error("capture cancelled")]
     Cancelled,
+    /// An automatic re-open could not restore the saved session without
+    /// the portal's dialog, which only a start the user asked for may show.
+    #[error("the screen-sharing session could not be restored without the desktop's dialog")]
+    NeedsDialog,
     /// Anything else.
     #[error("{0}")]
     Failed(String),

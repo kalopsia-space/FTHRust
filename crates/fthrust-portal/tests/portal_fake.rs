@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fthrust_core::FthrPaths;
-use fthrust_portal::capture::PortalCapture;
+use fthrust_portal::capture::{Dialog, PortalCapture, RESTORE_TIMEOUT};
 use fthrust_portal::screencast::{PortalFailure, Timeouts};
 use fthrust_portal::token;
 use zbus::message::Header;
@@ -173,6 +173,16 @@ fn open_with(
     paths: &FthrPaths,
     cancel: Arc<AtomicBool>,
 ) -> (Result<(), PortalFailure>, Vec<String>) {
+    open_as(script, start, paths, cancel, Dialog::Allowed)
+}
+
+fn open_as(
+    script: &Shared,
+    start: Start,
+    paths: &FthrPaths,
+    cancel: Arc<AtomicBool>,
+    dialog: Dialog,
+) -> (Result<(), PortalFailure>, Vec<String>) {
     *script.lock().unwrap() = Script {
         start,
         log: Vec::new(),
@@ -181,7 +191,7 @@ fn open_with(
         dialog: Duration::from_secs(5),
         method: Duration::from_secs(5),
     };
-    let result = PortalCapture::open(paths, 30, cancel, timeouts).map(|_| ());
+    let result = PortalCapture::open(paths, 30, cancel, timeouts, dialog).map(|_| ());
     // The close runs before open returns; give the fake a moment to log it.
     std::thread::sleep(Duration::from_millis(100));
     let log = script.lock().unwrap().log.clone();
@@ -258,4 +268,44 @@ fn failed_opens_close_the_session_and_keep_the_right_token() {
         token::load(&token_path).unwrap().as_deref(),
         Some("issued-by-start")
     );
+
+    // A recovery re-open may only restore the saved session. This portal
+    // does not answer Start (it is showing its dialog): the open gives up
+    // after RESTORE_TIMEOUT, closes the session (dismissing the dialog)
+    // and keeps the token.
+    let started = std::time::Instant::now();
+    let (result, log) = open_as(
+        &script,
+        Start::Silent,
+        &paths,
+        no_cancel(),
+        Dialog::Forbidden,
+    );
+    let took = started.elapsed();
+    assert_eq!(result, Err(PortalFailure::NeedsDialog), "{log:?}");
+    assert!(
+        log.contains(&"SelectSources token=issued-by-start".to_string()),
+        "{log:?}"
+    );
+    assert_eq!(log.last().map(String::as_str), Some("Close"), "{log:?}");
+    assert!(
+        took < RESTORE_TIMEOUT + Duration::from_secs(1),
+        "waited {took:?} for a dialog"
+    );
+    assert_eq!(
+        token::load(&token_path).unwrap().as_deref(),
+        Some("issued-by-start")
+    );
+
+    // Without a saved token a recovery does not even ask the portal.
+    token::save(&token_path, "").unwrap();
+    let (result, log) = open_as(
+        &script,
+        Start::Accepted,
+        &paths,
+        no_cancel(),
+        Dialog::Forbidden,
+    );
+    assert_eq!(result, Err(PortalFailure::NeedsDialog));
+    assert!(log.is_empty(), "the portal was contacted: {log:?}");
 }
