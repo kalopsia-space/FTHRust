@@ -137,7 +137,8 @@ fn diagnostics_session_records_events_and_exports_from_the_live_session() {
     let (_tmp, mut s) = state();
     let ctx = egui::Context::default();
     let mut services = Services::start_for_tests(&ctx);
-    s.diagnostics = Some(fthrust_ui::services::diagnostics::start(&s.paths));
+    s.diagnostics = fthrust_ui::services::diagnostics::start(&s.paths);
+    assert!(s.diagnostics.is_some(), "a writable profile gets a session");
     fthrust_ui::services::diagnostics::emit(
         &s,
         "library",
@@ -157,6 +158,21 @@ fn diagnostics_session_records_events_and_exports_from_the_live_session() {
     assert!(zip.exists());
     services.tick(&mut s);
     services.shutdown();
+}
+
+#[test]
+fn a_diagnostics_session_that_cannot_start_leaves_the_app_without_one() {
+    let (_tmp, mut s) = state();
+    // A file where the diagnostics directory belongs, as when the disk is
+    // full or read-only: nothing can be created there. Starting must neither
+    // panic nor fall back to a session in the temp directory.
+    std::fs::create_dir_all(s.paths.root()).unwrap();
+    std::fs::write(s.paths.diagnostics_dir(), "in the way").unwrap();
+    assert!(fthrust_ui::services::diagnostics::start(&s.paths).is_none());
+    s.diagnostics = None;
+    fthrust_ui::services::diagnostics::emit(&s, "library", "scan_started", serde_json::json!({}));
+    // The report dialog says what went wrong instead of panicking.
+    assert!(fthrust_ui::dialogs::diagnostic_report::export(&mut s).is_err());
 }
 
 fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

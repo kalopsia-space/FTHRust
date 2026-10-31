@@ -141,7 +141,7 @@ fn main() {
             "the Python FTHR Clips engine appears to be running; running both is unsupported"
         );
     }
-    state.diagnostics = Some(fthrust_ui::services::diagnostics::start(&state.paths));
+    state.diagnostics = fthrust_ui::services::diagnostics::start(&state.paths);
     report_startup_issues(&mut state);
     sweep_stale_partials(&state);
     state.thumb_pool = Some(fthrust_ui::library::thumbs::ThumbPool::start(
