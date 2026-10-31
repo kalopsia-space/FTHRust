@@ -37,6 +37,7 @@ fn disk_mode_ring_writes_segments() {
     let root = tempfile::tempdir().unwrap();
     let ring = make_ring_in(&config(BufferLocation::Disk), root.path());
     push_second(&ring);
+    assert!(ring.wait_disk_writes(std::time::Duration::from_secs(10)));
     let own = fthrust_engine::replay_dir::own_dir(root.path());
     let files: Vec<_> = std::fs::read_dir(&own).unwrap().collect();
     assert!(!files.is_empty(), "segments under {}", own.display());
