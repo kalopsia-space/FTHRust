@@ -33,6 +33,9 @@ pub const RETRY_DELAYS: [Duration; 3] = [
 ];
 /// No retry starts once this much of the caller's 600 s budget is gone.
 pub const DEADLINE: Duration = Duration::from_secs(540);
+/// How long an HTTP upload may go without moving a byte, and how long a
+/// server may take to answer (`timeout=120` in the reference).
+pub const IO_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Where the uploader talks to and keeps its state.
 pub struct Env {
@@ -44,30 +47,39 @@ pub struct Env {
     pub retry_delays: Vec<Duration>,
     /// Retry budget.
     pub deadline: Duration,
+    /// The stall limit of an HTTP upload (see [`IO_TIMEOUT`]).
+    pub io_timeout: Duration,
     /// Saved passwords.
     pub vault: Box<dyn vault::Vault>,
 }
 
 impl Env {
-    /// The real environment: `$HOME`, the desktop keyring, and the hidden
-    /// test overrides `FTHRUST_UPLOADER_CATBOX_URL` and
-    /// `FTHRUST_UPLOADER_NO_RETRY_DELAY`.
+    /// The real environment: `$HOME` and the desktop keyring. Debug builds
+    /// (the tests, the UI bench) also read the hidden overrides
+    /// `FTHRUST_UPLOADER_CATBOX_URL` and `FTHRUST_UPLOADER_NO_RETRY_DELAY`;
+    /// a release build has no such thing, so no environment variable can
+    /// send its uploads somewhere else.
     pub fn from_process() -> Result<Env, String> {
         let paths = FthrPaths::from_env().map_err(|e| e.to_string())?;
-        let catbox_url =
-            std::env::var("FTHRUST_UPLOADER_CATBOX_URL").unwrap_or_else(|_| CATBOX_URL.into());
-        let retry_delays = if std::env::var_os("FTHRUST_UPLOADER_NO_RETRY_DELAY").is_some() {
-            vec![Duration::ZERO; RETRY_DELAYS.len()]
-        } else {
-            RETRY_DELAYS.to_vec()
-        };
-        Ok(Env {
+        #[allow(unused_mut)]
+        let mut env = Env {
             paths,
-            catbox_url,
-            retry_delays,
+            catbox_url: CATBOX_URL.into(),
+            retry_delays: RETRY_DELAYS.to_vec(),
             deadline: DEADLINE,
+            io_timeout: IO_TIMEOUT,
             vault: Box::new(vault::SecretService),
-        })
+        };
+        #[cfg(debug_assertions)]
+        {
+            if let Ok(url) = std::env::var("FTHRUST_UPLOADER_CATBOX_URL") {
+                env.catbox_url = url;
+            }
+            if std::env::var_os("FTHRUST_UPLOADER_NO_RETRY_DELAY").is_some() {
+                env.retry_delays = vec![Duration::ZERO; RETRY_DELAYS.len()];
+            }
+        }
+        Ok(env)
     }
 
     /// A test environment: no retry waits, an in-memory vault.
@@ -77,6 +89,7 @@ impl Env {
             catbox_url: CATBOX_URL.into(),
             retry_delays: vec![Duration::ZERO; RETRY_DELAYS.len()],
             deadline: DEADLINE,
+            io_timeout: IO_TIMEOUT,
             vault: Box::new(vault::Memory::default()),
         }
     }
@@ -94,6 +107,10 @@ pub struct Response {
     /// The failure is in the upload settings (URL, token): retrying the
     /// same request cannot help. Written only when true.
     pub settings_problem: bool,
+    /// What the user should know about an upload that worked: no link came
+    /// back, the clip could not be deleted, the history could not be saved.
+    /// Written only when there is one.
+    pub warning: Option<String>,
 }
 
 impl Response {
@@ -104,6 +121,7 @@ impl Response {
             message: message.into(),
             upload_info: None,
             settings_problem: false,
+            warning: None,
         }
     }
 
@@ -114,6 +132,7 @@ impl Response {
             message: message.into(),
             upload_info: None,
             settings_problem: false,
+            warning: None,
         }
     }
 
@@ -127,6 +146,9 @@ impl Response {
         }
         if self.settings_problem {
             m.insert("settings_problem".into(), Value::Bool(true));
+        }
+        if let Some(warning) = &self.warning {
+            m.insert("warning".into(), Value::String(warning.clone()));
         }
         Value::Object(m).to_string()
     }

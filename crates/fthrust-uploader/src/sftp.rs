@@ -3,6 +3,7 @@
 //! credential is sent, uploads written as `.part`, size-checked and renamed.
 
 use std::borrow::Cow;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKey, PublicKeyOrCertific
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use serde_json::{Map, Value, json};
+use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::Env;
@@ -21,7 +23,19 @@ use crate::http::Failure;
 use crate::vault;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long removing the leftovers of a failed upload may take in all.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one SFTP request may go unanswered.
 const SFTP_TIMEOUT_S: u64 = 20;
+/// The same while the clip is going out (see [`WRITE_WINDOW`]).
+const TRANSFER_TIMEOUT_S: u64 = 120;
+
+/// Write requests in flight at once (each carries 32 KiB). On a link with a
+/// long round trip the window decides the speed: window ÷ round trip. The
+/// library's 16 (512 KiB) held a 60 ms link to 6.4 MB/s; 64 (2 MiB) is what
+/// OpenSSH's `sftp` uses, and the SSH channel window of an OpenSSH server
+/// (2 MiB) lets no more through anyway (128 measured the same).
+const WRITE_WINDOW: usize = 64;
 const TRANSFER: &str =
     "SFTP connection or transfer failed. Check the server, folder and permissions.";
 const AUTH_FAILED: &str = "SFTP authentication failed. Check the username and password.";
@@ -90,17 +104,32 @@ fn host_matches(name: &str, field: &str) -> bool {
     })
 }
 
-/// Reads every known_hosts file (missing files are skipped, unparseable
-/// lines ignored) and compares the server key.
-fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String> {
-    let mut changed = false;
+/// The lines of a file read as bytes. known_hosts is text by convention
+/// only: a comment in Latin-1 or a stray byte must not make the whole file
+/// unreadable.
+fn byte_lines(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+/// The keys the known_hosts files record for `name`: missing files are
+/// skipped, unparseable lines (and lines that are not UTF-8, which cannot
+/// name a host or hold a key) ignored.
+fn recorded_keys(files: &[PathBuf], name: &str) -> Result<Vec<PublicKey>, String> {
+    let mut keys = Vec::new();
     for file in files {
-        let text = match std::fs::read_to_string(file) {
-            Ok(t) => t,
+        let bytes = match std::fs::read(file) {
+            Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return Err(BAD_KNOWN_HOSTS.into()),
         };
-        for line in text.lines() {
+        for line in byte_lines(&bytes) {
+            let Ok(line) = std::str::from_utf8(line) else {
+                continue;
+            };
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('@') {
                 continue;
@@ -112,17 +141,25 @@ fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String
             if !host_matches(name, hosts) {
                 continue;
             }
-            let Ok(recorded) = PublicKey::from_openssh(&format!("{kind} {data}")) else {
-                continue;
-            };
-            if recorded.algorithm() != key.algorithm() {
-                continue;
+            if let Ok(recorded) = PublicKey::from_openssh(&format!("{kind} {data}")) {
+                keys.push(recorded);
             }
-            if recorded.key_data() == key.key_data() {
-                return Ok(Trust::Known);
-            }
-            changed = true;
         }
+    }
+    Ok(keys)
+}
+
+/// Compares the server key with the known_hosts files.
+fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String> {
+    let mut changed = false;
+    for recorded in recorded_keys(files, name)? {
+        if recorded.algorithm() != key.algorithm() {
+            continue;
+        }
+        if recorded.key_data() == key.key_data() {
+            return Ok(Trust::Known);
+        }
+        changed = true;
     }
     Ok(if changed {
         Trust::Changed
@@ -131,26 +168,53 @@ fn trust(files: &[PathBuf], name: &str, key: &PublicKey) -> Result<Trust, String
     })
 }
 
+/// [`HOST_KEYS`] in the order to offer them for a host whose recorded keys
+/// have the `known` algorithms: those first, as OpenSSH does. A server with
+/// several host keys presents the first one on our list that it has, and a
+/// key of another type than the one recorded reads as an untrusted host.
+fn host_key_order(known: &[Algorithm]) -> Vec<Algorithm> {
+    // Every RSA signature variant stands for the one `ssh-rsa` key type.
+    let same = |a: &Algorithm, k: &Algorithm| match (a, k) {
+        (Algorithm::Rsa { .. }, Algorithm::Rsa { .. }) => true,
+        (a, k) => a == k,
+    };
+    let (recorded, others): (Vec<_>, Vec<_>) = HOST_KEYS
+        .iter()
+        .cloned()
+        .partition(|a| known.iter().any(|k| same(a, k)));
+    recorded.into_iter().chain(others).collect()
+}
+
 /// `remember_verified_host`: records a pinned key in the uploader's own
 /// known_hosts, replacing an older key of the same type for that host.
 fn remember(env: &Env, name: &str, key: &PublicKey) -> Result<(), String> {
     let path = env.paths.uploader_known_hosts_file();
     let openssh = key.to_openssh().map_err(|e| e.to_string())?;
     let kind = key.algorithm().as_str().to_owned();
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines: Vec<String> = existing
-        .lines()
-        .filter(|l| {
-            let mut f = l.split_whitespace();
-            !(f.next() == Some(name) && f.next() == Some(kind.as_str()))
-        })
-        .map(str::to_owned)
-        .collect();
-    lines.push(format!("{name} {openssh}"));
+    // Only a missing file starts a new one; a file that cannot be read is
+    // not ours to overwrite. Lines are kept as the bytes they are.
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let replaced = |line: &[u8]| {
+        let Ok(text) = std::str::from_utf8(line) else {
+            return false;
+        };
+        let mut f = text.split_whitespace();
+        f.next() == Some(name) && f.next() == Some(kind.as_str())
+    };
+    let mut out = Vec::new();
+    for line in byte_lines(&existing).into_iter().filter(|l| !replaced(l)) {
+        out.extend_from_slice(line);
+        out.push(b'\n');
+    }
+    out.extend_from_slice(format!("{name} {openssh}\n").as_bytes());
     let dir = path.parent().ok_or("no folder")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let tmp = dir.join(".known_hosts.tmp");
-    std::fs::write(&tmp, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
@@ -244,6 +308,14 @@ fn password(env: &Env, cfg: &SftpConfig, settings: &Map<String, Value>) -> Resul
     }
 }
 
+/// The SFTP client's settings: the library's, with the wider write window.
+fn sftp_config() -> russh_sftp::client::Config {
+    russh_sftp::client::Config {
+        max_concurrent_writes: WRITE_WINDOW,
+        ..Default::default()
+    }
+}
+
 async fn connect(
     env: &Env,
     cfg: &SftpConfig,
@@ -252,18 +324,33 @@ async fn connect(
 ) -> Result<Connection, String> {
     let name = host_name(&cfg.host, cfg.port);
     let seen = Arc::new(Mutex::new(Seen::default()));
+    let files = vec![
+        env.paths.home().join(".ssh").join("known_hosts"),
+        env.paths.uploader_known_hosts_file(),
+    ];
+    // Ask for the key types we have on record for this host first. (An
+    // unreadable file is reported by the key check, before any credential.)
+    // Not with a pinned fingerprint: it names one key and known_hosts is not
+    // consulted for it, so an old line of another type in there (ECDSA, RSA)
+    // must not make the server present that key and fail the pin every time.
+    let known: Vec<Algorithm> = if cfg.fingerprint.is_some() {
+        Vec::new()
+    } else {
+        recorded_keys(&files, &name)
+            .unwrap_or_default()
+            .iter()
+            .map(PublicKey::algorithm)
+            .collect()
+    };
     let checker = Checker {
         pin: cfg.fingerprint.clone(),
-        files: vec![
-            env.paths.home().join(".ssh").join("known_hosts"),
-            env.paths.uploader_known_hosts_file(),
-        ],
+        files,
         name: name.clone(),
         seen: seen.clone(),
     };
     let config = client::Config {
         preferred: russh::Preferred {
-            key: Cow::Borrowed(HOST_KEYS),
+            key: Cow::Owned(host_key_order(&known)),
             ..Default::default()
         },
         inactivity_timeout: Some(Duration::from_secs(60)),
@@ -298,7 +385,9 @@ async fn connect(
     let sftp = async {
         let channel = handle.channel_open_session().await.ok()?;
         channel.request_subsystem(true, "sftp").await.ok()?;
-        let sftp = SftpSession::new(channel.into_stream()).await.ok()?;
+        let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_config())
+            .await
+            .ok()?;
         sftp.set_timeout(SFTP_TIMEOUT_S);
         Some(sftp)
     };
@@ -375,6 +464,36 @@ fn remote_name(path: &Path) -> String {
     format!("fthr-{hex}{suffix}")
 }
 
+/// The name an upload of `path` is written under until it is whole. It only
+/// depends on the clip, so an attempt that died with no chance to clean up
+/// (the app ends a stuck uploader with SIGKILL) is cleaned up by the next
+/// attempt at the same clip.
+fn part_name(path: &Path) -> String {
+    let digest = sha2::Sha256::digest(path.as_os_str().as_bytes());
+    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    format!("fthr-{hex}.part")
+}
+
+/// [`part_name`] with a random tail: for when a leftover of the fixed name
+/// is there and cannot be removed. (The partial file is created exclusively,
+/// so that leftover would make every upload of the clip fail, for good.)
+fn spare_part_name(path: &Path) -> String {
+    let mut bytes = [0u8; 4];
+    let _ = getrandom::fill(&mut bytes);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let fixed = part_name(path);
+    format!("{}-{hex}.part", fixed.trim_end_matches(".part"))
+}
+
+/// `name` in the remote `folder`.
+fn in_folder(folder: &str, name: &str) -> String {
+    if folder.ends_with('/') {
+        format!("{folder}{name}")
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
 async fn send(
     conn: &Connection,
     path: &Path,
@@ -407,20 +526,23 @@ async fn send(
         .await
         .map_err(|_| TRANSFER.to_owned())?
         .len();
-    let mut buf = vec![0u8; 1024 * 1024];
-    loop {
-        let n = local
-            .read(&mut buf)
-            .await
-            .map_err(|_| TRANSFER.to_owned())?;
-        if n == 0 {
-            break;
+    // With a full window a write is answered only after the ones ahead of it
+    // have gone out, which on a slow link takes longer than a lone request.
+    conn.sftp.set_timeout(TRANSFER_TIMEOUT_S);
+    let copied = async {
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = local.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n]).await?;
         }
-        file.write_all(&buf[..n])
-            .await
-            .map_err(|_| TRANSFER.to_owned())?;
+        file.shutdown().await
     }
-    file.shutdown().await.map_err(|_| TRANSFER.to_owned())?;
+    .await;
+    conn.sftp.set_timeout(SFTP_TIMEOUT_S);
+    copied.map_err(|_| TRANSFER.to_owned())?;
     let written = conn.sftp.metadata(part).await.map_err(transfer)?.size;
     if written != Some(size) {
         return Err("Remote file size verification failed; the local clip was retained.".into());
@@ -456,15 +578,25 @@ pub async fn upload(
         .await
         .map_err(Failure::Permanent)?;
     let name = remote_name(path);
-    let remote = if conn.folder.ends_with('/') {
-        format!("{}{name}", conn.folder)
-    } else {
-        format!("{}/{name}", conn.folder)
-    };
-    let part = format!("{remote}.part");
+    let remote = in_folder(&conn.folder, &name);
+    let mut part = in_folder(&conn.folder, &part_name(path));
+    // What an earlier attempt at this clip left behind if it was killed.
+    let _ = conn.sftp.remove_file(part.clone()).await;
+    if conn.sftp.metadata(part.clone()).await.is_ok() {
+        // Still there: the server will not let it go. Do not fail the clip
+        // for as long as that lasts; write under a name of our own.
+        part = in_folder(&conn.folder, &spare_part_name(path));
+    }
     let sent = send(&conn, path, &part, &remote, !base.is_empty()).await;
     if sent.is_err() {
-        let _ = conn.sftp.remove_file(part.clone()).await;
+        // A failed upload leaves nothing on the server: not the partial
+        // file, and not a finished one that then failed its checks. (On a
+        // dead connection these wait for nothing; do not wait long.)
+        let _ = tokio::time::timeout(CLEANUP_TIMEOUT, async {
+            let _ = conn.sftp.remove_file(part.clone()).await;
+            let _ = conn.sftp.remove_file(remote.clone()).await;
+        })
+        .await;
     }
     conn.close().await;
     sent.map_err(Failure::Permanent)?;
@@ -512,4 +644,74 @@ pub fn forget(env: &Env, config: &Map<String, Value>) -> Result<String, String> 
     let service = vault::service_name(&cfg.host, cfg.port, &cfg.username);
     env.vault.delete(&service, &cfg.username)?;
     Ok("SFTP credentials updated.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const P256: Algorithm = Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP256,
+    };
+    const P384: Algorithm = Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP384,
+    };
+    const RSA512: Algorithm = Algorithm::Rsa {
+        hash: Some(HashAlg::Sha512),
+    };
+    const RSA256: Algorithm = Algorithm::Rsa {
+        hash: Some(HashAlg::Sha256),
+    };
+
+    /// The speed over a link with a long round trip is the write window
+    /// divided by the round trip (`throughput_over_a_slow_link` in
+    /// `tests/sftp.rs` measures it): the library's 16 requests held a 60 ms
+    /// link to 6.4 MB/s, 64 reach the 2 MiB window of an OpenSSH server.
+    #[test]
+    fn the_write_window_is_wide_enough_for_a_slow_link() {
+        let cfg = sftp_config();
+        assert!(cfg.max_concurrent_writes >= 64, "{cfg:?}");
+        // A write may wait for the whole window to be sent: at the slowest
+        // link this still serves (the 120 s of a stalled HTTP upload), the
+        // window has to drain within the request timeout.
+        let window = cfg.max_concurrent_writes as u64 * u64::from(cfg.max_write_packet_len);
+        assert!(window / TRANSFER_TIMEOUT_S >= 10_000, "{window} bytes");
+        const { assert!(TRANSFER_TIMEOUT_S > SFTP_TIMEOUT_S) };
+    }
+
+    #[test]
+    fn host_key_types_on_record_are_offered_first() {
+        // Nothing on record: the defaults, Ed25519 first.
+        assert_eq!(host_key_order(&[]), HOST_KEYS);
+        // An ECDSA key on record moves to the front; the rest keep their order.
+        assert_eq!(
+            host_key_order(&[P256]),
+            [
+                P256,
+                Algorithm::Ed25519,
+                P384,
+                HOST_KEYS[3].clone(),
+                RSA512,
+                RSA256
+            ]
+        );
+        // `ssh-rsa` stands for both RSA signature variants.
+        let rsa = host_key_order(&[Algorithm::Rsa { hash: None }]);
+        assert_eq!(rsa[..2], [RSA512, RSA256]);
+        assert_eq!(rsa[2], Algorithm::Ed25519);
+        // Several on record: all of them first, in the default order.
+        let two = host_key_order(&[RSA512, P384]);
+        assert_eq!(two[..3], [P384, RSA512, RSA256]);
+        // Whatever is on record, the same algorithms are offered.
+        for known in [vec![], vec![P256], vec![RSA512, P384, Algorithm::Ed25519]] {
+            let mut offered: Vec<String> = host_key_order(&known)
+                .iter()
+                .map(|a| a.to_string())
+                .collect();
+            let mut all: Vec<String> = HOST_KEYS.iter().map(|a| a.to_string()).collect();
+            offered.sort();
+            all.sort();
+            assert_eq!(offered, all);
+        }
+    }
 }

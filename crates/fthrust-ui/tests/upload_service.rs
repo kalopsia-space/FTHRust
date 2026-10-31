@@ -209,7 +209,196 @@ fn success_updates_card_and_toasts() {
                 .into_owned()
         )
     );
+    // The clips folder is named on its own: it is the only place an upload
+    // may delete from, whatever other folders are approved.
+    assert_eq!(req["clips_root"], json!(r.clips.to_string_lossy()));
     assert!(r.error_titles().is_empty());
+}
+
+/// An upload that worked can still leave something to say (no link came
+/// back, the clip could not be deleted, the history was not saved): the
+/// uploader sends it as `warning`, and the user must see it instead of a
+/// card with a share button that does nothing.
+#[test]
+fn a_warning_on_a_successful_upload_is_shown() {
+    let mut r = rig(
+        r#"cat >/dev/null; echo '{"ok":true,"message":"Upload complete.","upload_info":{"status":"ok","url":""},"warning":"Uploaded, but no link came back. The clip was kept."}'"#,
+        json!({}),
+    );
+    let clip = r.clip("w.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    // It is still an upload that worked.
+    assert_eq!(
+        r.state.pending_cards,
+        vec![CardKind::Upload {
+            filename: "w.mp4 · ORIGINAL".into()
+        }]
+    );
+    assert_eq!(
+        r.svc.transient_status(1.0).unwrap().text,
+        "UPLOADED ORIGINAL"
+    );
+    // And the caveat is in the bar.
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert_eq!(
+        e.detail,
+        "Uploaded, but no link came back. The clip was kept."
+    );
+    assert_eq!(e.level, fthrust_ui::shell::error_bar::Level::Warning);
+    assert!(e.actions.is_empty());
+    // A reply without one says nothing.
+    let mut quiet = rig(&uploader_ok("https://cdn.example/q.mp4"), json!({}));
+    let clip = quiet.clip("q.mp4");
+    quiet.svc.enqueue(&mut quiet.state, clip);
+    quiet.settle();
+    assert!(
+        quiet.error_titles().is_empty(),
+        "{:?}",
+        quiet.error_titles()
+    );
+}
+
+/// The uploader answers with the history entry it made. When it could not
+/// write it, the app writes it, or keeps it for the session: the card gets
+/// its link back and interval mode does not upload the clip again.
+#[test]
+fn an_entry_the_uploader_could_not_save_is_kept() {
+    let reply = |url: &str| {
+        format!(
+            r#"cat >/dev/null; echo '{{"ok":true,"message":"{url}","upload_info":{{"status":"ok","provider":"custom","url":"{url}","raw_url":"{url}"}},"warning":"Uploaded to {url}, but the upload history could not be saved (disk full). The clip was kept."}}'"#
+        )
+    };
+    // The folder is writable by the app: it saves the entry itself.
+    let mut r = rig(&reply("https://cdn.example/kept"), json!({}));
+    let clip = r.clip("k.mp4");
+    let key = clip.canonicalize().unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        "https://cdn.example/kept"
+    );
+    assert!(History::load(&r.state.paths).is_uploaded(&key), "not saved");
+    assert_eq!(r.error_titles(), vec!["UPLOAD WARNING"]);
+
+    // It is not: the entry lives for this session only.
+    let mut r = rig(&reply("https://cdn.example/session"), json!({}));
+    let clip = r.clip("s.mp4");
+    let key = clip.canonicalize().unwrap();
+    std::fs::create_dir_all(r.state.paths.upload_history_file()).unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        "https://cdn.example/session"
+    );
+    assert!(r.state.upload_history.is_uploaded(&key));
+    r.svc.enqueue(&mut r.state, clip);
+    assert!(!r.svc.busy(), "queued again although it was uploaded");
+}
+
+/// A server that took a clip and sent no link leaves a card that offers
+/// "Upload clip" and a history that calls the clip uploaded: pressing the
+/// button used to do nothing at all. Now the bar says why and offers to
+/// upload the clip again; immediate and interval mode still never do.
+#[test]
+fn an_uploaded_clip_without_a_link_says_so_and_can_be_uploaded_again() {
+    let mut r = rig(&uploader_ok(""), json!({}));
+    let clip = r.clip("n.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1);
+    let key = clip.canonicalize().unwrap();
+    assert!(r.state.upload_history.is_uploaded(&key));
+    assert!(r.state.upload_history.link(&key).is_none());
+    r.state.error_bar.clear();
+
+    // The share button: nothing is uploaded, and the bar explains.
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1, "uploaded again without being asked");
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "ALREADY UPLOADED");
+    assert!(
+        e.detail
+            .starts_with("n.mp4 was uploaded, but its server sent no link back"),
+        "{}",
+        e.detail
+    );
+    let labels: Vec<&str> = e.actions.iter().map(|a| a.label.as_str()).collect();
+    assert_eq!(labels, vec!["UPLOAD AGAIN"]);
+
+    // The automatic modes skip the clip, without a word.
+    r.state.error_bar.clear();
+    r.state
+        .uploader_settings
+        .set("upload_mode", json!("immediate"));
+    r.state.saved_clips.push(clip.clone());
+    r.settle();
+    assert_eq!(r.requests().len(), 1);
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+
+    // UPLOAD AGAIN uploads it.
+    assert!(r.svc.error_action(&mut r.state, &e.actions[0].id));
+    r.settle();
+    assert_eq!(r.requests().len(), 2);
+}
+
+/// Auto-delete removes the clip, and the clips folder may be reached through
+/// a symlink: the history entry is the uploader's, under the real path. The
+/// app must not add a second one under the symlink's spelling (a path that
+/// is gone cannot be canonicalized any more).
+#[test]
+fn a_deleted_clip_behind_a_symlink_keeps_one_history_entry() {
+    let entry = r#"{"status":"ok","provider":"custom","url":"https://cdn.example/d","raw_url":"https://cdn.example/d"}"#;
+    let script = format!(
+        r#"read -r line
+path=$(echo "$line" | sed 's/.*"path":"\([^"]*\)".*/\1/')
+real=$(readlink -f "$path")
+rm -f "$path"
+mkdir -p "$(dirname "$HISTORY")"
+printf '{{"%s": %s}}' "$real" '{entry}' > "$HISTORY"
+echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry}}}'"#
+    );
+    let mut r = rig(&script, json!({"upload_auto_delete": true}));
+    let real_dir = r.dir.path().join("real");
+    std::fs::create_dir_all(real_dir.join("Desktop")).unwrap();
+    let link = r.dir.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link).unwrap();
+    r.state
+        .settings
+        .set("clips_directory", json!(link.to_string_lossy()));
+    r.state.library.clips_root = link.clone();
+    let clip = link.join("Desktop").join("d.mp4");
+    std::fs::write(&clip, b"x").unwrap();
+    r.state.library.upsert(&clip, false);
+    let real = clip.canonicalize().unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert!(!real.exists(), "the fake uploader was meant to delete it");
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(r.state.paths.upload_history_file()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        file.as_object().unwrap().len(),
+        1,
+        "a second entry was added: {file}"
+    );
+    assert!(r.state.upload_history.is_uploaded(&real));
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
 }
 
 #[test]
@@ -226,10 +415,12 @@ fn queue_dedups_and_waits_for_readiness() {
     r.state.readiness.complete(&clip);
     r.settle();
     assert_eq!(r.requests().len(), 1, "duplicates dropped");
-    // Already uploaded: nothing queued.
+    // Already uploaded: nothing queued, and nothing said (the card offers
+    // its link, not an upload).
     r.svc.enqueue(&mut r.state, clip.clone());
     r.settle();
     assert_eq!(r.requests().len(), 1);
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
 
     let failed = r.clip("c.mp4");
     r.state.readiness.engine_committed(&failed, true);

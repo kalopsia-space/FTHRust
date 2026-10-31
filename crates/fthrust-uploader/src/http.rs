@@ -3,6 +3,7 @@
 //! auto-delete).
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -17,8 +18,6 @@ use crate::{Env, Response, sftp};
 
 const BOUNDARY: &str = "FTHRClipBoundary8f61d4";
 const USER_AGENT: &str = "FTHR-Clips/Desktop-Uploader";
-/// Socket timeout of an upload request (`timeout=120`).
-const IO_TIMEOUT: Duration = Duration::from_secs(120);
 /// Timeout of a connection test (`timeout=10`).
 const TEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most of a reply body that is read.
@@ -41,18 +40,29 @@ pub enum Failure {
     Settings(String),
 }
 
-fn client(timeout: Duration, follow_redirects: bool) -> Result<reqwest::Client, String> {
+/// An HTTP client. `read` is reqwest's read timeout, which is one timer from
+/// the start of the request until the response headers arrive: right for a
+/// request without a body (the connection tests), wrong for an upload, which
+/// must not be cut off while it is still moving (see [`multipart_post`]).
+fn client(
+    connect: Duration,
+    read: Option<Duration>,
+    follow_redirects: bool,
+) -> Result<reqwest::Client, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let policy = if follow_redirects {
         reqwest::redirect::Policy::default()
     } else {
         reqwest::redirect::Policy::none()
     };
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .connect_timeout(timeout)
-        .read_timeout(timeout)
-        .redirect(policy)
+        .connect_timeout(connect)
+        .redirect(policy);
+    if let Some(read) = read {
+        builder = builder.read_timeout(read);
+    }
+    builder
         .build()
         .map_err(|e| format!("The uploader could not start its HTTP client: {e}"))
 }
@@ -60,16 +70,58 @@ fn client(timeout: Duration, follow_redirects: bool) -> Result<reqwest::Client, 
 /// A readable account of a request error: a lower-case clause for
 /// "Could not reach …: <clause>", without the full stop.
 pub fn describe(e: &reqwest::Error) -> String {
-    let text = describe_raw(e);
-    // A server URL may carry `user:password@`; never show it.
-    match e.url() {
-        Some(u) if !u.username().is_empty() || u.password().is_some() => {
-            let mut clean = u.clone();
-            let _ = clean.set_username("");
-            let _ = clean.set_password(None);
-            text.replace(u.as_str(), clean.as_str())
-        }
-        _ => text,
+    // reqwest names the whole URL in its errors ("error sending request for
+    // url (…)"), and a server URL is where secrets get put.
+    scrub_urls(&describe_raw(e))
+}
+
+/// `text` with every http(s) URL in it cut down to scheme, host, port and
+/// path: no `user:password@`, no `?token=…`, no `#fragment`.
+fn scrub_urls(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(start) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| lower[at..].find(scheme).map(|i| at + i))
+        .min()
+    {
+        out.push_str(&text[at..start]);
+        // A URL runs to the next space: query strings may hold any
+        // punctuation, and what is left of one after a stray comma or
+        // bracket is the part that would leak. Only the punctuation that
+        // closes a sentence or a bracket at the very end is not part of it.
+        let end = text[start..]
+            .find(char::is_whitespace)
+            .map_or(text.len(), |n| start + n);
+        let url_end = start
+            + text[start..end]
+                .trim_end_matches([')', ']', '}', '>', '"', '\'', '.', ',', ';', ':', '!', '?'])
+                .len();
+        out.push_str(&plain_url(&text[start..url_end]));
+        out.push_str(&text[url_end..end]);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// One URL without user info, query and fragment.
+fn plain_url(url: &str) -> String {
+    if let Ok(mut u) = reqwest::Url::parse(url) {
+        let _ = u.set_username("");
+        let _ = u.set_password(None);
+        u.set_query(None);
+        u.set_fragment(None);
+        return u.to_string();
+    }
+    // Not a URL that can be taken apart: cut it by hand.
+    let url = url.find(['?', '#']).map_or(url, |i| &url[..i]);
+    let after = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[after..].find('/').map_or(url.len(), |i| after + i);
+    match url[after..authority_end].rfind('@') {
+        Some(i) => format!("{}{}", &url[..after], &url[after + i + 1..]),
+        None => url.to_owned(),
     }
 }
 
@@ -296,11 +348,125 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+/// The pieces of the request body are read from the file this big, so the
+/// watchdog sees the body move often even on a slow link.
+const CHUNK: usize = 256 * 1024;
+
+/// How far an upload's body has got, for the stall watchdog.
+struct Progress {
+    /// When hyper last took a piece of the body; `None` until it takes the
+    /// first one, which is when the watchdog starts: while the connection is
+    /// still being made nothing has gone out to stall, and a connection that
+    /// never comes up is the connect timeout's to report ("could not
+    /// reach"), not a stalled upload.
+    last: Option<tokio::time::Instant>,
+    /// The last piece has been taken: the server's answer is next.
+    finished: bool,
+}
+
+/// [`Progress`], shared between the body stream and the watchdog.
+#[derive(Clone)]
+struct Watch(Arc<Mutex<Progress>>);
+
+impl Watch {
+    fn new() -> Watch {
+        Watch(Arc::new(Mutex::new(Progress {
+            last: None,
+            finished: false,
+        })))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, Progress> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A piece of the body was taken.
+    fn moved(&self) {
+        self.state().last = Some(tokio::time::Instant::now());
+    }
+
+    /// The last piece of the body is being taken.
+    fn finish(&self) {
+        let mut p = self.state();
+        p.last = Some(tokio::time::Instant::now());
+        p.finished = true;
+    }
+}
+
+/// A request that went quiet.
+enum Quiet {
+    /// The body stopped going out.
+    Sending,
+    /// The body is out and the server does not answer.
+    Answering,
+}
+
+/// `request.send()`, given up on when the body has not moved for `limit`
+/// (or, once it is all out, when the server has not answered for `limit`).
+/// The watchdog starts with the first piece of the body taken; before that
+/// the connect timeout is in charge.
+///
+/// reqwest's own read timeout cannot do this: it is one timer from the start
+/// of the request until the response headers, and body progress never resets
+/// it, so every upload that takes longer than the timeout to send would fail
+/// however fast it was going.
+async fn send_watched(
+    request: reqwest::RequestBuilder,
+    watch: &Watch,
+    limit: Duration,
+) -> Result<Result<reqwest::Response, reqwest::Error>, Quiet> {
+    let send = request.send();
+    tokio::pin!(send);
+    loop {
+        // Not started: look again after the longest the connect timeout
+        // allows (nothing wakes this loop when the first piece is taken).
+        let due = watch
+            .state()
+            .last
+            .map_or_else(|| tokio::time::Instant::now() + limit, |last| last + limit);
+        tokio::select! {
+            sent = &mut send => return Ok(sent),
+            () = tokio::time::sleep_until(due) => {
+                let p = watch.state();
+                if let Some(last) = p.last
+                    && last + limit <= tokio::time::Instant::now()
+                {
+                    return Err(if p.finished { Quiet::Answering } else { Quiet::Sending });
+                }
+            }
+        }
+    }
+}
+
+/// A duration for a message: whole seconds, else milliseconds.
+fn words(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms >= 1000 && ms.is_multiple_of(1000) {
+        let s = ms / 1000;
+        format!("{s} second{}", if s == 1 { "" } else { "s" })
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+/// `who` at the start of a sentence.
+fn capitalized(who: &str) -> String {
+    let mut chars = who.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// `_multipart_post`: one streamed `multipart/form-data` POST with the
 /// reference's boundary and explicit length. Returns the status, the
 /// trimmed body text and any `Location` header. `who` names the server in
 /// network errors ("Catbox", "your server").
+///
+/// There is no overall timeout: a clip is as long as it is. The request is
+/// failed when it goes quiet for `limit` instead (see [`send_watched`]).
 async fn multipart_post(
+    limit: Duration,
     who: &str,
     url: &str,
     fields: &[(&str, &str)],
@@ -332,16 +498,18 @@ async fn multipart_post(
         .map_err(|e| Failure::Permanent(format!("File size could not be checked: {e}")))?
         .len();
     let length = prefix.len() as u64 + size + footer.len() as u64;
+    let watch = Watch::new();
+    let (taken, last) = (watch.clone(), watch.clone());
     let body =
         futures_util::stream::once(async move { Ok::<Bytes, std::io::Error>(Bytes::from(prefix)) })
-            .chain(tokio_util::io::ReaderStream::with_capacity(
-                file,
-                1024 * 1024,
-            ))
+            .chain(tokio_util::io::ReaderStream::with_capacity(file, CHUNK))
             .chain(futures_util::stream::once(async move {
+                last.finish();
                 Ok::<Bytes, std::io::Error>(Bytes::from(footer))
-            }));
-    let client = client(IO_TIMEOUT, false).map_err(Failure::Permanent)?;
+            }))
+            .inspect(move |_| taken.moved());
+    // No read timeout: reqwest's covers the whole upload, not its silence.
+    let client = client(limit, None, false).map_err(Failure::Permanent)?;
     let mut request = client
         .post(url)
         .header(
@@ -353,12 +521,35 @@ async fn multipart_post(
     if let Some(auth) = authorization {
         request = request.header(reqwest::header::AUTHORIZATION, auth);
     }
-    let mut response = request.send().await.map_err(|e| {
-        Failure::Transient(format!(
-            "Could not reach {who}: {}",
-            sentence(&describe(&e))
-        ))
-    })?;
+    let mut response = match send_watched(request, &watch, limit).await {
+        Ok(Ok(response)) => response,
+        // Nothing went out: trying again cannot change what the request is.
+        Ok(Err(e)) if e.is_builder() => {
+            return Err(Failure::Permanent(format!(
+                "The upload request could not be built: {}",
+                sentence(&describe(&e))
+            )));
+        }
+        Ok(Err(e)) => {
+            return Err(Failure::Transient(format!(
+                "Could not reach {who}: {}",
+                sentence(&describe(&e))
+            )));
+        }
+        Err(Quiet::Sending) => {
+            return Err(Failure::Transient(format!(
+                "The upload to {who} stalled: no data went out for {}.",
+                words(limit)
+            )));
+        }
+        Err(Quiet::Answering) => {
+            return Err(Failure::Transient(format!(
+                "{} did not answer within {} of the end of the upload.",
+                capitalized(who),
+                words(limit)
+            )));
+        }
+    };
     let status = response.status().as_u16();
     let location = response
         .headers()
@@ -367,13 +558,19 @@ async fn multipart_post(
         .map(str::to_owned);
     let mut raw = Vec::new();
     while raw.len() < BODY_CAP {
-        match response.chunk().await {
-            Ok(Some(chunk)) => raw.extend_from_slice(&chunk),
-            Ok(None) => break,
-            Err(e) => {
+        match tokio::time::timeout(limit, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => raw.extend_from_slice(&chunk),
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => {
                 return Err(Failure::Transient(format!(
                     "The connection to {who} dropped: {}",
                     sentence(&describe(&e))
+                )));
+            }
+            Err(_) => {
+                return Err(Failure::Transient(format!(
+                    "The answer from {who} stalled: no data for {}.",
+                    words(limit)
                 )));
             }
         }
@@ -401,6 +598,7 @@ async fn upload_catbox(
         fields.push(("userhash", userhash.as_str()));
     }
     let (status, text, _) = multipart_post(
+        env.io_timeout,
         "Catbox",
         &env.catbox_url,
         &fields,
@@ -428,7 +626,23 @@ async fn upload_catbox(
     Ok(m)
 }
 
+/// Why a request to `url` with the Auth header `auth` can never be built
+/// (the message for the settings), if so. reqwest only finds out when the
+/// request is sent, and then calls it an error like any other.
+fn unusable(url: &str, auth: Option<&str>) -> Option<&'static str> {
+    if reqwest::Url::parse(url).is_err() {
+        return Some("The server URL is not a valid address. Check the server URL.");
+    }
+    if auth.is_some_and(|a| reqwest::header::HeaderValue::from_str(a).is_err()) {
+        return Some(
+            "The Auth header has characters that can't be sent. Enter it again in the upload settings.",
+        );
+    }
+    None
+}
+
 async fn upload_custom(
+    env: &Env,
     settings: &Map<String, Value>,
     path: &Path,
 ) -> Result<Map<String, Value>, Failure> {
@@ -436,8 +650,19 @@ async fn upload_custom(
         validate::custom_url(setting(settings, "upload_server_url")).map_err(Failure::Settings)?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))
         .map_err(Failure::Settings)?;
-    let (status, text, location) =
-        multipart_post("your server", &url, &[], "clip", path, auth.as_deref()).await?;
+    if let Some(problem) = unusable(&url, auth.as_deref()) {
+        return Err(Failure::Settings(problem.into()));
+    }
+    let (status, text, location) = multipart_post(
+        env.io_timeout,
+        "your server",
+        &url,
+        &[],
+        "clip",
+        path,
+        auth.as_deref(),
+    )
+    .await?;
     if !(200..300).contains(&status) {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let to = redirect_target(&url, location.as_deref());
@@ -484,23 +709,42 @@ async fn attempt(
 ) -> Result<Map<String, Value>, Failure> {
     match provider {
         Provider::Catbox => upload_catbox(env, settings, path).await,
-        Provider::Custom => upload_custom(settings, path).await,
+        Provider::Custom => upload_custom(env, settings, path).await,
         Provider::Sftp => sftp::upload(env, settings, path).await,
     }
 }
 
+/// What a server says when it took the upload but gave no usable link.
+const NO_LINK: &str = "Uploaded, but your server didn't reply with a link.";
+
+/// The link of a finished upload, if it has one anybody can use: exactly
+/// what the app's `History::link` accepts (an http(s) URL, or an `sftp://`
+/// location with a host, a port and a path), on a single line. Only such a
+/// link confirms an upload enough to delete the clip; a server may put
+/// anything in its reply (`queued`, `file:///…`, a few lines of text).
+fn usable_link(entry: &Map<String, Value>) -> Option<String> {
+    let key = Path::new("upload");
+    let mut history = History::default();
+    history.record(key, Entry(entry.clone()));
+    let url = history.link(key)?.url;
+    (!url.chars().any(|c| c.is_whitespace() || c.is_control())).then_some(url)
+}
+
 /// `UploadRuntime.upload`: size limit, attempts, history, auto-delete.
+/// Auto-delete only removes a clip inside `clips_root`.
 pub async fn upload(
     env: &Env,
     provider: Provider,
     settings: &Map<String, Value>,
     path: &Path,
+    clips_root: Option<&Path>,
 ) -> Response {
     let failed = |message: String| Response {
         ok: false,
         message,
         upload_info: Some(Map::new()),
         settings_problem: false,
+        warning: None,
     };
     if !path.is_file() {
         return failed("File no longer exists.".into());
@@ -565,40 +809,76 @@ pub async fn upload(
         json!(fthrust_core::upload::utc_now_iso()),
     );
     entry.extend(result);
-    if let Err(e) = History::update(&env.paths, |h| h.record(path, Entry(entry.clone()))) {
-        eprintln!("[Uploader] Upload history could not be saved: {e}");
-    }
-    let url = entry.get("url").and_then(Value::as_str).unwrap_or("");
-    let message = if url.is_empty() && provider == Provider::Custom {
-        "Uploaded, but your server didn't reply with a link.".to_owned()
-    } else if url.is_empty() {
-        "Upload complete.".to_owned()
-    } else {
-        url.to_owned()
+    let saved = History::update(&env.paths, |h| h.record(path, Entry(entry.clone())));
+    let link = usable_link(&entry);
+    let message = match &link {
+        Some(link) => link.clone(),
+        None if provider == Provider::Custom => NO_LINK.to_owned(),
+        None => "Upload complete.".to_owned(),
     };
-    // Without a link the upload is not confirmed: keep the only copy.
-    if fthrust_core::upload::truthy(settings.get("upload_auto_delete"))
-        && !url.is_empty()
-        && let Err(e) = std::fs::remove_file(path)
-    {
+    if let Err(e) = saved {
+        // The upload exists, but nothing records it, and the app learns a
+        // clip's link only from the history. Deleting the clip now would
+        // leave a copy on the server, no local file and no link anywhere:
+        // keep it, and hand the link over in the reply.
+        eprintln!("[Uploader] Upload history could not be saved: {e}");
+        // The bar shows one line and cuts it at 240 characters: the link
+        // comes first, and the reason is kept short.
+        let why: String = e.to_string().chars().take(80).collect();
+        let warning = match &link {
+            Some(link) => format!(
+                "{link}: uploaded, but the upload history could not be saved ({why}). The clip was kept."
+            ),
+            None => format!(
+                "Uploaded, but the upload history could not be saved ({why}). The clip was kept."
+            ),
+        };
         return Response {
             ok: true,
-            message: format!("Uploaded, but local delete failed: {e}"),
+            message,
             upload_info: Some(entry),
             settings_problem: false,
+            warning: Some(warning),
         };
+    }
+    let auto_delete = fthrust_core::upload::truthy(settings.get("upload_auto_delete"));
+    let mut message = message;
+    let mut warning = None;
+    if link.is_none() {
+        // Without a link the upload is not confirmed: keep the only copy, and
+        // say that there is nothing to copy from the card.
+        let said = if provider == Provider::Custom {
+            NO_LINK
+        } else {
+            "Uploaded, but the reply had no usable link."
+        };
+        let kept = if auto_delete {
+            " The clip was kept."
+        } else {
+            ""
+        };
+        warning = Some(format!("{said}{kept}"));
+    } else if auto_delete
+        // Clips outside the clips folder (imported libraries) are never ours
+        // to delete.
+        && clips_root.is_some_and(|root| path.starts_with(root))
+        && let Err(e) = std::fs::remove_file(path)
+    {
+        message = format!("Uploaded, but local delete failed: {e}");
+        warning = Some(message.clone());
     }
     Response {
         ok: true,
         message,
         upload_info: Some(entry),
         settings_problem: false,
+        warning,
     }
 }
 
 /// Test connection to Catbox: any answer below 500 means reachable.
 pub async fn test_catbox(env: &Env) -> (bool, String) {
-    let client = match client(TEST_TIMEOUT, true) {
+    let client = match client(TEST_TIMEOUT, Some(TEST_TIMEOUT), true) {
         Ok(c) => c,
         Err(e) => return (false, e),
     };
@@ -624,7 +904,10 @@ pub async fn test_catbox(env: &Env) -> (bool, String) {
 pub async fn test_custom(settings: &Map<String, Value>) -> Result<(bool, String), String> {
     let url = validate::custom_url(setting(settings, "upload_server_url"))?;
     let auth = validate::auth_header(setting(settings, "upload_auth_header"))?;
-    let client = client(TEST_TIMEOUT, false)?;
+    if let Some(problem) = unusable(&url, auth.as_deref()) {
+        return Err(problem.into());
+    }
+    let client = client(TEST_TIMEOUT, Some(TEST_TIMEOUT), false)?;
     let mut request = client.head(&url);
     if let Some(a) = &auth {
         request = request.header(reqwest::header::AUTHORIZATION, a);
@@ -679,4 +962,37 @@ pub async fn test_custom(settings: &Map<String, Value>) -> Result<(bool, String)
         500.. => (false, format!("Your server hit an error (HTTP {code}).")),
         _ => (false, format!("Your server returned HTTP {code}.")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn urls_in_messages_lose_their_secrets() {
+        for (text, want) in [
+            (
+                "error sending request for url (https://u:p@host:8080/a/b?token=1#x): boom",
+                "error sending request for url (https://host:8080/a/b): boom",
+            ),
+            ("no address in this one", "no address in this one"),
+            (
+                "from http://a.example/x?k=v to HTTPS://B:C@b.example/y?z",
+                "from http://a.example/x to https://b.example/y",
+            ),
+            // An address that cannot be taken apart is cut by hand.
+            (
+                "bad url (http://me:pw@[broken/up?x=1)",
+                "bad url (http://[broken/up)",
+            ),
+            ("scheme only http://", "scheme only http://"),
+            // Punctuation inside a query is no end of the URL.
+            (
+                "failed for url (http://h/p?a=1,b;c)d=SECRET): refused.",
+                "failed for url (http://h/p): refused.",
+            ),
+        ] {
+            assert_eq!(scrub_urls(text), want, "{text}");
+        }
+    }
 }

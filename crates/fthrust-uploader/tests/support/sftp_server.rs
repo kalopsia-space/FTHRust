@@ -1,6 +1,7 @@
 //! A small SSH server with an SFTP subsystem over a local folder, for the
-//! uploader's SFTP tests: password auth, a fixed ed25519 host key, and
-//! switches to make rename or chmod fail.
+//! uploader's SFTP tests: password auth, a fixed ed25519 host key and an
+//! ECDSA one (so the client's choice between them shows), and switches to
+//! make rename or chmod fail.
 
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
@@ -22,18 +23,56 @@ pub struct Knobs {
     pub auth_attempts: AtomicUsize,
     pub fail_rename: AtomicBool,
     pub fail_chmod_644: AtomicBool,
+    /// Writes never get an answer: the client is stuck in the middle of the
+    /// transfer, the way a killed uploader leaves the server.
+    pub stall_writes: AtomicBool,
+    /// Removing a file is refused (a protected folder, a read-only leftover).
+    pub fail_remove: AtomicBool,
 }
 
 pub struct TestServer {
     pub port: u16,
     pub root: PathBuf,
+    /// The ed25519 host key (the one a client asks for first by default).
     pub key: ssh_key::PrivateKey,
+    /// The ECDSA (NIST P-256) host key.
+    pub ecdsa: ssh_key::PrivateKey,
     pub knobs: Arc<Knobs>,
     _dir: tempfile::TempDir,
 }
 
 pub const USER: &str = "clipper";
 pub const PASSWORD: &str = "s3cret pw";
+
+/// A fixed byte stream standing in for a random number generator, so the
+/// ECDSA host key of a given seed is the same on every run.
+struct Stream(u8);
+
+impl ssh_key::rand_core::TryRng for Stream {
+    type Error = std::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        let mut bytes = [0u8; 4];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let mut bytes = [0u8; 8];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        for byte in dst {
+            self.0 = self.0.wrapping_mul(167).wrapping_add(13);
+            *byte = self.0;
+        }
+        Ok(())
+    }
+}
+
+impl ssh_key::rand_core::TryCryptoRng for Stream {}
 
 impl TestServer {
     pub fn fingerprint(&self) -> String {
@@ -51,6 +90,15 @@ impl TestServer {
             self.key.public_key().to_openssh().unwrap()
         )
     }
+
+    /// The same for the ECDSA host key.
+    pub fn ecdsa_known_hosts_line(&self) -> String {
+        format!(
+            "[127.0.0.1]:{} {}",
+            self.port,
+            self.ecdsa.public_key().to_openssh().unwrap()
+        )
+    }
 }
 
 pub async fn start(seed: u8) -> TestServer {
@@ -60,10 +108,17 @@ pub async fn start(seed: u8) -> TestServer {
     std::fs::write(root.join("afile"), b"x").unwrap();
     let pair = ssh_key::private::Ed25519Keypair::from_seed(&[seed; 32]);
     let key = ssh_key::PrivateKey::from(pair);
+    let ecdsa = ssh_key::PrivateKey::random(
+        &mut Stream(seed),
+        ssh_key::Algorithm::Ecdsa {
+            curve: ssh_key::EcdsaCurve::NistP256,
+        },
+    )
+    .unwrap();
     let config = Arc::new(russh::server::Config {
         auth_rejection_time: std::time::Duration::from_millis(1),
         auth_rejection_time_initial: Some(std::time::Duration::ZERO),
-        keys: vec![key.clone()],
+        keys: vec![key.clone(), ecdsa.clone()],
         ..Default::default()
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -92,6 +147,7 @@ pub async fn start(seed: u8) -> TestServer {
         port,
         root,
         key,
+        ecdsa,
         knobs,
         _dir: dir,
     }
@@ -255,6 +311,9 @@ impl russh_sftp::server::Handler for Sftp {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        if self.knobs.stall_writes.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
         let f = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
         f.seek(SeekFrom::Start(offset)).map_err(code)?;
         f.write_all(&data).map_err(code)?;
@@ -306,6 +365,9 @@ impl russh_sftp::server::Handler for Sftp {
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+        if self.knobs.fail_remove.load(Ordering::SeqCst) {
+            return Err(StatusCode::PermissionDenied);
+        }
         std::fs::remove_file(self.local(&filename)).map_err(code)?;
         Ok(ok(id))
     }
