@@ -268,6 +268,35 @@ fn refuses_existing_partial_and_empty_snapshot() {
     assert!(!out2.exists() && !temporary_path_for(&out2).exists());
 }
 
+#[test]
+fn the_startup_sweep_publishes_a_finished_clip_and_removes_a_cut_one() {
+    use fthrust_core::clip_files::{STALE_PARTIAL_MAX_AGE, cleanup_stale_partials};
+    let Some(e) = encode_twelve_seconds() else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("desktop_clip_from_31Oct2026_20-00-00.mp4");
+    write_clip(&out, &video(&e, false), &[], None).unwrap();
+    let bytes = std::fs::read(&out).unwrap();
+    // A failed rename leaves the finished clip under its temporary name.
+    let partial = temporary_path_for(&out);
+    std::fs::rename(&out, &partial).unwrap();
+    // A crash leaves the clip without its index (written last).
+    let cut = tmp
+        .path()
+        .join("desktop_clip_from_31Oct2026_20-00-01.mp4.partial");
+    std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+    let later = std::time::SystemTime::now() + 2 * STALE_PARTIAL_MAX_AGE;
+    let removed = cleanup_stale_partials(tmp.path(), later, STALE_PARTIAL_MAX_AGE).unwrap();
+    assert_eq!(removed, 1, "only the cut clip goes");
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        bytes,
+        "published under its name"
+    );
+    assert!(!partial.exists() && !cut.exists());
+}
+
 fn tone(seconds: u32, hz: f32) -> Vec<f32> {
     (0..seconds * 48_000)
         .flat_map(|i| {
