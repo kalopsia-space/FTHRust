@@ -180,8 +180,13 @@ pub enum Request {
         /// Import roots.
         imported: Vec<PathBuf>,
     },
-    /// Restart the capture engine.
+    /// Restart the capture engine (a settings apply, the shortcut).
     RestartEngine,
+    /// Restart the capture engine on the app's own initiative: game
+    /// detection switching to or from a game, the clips profile coming back
+    /// after a recording. The new engine never brings up the portal's
+    /// dialog.
+    AutoRestartEngine,
     /// An error-bar action id.
     ErrorAction(String),
     /// Refresh the running-window list.
@@ -590,7 +595,7 @@ impl Services {
         for a in actions {
             match a {
                 game::GameAction::Card(c) => self.show_card(state, c),
-                game::GameAction::Restart => self.dispatch(Request::RestartEngine, state),
+                game::GameAction::Restart => self.dispatch(Request::AutoRestartEngine, state),
             }
         }
     }
@@ -829,26 +834,18 @@ impl Services {
                         if let Ok(mut sv) = d.supervisor().lock() {
                             sv.set_recording_preparing(true);
                         }
+                        // The user pressed Record: their restart.
                         d.request(engine::Input::Restart {
                             config,
                             allow_recording_prepare: true,
                             explicit: false,
+                            automatic: false,
                         });
                     }
                 }
                 recording::RecAction::RestoreClipProfile => {
-                    if self.test_requests.is_some() {
-                        self.dispatch(Request::RestartEngine, state);
-                    } else if let Some(d) = &self.engine {
-                        match engine::engine_config(state) {
-                            Ok(config) => d.request(engine::Input::Restart {
-                                config,
-                                allow_recording_prepare: false,
-                                explicit: false,
-                            }),
-                            Err(e) => self.report_config_error(&e),
-                        }
-                    }
+                    // The app goes back to the clips profile on its own.
+                    self.dispatch(Request::AutoRestartEngine, state);
                 }
                 recording::RecAction::RefreshLibrary => state.scan_clips_requested = true,
             }
@@ -1457,13 +1454,14 @@ impl Services {
                     p.preview(&state.settings, &state.theme, &key);
                 }
             }
-            Request::RestartEngine => {
+            request @ (Request::RestartEngine | Request::AutoRestartEngine) => {
                 if let Some(d) = &self.engine {
                     match engine::engine_config(state) {
                         Ok(config) => d.request(engine::Input::Restart {
                             config,
                             allow_recording_prepare: false,
                             explicit: false,
+                            automatic: request == Request::AutoRestartEngine,
                         }),
                         Err(e) => self.report_config_error(&e),
                     }
@@ -1479,6 +1477,7 @@ impl Services {
                                 config,
                                 allow_recording_prepare: false,
                                 explicit: true,
+                                automatic: false,
                             }),
                             Err(e) => self.report_config_error(&e),
                         }

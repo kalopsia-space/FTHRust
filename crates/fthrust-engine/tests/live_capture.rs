@@ -27,6 +27,7 @@ fn config(encoder: EncoderPref, backend_override: Option<BackendKind>) -> Engine
         },
         max_buffer_mb: 0,
         backend_override,
+        automatic_start: false,
     }
 }
 

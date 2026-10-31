@@ -52,6 +52,12 @@ pub struct EngineConfig {
     pub max_buffer_mb: u32,
     /// A forced backend (no fallback), normally from `FTHR_CAPTURE_BACKEND`.
     pub backend_override: Option<BackendKind>,
+    /// The app started this engine on its own, after the last one crashed
+    /// or stopped answering, not because the user asked: its capture never
+    /// brings up the portal's dialog, not even in the first generation.
+    /// Absent (an older app) means a start the user asked for.
+    #[serde(default)]
+    pub automatic_start: bool,
 }
 
 /// A command from the UI to the engine.

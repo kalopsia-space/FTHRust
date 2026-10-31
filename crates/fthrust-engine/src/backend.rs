@@ -23,6 +23,10 @@ pub struct BackendFailure {
     pub reason: String,
     /// Only user action can resolve it (a dismissed portal dialog).
     pub retry_pointless: bool,
+    /// With `retry_pointless`: the portal could only go on by showing its
+    /// dialog, which this open may not ([`OpenReason::Recovery`]). Capture
+    /// stops with `CAPTURE_NOT_RESTORED` instead of `CAPTURE_DECLINED`.
+    pub needs_dialog: bool,
 }
 
 impl From<wb::BackendError> for BackendFailure {
@@ -31,6 +35,7 @@ impl From<wb::BackendError> for BackendFailure {
             kind: e.kind,
             reason: e.reason,
             retry_pointless: false,
+            needs_dialog: false,
         }
     }
 }
@@ -77,10 +82,12 @@ pub trait CaptureBackend: Send {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenReason {
     /// The capture the user started (the app starting, a settings change,
-    /// a restart): the portal may show its dialog.
+    /// RESTART ENGINE): the portal may show its dialog.
     Start,
-    /// An automatic recovery: the portal may only restore its saved
-    /// session, never show its dialog.
+    /// An automatic recovery: a re-open after a failed generation, or the
+    /// first open of an engine the app restarted on its own
+    /// (`EngineConfig::automatic_start`). The portal may only restore its
+    /// saved session, never show its dialog.
     Recovery,
 }
 
@@ -117,6 +124,14 @@ impl RealFactory {
         Self {
             has_wayland,
             paths: None,
+        }
+    }
+
+    /// Uses `paths` for the portal's restore token (tests).
+    pub fn with_paths(self, paths: fthrust_core::FthrPaths) -> Self {
+        Self {
+            paths: Some(paths),
+            ..self
         }
     }
 }
@@ -168,6 +183,7 @@ impl BackendFactory for RealFactory {
                         kind: FailureKind::Error,
                         reason: "the synthetic backend needs FTHRUST_SYNTHETIC_BACKEND=1".into(),
                         retry_pointless: true,
+                        needs_dialog: false,
                     })
                 }
             }
@@ -377,6 +393,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: FailureKind::Error,
                 reason: format!("{} is not available in this script", kind.name()),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         };
         if let Some(f) = k.fail_inits.pop_front() {
@@ -384,6 +401,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: f,
                 reason: format!("scripted {f:?} on {}", kind.name()),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         }
         let outputs = k
@@ -399,6 +417,7 @@ impl BackendFactory for SyntheticFactory {
                 kind: FailureKind::OutputAbsent,
                 reason: format!("output {} is not advertised right now", cfg.monitor),
                 retry_pointless: false,
+                needs_dialog: false,
             });
         } else {
             outputs.first().cloned().unwrap_or_default()
