@@ -1113,6 +1113,40 @@ fn zero_copy_survives_a_static_screen_past_the_first_frame_deadline() {
 }
 
 #[test]
+fn a_black_zero_copy_feed_is_restarted_through_shm() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The synthetic compositor completes dmabuf captures without drawing
+    // into the images, so the watchdog reads the surfaces as the driver
+    // allocated them; its shm frames show a picture. The content restart
+    // must not go straight back into zero copy.
+    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.content_sample_sequence >= 2
+    });
+    if s.content_suspicious_streak == 0 {
+        h.engine.shutdown();
+        return eprintln!("skipping: this driver's new surfaces are not black");
+    }
+    assert!(h.engine.zero_copy_in_use(), "zero copy started");
+    wait_for(&h.engine, Duration::from_secs(30), |s| {
+        s.capture_generation == 2
+    });
+    // A sample of the new generation's picture clears the flag.
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.health_flags & flags::CONTENT_SUSPECT == 0
+    });
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(!zero_copy, "the restart went back into zero copy");
+    assert_eq!(s.capture_generation, 2, "{s:?}");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "dmabuf again");
+    assert_eq!(*h.sleeps.lock().unwrap(), [250]);
+}
+
+#[test]
 fn zero_copy_off_for_another_gpu_copies_frames() {
     let Some(mut c) = vaapi_dmabuf_constraints(320, 180) else {
         return eprintln!("skipping: no VA-API device");

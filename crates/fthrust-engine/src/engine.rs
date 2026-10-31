@@ -733,6 +733,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // Once a generation ran, every open is a recovery: the portal may then
     // only restore its saved session, never show its dialog.
     let mut open_reason = OpenReason::Start;
+    // The watchdog restarted capture over a black zero-copy feed: the next
+    // generation captures through shm, since a compositor that completes
+    // captures into the surfaces without drawing would bring it back as is.
+    let mut shm_after_black_zero_copy = false;
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -921,14 +925,21 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
 
         // Zero copy: the compositor renders into the encoder's surfaces.
         let buffer = backend.buffer_size().unwrap_or(native);
-        let mut zero_copy_active = match start_zero_copy(backend.as_mut(), enc, buffer) {
-            Ok(()) => {
-                tracing::info!("zero-copy capture in use");
-                true
-            }
-            Err(reason) => {
-                log_zero_copy_off(&mut zero_copy_logged, &reason);
-                false
+        let mut zero_copy_active = if std::mem::take(&mut shm_after_black_zero_copy) {
+            tracing::warn!(
+                "the picture stayed black through zero copy; capturing through shared memory"
+            );
+            false
+        } else {
+            match start_zero_copy(backend.as_mut(), enc, buffer) {
+                Ok(()) => {
+                    tracing::info!("zero-copy capture in use");
+                    true
+                }
+                Err(reason) => {
+                    log_zero_copy_off(&mut zero_copy_logged, &reason);
+                    false
+                }
             }
         };
         let mut surface_proven = false;
@@ -1244,8 +1255,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 if m.recover && kind != BackendKind::PortalScreenCast {
                     tracing::warn!(
                         samples = m.streak,
+                        zero_copy = zero_copy_active,
                         "{CONTENT_RECOVERY_REASON}; restarting capture"
                     );
+                    shm_after_black_zero_copy = zero_copy_active;
                     break GenerationEnd::BackendFailed {
                         transient: false,
                         reason: CONTENT_RECOVERY_REASON.into(),
