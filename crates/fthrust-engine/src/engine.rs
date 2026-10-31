@@ -22,7 +22,7 @@ use crate::policy::{
     CaptureRecoveryPolicy, EncodeFailurePolicy, capture_pacing_wait, next_encode_deadline,
     recovery_order, wait_for_recovery_backoff,
 };
-use crate::watchdog::ContentWatchdog;
+use crate::watchdog::{ContentMetrics, ContentWatchdog};
 use crate::zero_copy::{self, ZeroCopy, zero_copy_plan};
 
 /// Capture could not start.
@@ -698,6 +698,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // The zero-copy fallback line is logged once per capture start.
     let mut zero_copy_logged = false;
     let mut surface_pixels = Vec::new();
+    // Lives across generations, so a black screen is followed through the
+    // recovery it asked for (one per run of suspect content).
+    let mut watchdog = ContentWatchdog::new(fps);
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -900,7 +903,6 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
         let mut next_encode_ns = 0i64;
         let mut produced: u64 = 0;
         let mut encode_failures = EncodeFailurePolicy::new(fps);
-        let mut watchdog = ContentWatchdog::new(fps);
         // Whether the latest fresh (non-repeated) view is what the encoder
         // last took, so a repeat may re-send it.
         let mut last_fresh_encoded = false;
@@ -1021,19 +1023,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 continue;
             }
             next_encode_ns = next_encode_deadline(next_encode_ns, frame_ns, ts) + frame_ns;
-            let update_content = |m: crate::watchdog::ContentMetrics| {
-                inner.update(|s| {
-                    s.content_sample_sequence = m.sequence;
-                    s.content_suspicious_streak = m.streak;
-                    s.content_luma_mean = m.luma_mean;
-                    s.content_luma_variance = m.luma_variance;
-                    if m.suspect {
-                        s.health_flags |= flags::CONTENT_SUSPECT;
-                    } else {
-                        s.health_flags &= !flags::CONTENT_SUSPECT;
-                    }
-                });
-            };
+            // The watchdog's sample of this frame, published and acted on
+            // once the frame is encoded.
+            let mut sampled = None;
+            let mut update_content = |m: ContentMetrics| sampled = Some(m);
             let encoded = if let FrameSource::Dmabuf(index) = view.source {
                 let (w, h) = (view.width as usize, view.height as usize);
                 let upright = view.transform == OutputTransform::Normal && !view.y_invert;
@@ -1186,6 +1179,19 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     }
                 }
             }
+            if let Some(m) = sampled {
+                publish_content(&inner, m);
+                if m.recover {
+                    tracing::warn!(
+                        samples = m.streak,
+                        "{CONTENT_RECOVERY_REASON}; restarting capture"
+                    );
+                    break GenerationEnd::BackendFailed {
+                        transient: false,
+                        reason: CONTENT_RECOVERY_REASON.into(),
+                    };
+                }
+            }
         };
 
         // Generation end.
@@ -1243,6 +1249,24 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     }
     drop(s);
     inner.notify(EngineNotice::StatusChanged);
+}
+
+/// Why the watchdog restarts capture.
+const CONTENT_RECOVERY_REASON: &str = "the captured picture stayed black or one flat colour";
+
+/// Publishes one watchdog sample; `CONTENT_SUSPECT` follows it.
+fn publish_content(inner: &Inner, m: ContentMetrics) {
+    inner.update(|s| {
+        s.content_sample_sequence = m.sequence;
+        s.content_suspicious_streak = m.streak;
+        s.content_luma_mean = m.luma_mean;
+        s.content_luma_variance = m.luma_variance;
+        if m.suspect {
+            s.health_flags |= flags::CONTENT_SUSPECT;
+        } else {
+            s.health_flags &= !flags::CONTENT_SUSPECT;
+        }
+    });
 }
 
 /// The compositor is not answering or the selected output is absent: waited

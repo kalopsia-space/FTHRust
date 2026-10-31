@@ -1,7 +1,8 @@
 //! The content watchdog: once per `fps` frames, a 16×9 sparse luma sample
 //! classifies the screen as black-like or uniform; twelve suspicious
-//! samples in a row raise `CONTENT_SUSPECT`. Privacy-safe: no image is
-//! retained. Ports `capture_engine.cpp:345-391` over the core sampler.
+//! samples in a row raise `CONTENT_SUSPECT` and ask for one recovery.
+//! Privacy-safe: no image is retained. Ports `capture_engine.cpp:345-391`
+//! over the core sampler.
 
 use fthrust_core::capture_health::{ContentSuspicionTracker, sample_bgra_grid};
 use fthrust_wayland::frame::BgraFrame;
@@ -19,15 +20,22 @@ pub struct ContentMetrics {
     pub luma_variance: f32,
     /// Whether the streak reached the threshold.
     pub suspect: bool,
+    /// Restart capture: the content just became suspect. Asked once per
+    /// run of suspicious samples, so a screen that really is black (a
+    /// loading screen, a dark scene) costs one restart, not one every 12 s.
+    pub recover: bool,
 }
 
-/// Samples every `fps` frames.
+/// Samples every `fps` frames. One watchdog lives for the whole capture,
+/// across recoveries, so a run of suspicious samples is followed through
+/// the restart it caused.
 pub struct ContentWatchdog {
     every: u64,
     frames: u64,
     sequence: u32,
     tracker: ContentSuspicionTracker,
     streak: u32,
+    recovery_asked: bool,
 }
 
 impl ContentWatchdog {
@@ -44,6 +52,7 @@ impl ContentWatchdog {
             sequence: 0,
             tracker: ContentSuspicionTracker::new(),
             streak: 0,
+            recovery_asked: false,
         }
     }
 
@@ -98,6 +107,13 @@ impl ContentWatchdog {
         } else {
             0
         };
+        if self.streak == 0 {
+            self.recovery_asked = false;
+        }
+        let recover = suspect && !self.recovery_asked;
+        if recover {
+            self.recovery_asked = true;
+        }
         self.sequence = self.sequence.wrapping_add(1);
         Some(ContentMetrics {
             sequence: self.sequence,
@@ -105,6 +121,7 @@ impl ContentWatchdog {
             luma_mean: sample.luma_mean as f32,
             luma_variance: sample.luma_variance as f32,
             suspect,
+            recover,
         })
     }
 }
@@ -161,5 +178,26 @@ mod tests {
         }
         let m = dog.observe_raw(&desktop, w, h, w * 4).unwrap();
         assert_eq!(m.streak, 0, "a normal sample ends the streak");
+    }
+
+    #[test]
+    fn one_recovery_per_run_of_suspect_content() {
+        let (w, h) = (64usize, 36usize);
+        let (black, desktop) = (solid(w, h, 0), gradient(w, h));
+        let mut dog = ContentWatchdog::new(1);
+        let run = |dog: &mut ContentWatchdog, frame: &[u8], samples: u32| -> Vec<u32> {
+            (0..samples)
+                .filter_map(|_| dog.observe_raw(frame, w, h, w * 4))
+                .filter(|m| m.recover)
+                .map(|m| m.streak)
+                .collect()
+        };
+        assert_eq!(
+            run(&mut dog, &black, 40),
+            [12],
+            "asked when the content becomes suspect, then not again"
+        );
+        assert!(run(&mut dog, &desktop, 1).is_empty());
+        assert_eq!(run(&mut dog, &black, 12), [12], "a new run asks again");
     }
 }

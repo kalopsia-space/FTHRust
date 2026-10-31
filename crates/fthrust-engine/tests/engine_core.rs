@@ -508,6 +508,36 @@ fn content_watchdog_flags_black_screen() {
 }
 
 #[test]
+fn a_black_screen_restarts_capture_once() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // Twelve black samples (one a second) flag the content and restart
+    // capture; while the picture stays black it is not restarted again.
+    let mut script = wlr_ok(320, 180);
+    script.black = true;
+    let mut h = harness(config(|c| c.fps = 30), script);
+    h.engine.start().unwrap();
+    let n = wait_notice(&h.engine, Duration::from_secs(30), |n| {
+        matches!(n, EngineNotice::Recovering { .. })
+    });
+    let EngineNotice::Recovering { reason } = n else {
+        unreachable!()
+    };
+    assert!(reason.contains("black"), "{reason}");
+    wait_for(&h.engine, Duration::from_secs(5), |s| {
+        s.capture_generation == 2 && s.health_flags & flags::RECOVERING == 0
+    });
+    std::thread::sleep(Duration::from_secs(4));
+    let s = h.engine.status();
+    h.engine.shutdown();
+    assert_eq!(s.capture_generation, 2, "restarted once: {s:?}");
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0, "still flagged");
+    assert!(s.content_suspicious_streak >= 15, "{s:?}");
+    assert_eq!(*h.sleeps.lock().unwrap(), [250]);
+}
+
+#[test]
 fn startup_without_wayland_is_coded() {
     let deps = EngineDeps {
         backends: Arc::new(RealFactory::assume_wayland(false)),
