@@ -503,6 +503,45 @@ fn encode_frame(
 }
 
 #[test]
+fn software_h264_and_hevc_capture_hold_back_no_frames() {
+    // A frame an encoder holds back (x264 or x265 frame threads) is
+    // missing from a clip saved now and from the end of a recording.
+    // tune=zerolatency gives x264 sliced threads and x265 one frame thread;
+    // FFmpeg keeps them only while the context's thread_type is libx264's
+    // default 0 (libx265 takes thread_count as its frame threads).
+    let (w, h) = (1920u32, 1080u32);
+    for codec in [Codec::H264, Codec::Hevc] {
+        let cfg = EncoderConfig {
+            codec,
+            ..software_config(w, h, 30)
+        };
+        let Ok(mut enc) = Encoder::open(&cfg) else {
+            eprintln!("skipping {codec:?}: no software encoder");
+            continue;
+        };
+        let mut out = Vec::new();
+        for i in 0..20u32 {
+            let bgra = support::synthetic_bgra(w, h, i);
+            enc.encode(
+                &bgra,
+                w as usize * 4,
+                w,
+                h,
+                i64::from(i) * SECOND / 30,
+                &mut out,
+            )
+            .unwrap();
+            assert_eq!(
+                out.len(),
+                i as usize + 1,
+                "{} holds frame {i} back",
+                enc.active_codec()
+            );
+        }
+    }
+}
+
+#[test]
 fn a_failed_encode_keeps_the_keyframe_request() {
     if support::skip_unless_encoder(&["libopenh264", "libx264"]).is_none() {
         return;
