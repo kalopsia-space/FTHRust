@@ -26,6 +26,8 @@ pub struct Knobs {
     /// Writes never get an answer: the client is stuck in the middle of the
     /// transfer, the way a killed uploader leaves the server.
     pub stall_writes: AtomicBool,
+    /// Removing a file is refused (a protected folder, a read-only leftover).
+    pub fail_remove: AtomicBool,
 }
 
 pub struct TestServer {
@@ -363,6 +365,9 @@ impl russh_sftp::server::Handler for Sftp {
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+        if self.knobs.fail_remove.load(Ordering::SeqCst) {
+            return Err(StatusCode::PermissionDenied);
+        }
         std::fs::remove_file(self.local(&filename)).map_err(code)?;
         Ok(ok(id))
     }

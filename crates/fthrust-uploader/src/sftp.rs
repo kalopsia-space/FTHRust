@@ -474,6 +474,17 @@ fn part_name(path: &Path) -> String {
     format!("fthr-{hex}.part")
 }
 
+/// [`part_name`] with a random tail: for when a leftover of the fixed name
+/// is there and cannot be removed. (The partial file is created exclusively,
+/// so that leftover would make every upload of the clip fail, for good.)
+fn spare_part_name(path: &Path) -> String {
+    let mut bytes = [0u8; 4];
+    let _ = getrandom::fill(&mut bytes);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let fixed = part_name(path);
+    format!("{}-{hex}.part", fixed.trim_end_matches(".part"))
+}
+
 /// `name` in the remote `folder`.
 fn in_folder(folder: &str, name: &str) -> String {
     if folder.ends_with('/') {
@@ -568,9 +579,14 @@ pub async fn upload(
         .map_err(Failure::Permanent)?;
     let name = remote_name(path);
     let remote = in_folder(&conn.folder, &name);
-    let part = in_folder(&conn.folder, &part_name(path));
+    let mut part = in_folder(&conn.folder, &part_name(path));
     // What an earlier attempt at this clip left behind if it was killed.
     let _ = conn.sftp.remove_file(part.clone()).await;
+    if conn.sftp.metadata(part.clone()).await.is_ok() {
+        // Still there: the server will not let it go. Do not fail the clip
+        // for as long as that lasts; write under a name of our own.
+        part = in_folder(&conn.folder, &spare_part_name(path));
+    }
     let sent = send(&conn, path, &part, &remote, !base.is_empty()).await;
     if sent.is_err() {
         // A failed upload leaves nothing on the server: not the partial

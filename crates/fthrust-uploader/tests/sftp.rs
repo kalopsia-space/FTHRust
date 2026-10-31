@@ -547,6 +547,36 @@ async fn failed_rename_cleans_part_and_keeps_clip() {
     assert!(h.clip.exists());
 }
 
+/// Starts an upload of the clip that hangs in its first write, and kills it
+/// (drops it, as SIGKILL would) once its partial file is on the server.
+/// Returns the name of that leftover.
+async fn kill_an_upload(server: &TestServer, h: &Home, env: &Env) -> String {
+    let up = server.root.join("up");
+    let before = srv::names(&up);
+    server.knobs.stall_writes.store(true, Ordering::SeqCst);
+    let partial_appears = async {
+        while !srv::names(&up)
+            .iter()
+            .any(|n| n.ends_with(".part") && !before.contains(n))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    let killed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::select! {
+            r = h.upload(env) => panic!("the upload was meant to hang: {r:?}"),
+            () = partial_appears => {}
+        }
+    })
+    .await;
+    assert!(killed.is_ok(), "no partial file ever appeared");
+    server.knobs.stall_writes.store(false, Ordering::SeqCst);
+    srv::names(&up)
+        .into_iter()
+        .find(|n| n.ends_with(".part") && !before.contains(n))
+        .unwrap()
+}
+
 /// The app kills a stuck uploader (SIGKILL), so nothing can clean up after
 /// an upload that dies mid-transfer. The next upload of the same clip does:
 /// the partial file has a name that only depends on the clip.
@@ -560,25 +590,7 @@ async fn a_killed_upload_is_cleaned_up_by_the_next_one_of_the_same_clip() {
     // Somebody else's partial file stays where it is.
     std::fs::write(up.join("fthr-someone-else.part"), b"theirs").unwrap();
 
-    // The upload hangs in its first write. Kill it (drop it, as SIGKILL
-    // would) once its partial file is on the server.
-    server.knobs.stall_writes.store(true, Ordering::SeqCst);
-    let partial_appears = async {
-        while !srv::names(&up)
-            .iter()
-            .any(|n| n.ends_with(".part") && n != "fthr-someone-else.part")
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    };
-    let killed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        tokio::select! {
-            r = h.upload(&env) => panic!("the upload was meant to hang: {r:?}"),
-            () = partial_appears => {}
-        }
-    })
-    .await;
-    assert!(killed.is_ok(), "no partial file ever appeared");
+    kill_an_upload(&server, &h, &env).await;
     let left = srv::names(&up);
     assert_eq!(left.len(), 2, "{left:?}");
     assert!(
@@ -586,7 +598,6 @@ async fn a_killed_upload_is_cleaned_up_by_the_next_one_of_the_same_clip() {
         "{left:?}"
     );
 
-    server.knobs.stall_writes.store(false, Ordering::SeqCst);
     let (ok, msg) = h.upload(&env).await;
     assert!(ok, "{msg}");
     let names = srv::names(&up);
@@ -610,6 +621,43 @@ async fn a_killed_upload_is_cleaned_up_by_the_next_one_of_the_same_clip() {
             .iter()
             .any(|n| n.ends_with(".part") && n != "fthr-someone-else.part")
     );
+}
+
+/// The partial file of a clip has a fixed name and is created exclusively,
+/// so a leftover the server will not let go (a protected folder, a read-only
+/// file) would fail every upload of that clip for good. It does not: the
+/// upload writes under a name of its own, and the leftover goes when the
+/// server lets it.
+#[tokio::test]
+async fn a_leftover_that_cannot_be_removed_does_not_block_the_clip() {
+    let server = srv::start(25).await;
+    let h = home(&server, pinned(&server));
+    let env = h.env();
+    h.save_password(&env, srv::PASSWORD).await;
+    let up = server.root.join("up");
+    let stale = kill_an_upload(&server, &h, &env).await;
+
+    server.knobs.fail_remove.store(true, Ordering::SeqCst);
+    for _ in 0..2 {
+        let (ok, msg) = h.upload(&env).await;
+        assert!(ok, "{msg}");
+    }
+    let names = srv::names(&up);
+    assert!(names.contains(&stale), "{names:?}");
+    let finished = names.iter().filter(|n| n.ends_with(".mp4")).count();
+    assert_eq!(finished, 2, "{names:?}");
+    assert_eq!(
+        names.iter().filter(|n| n.ends_with(".part")).count(),
+        1,
+        "only the leftover, no spare names: {names:?}"
+    );
+
+    server.knobs.fail_remove.store(false, Ordering::SeqCst);
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let names = srv::names(&up);
+    assert!(!names.contains(&stale), "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".part")), "{names:?}");
 }
 
 #[tokio::test]
