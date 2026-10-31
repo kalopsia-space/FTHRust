@@ -1365,37 +1365,69 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
     });
 }
 
-/// How long an engine left over from an earlier session gets to exit.
-pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(15);
+/// How long an engine left over from an earlier session gets to let go of
+/// the socket: the engine's own wait for a save in flight, plus a margin.
+pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(65);
 
 /// An engine left over from an earlier session (the UI died mid-save, say)
 /// may still own the socket. The UI used to unlink the socket and start a
-/// second engine beside it, both capturing; now it asks the old one to stop
-/// first (then SIGTERM, then SIGKILL). A socket file nobody listens on is
-/// left for the new engine, which replaces it.
+/// second engine beside it, both capturing. Now it asks the old one to
+/// stop if it still serves clients, then waits until the socket refuses
+/// connections or the process is gone (an engine finishing a save no
+/// longer accepts clients, so it gets the time its save needs), and only
+/// then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
+/// peer credentials, which a connection still waiting in the backlog has
+/// too. A socket file nobody listens on is left for the new engine, which
+/// replaces it.
 pub async fn retire_stale_engine(socket: &Path) {
-    let connect = tokio::time::timeout(Duration::from_secs(2), EngineClient::connect(socket));
-    let Ok(Ok(mut client)) = connect.await else {
+    retire_stale_engine_within(socket, STALE_ENGINE_EXIT).await;
+}
+
+/// [`retire_stale_engine`] with the wait bound given (tests).
+pub async fn retire_stale_engine_within(socket: &Path, bound: Duration) {
+    let connect = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::UnixStream::connect(socket),
+    );
+    let Ok(Ok(probe)) = connect.await else {
         return;
     };
-    let pid = client.hello().pid;
+    let pid = probe
+        .peer_cred()
+        .ok()
+        .and_then(|c| c.pid())
+        .filter(|p| *p > 0 && *p as u32 != std::process::id());
+    drop(probe);
     tracing::warn!(
-        pid,
-        "an engine from an earlier session is still running; stopping it"
+        ?pid,
+        "an engine from an earlier session still owns the socket; stopping it"
     );
-    let _ = client.send(Command::Shutdown).await;
-    let drained = tokio::time::timeout(STALE_ENGINE_EXIT, async {
-        while client.events().recv().await.is_some() {}
+    let hello = tokio::time::timeout(Duration::from_secs(2), EngineClient::connect(socket));
+    if let Ok(Ok(client)) = hello.await {
+        let _ = client.send(Command::Shutdown).await;
+    }
+    let alive = |pid: Option<i32>| {
+        pid.is_none_or(|p| nix::sys::signal::kill(nix::unistd::Pid::from_raw(p), None).is_ok())
+    };
+    let let_go = tokio::time::timeout(bound, async {
+        loop {
+            if !alive(pid) || tokio::net::UnixStream::connect(socket).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
     })
     .await
     .is_ok();
-    if drained || pid == 0 {
+    let Some(pid) = pid.filter(|_| !let_go) else {
         return;
-    }
-    let target = nix::unistd::Pid::from_raw(pid as i32);
+    };
+    let target = nix::unistd::Pid::from_raw(pid);
     let _ = nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM);
     let gone = tokio::time::timeout(Duration::from_secs(2), async {
-        while client.events().recv().await.is_some() {}
+        while alive(Some(pid)) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     })
     .await
     .is_ok();

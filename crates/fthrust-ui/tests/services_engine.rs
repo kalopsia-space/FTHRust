@@ -910,18 +910,22 @@ fn a_leftover_engine_is_asked_to_stop() {
     let got_shutdown = rt.block_on(async {
         let server = EngineServer::bind(&path).await.unwrap();
         let old_engine = tokio::spawn(async move {
-            let mut conn = server.accept().await.unwrap();
-            conn.events
-                .send(fthrust_ipc::Event::Hello {
-                    protocol_version: fthrust_ipc::PROTOCOL_VERSION,
-                    pid: 0,
-                    version: "old".into(),
-                })
-                .await
-                .unwrap();
-            let cmd = conn.commands.recv().await;
-            // Exits: the connection and the socket go away.
-            matches!(cmd, Some(fthrust_ipc::Command::Shutdown))
+            // Like the daemon, it serves one client after another.
+            loop {
+                let mut conn = server.accept().await.unwrap();
+                let _ = conn
+                    .events
+                    .send(fthrust_ipc::Event::Hello {
+                        protocol_version: fthrust_ipc::PROTOCOL_VERSION,
+                        pid: 0,
+                        version: "old".into(),
+                    })
+                    .await;
+                if let Some(fthrust_ipc::Command::Shutdown) = conn.commands.recv().await {
+                    // Exits: the connection and the socket go away.
+                    return true;
+                }
+            }
         });
         let started = std::time::Instant::now();
         fthrust_ui::services::engine::retire_stale_engine(&path).await;
@@ -1025,4 +1029,38 @@ fn an_overdue_restart_waits_for_the_stop() {
     if let Some(at) = sv.next_deadline() {
         assert!(at > now + 1.0, "deadline {at} is the overdue restart");
     }
+}
+
+/// An engine finishing a save no longer accepts clients (no Hello): the new
+/// start waits for it to let go of the socket instead of failing to bind.
+#[test]
+fn a_leftover_engine_that_no_longer_answers_is_waited_for() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("engine.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let releaser = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+        })
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    rt.block_on(fthrust_ui::services::engine::retire_stale_engine_within(
+        &path,
+        std::time::Duration::from_secs(20),
+    ));
+    let waited = started.elapsed();
+    releaser.join().unwrap();
+    assert!(
+        waited >= std::time::Duration::from_secs(2),
+        "returned after {waited:?}, while the socket was still held"
+    );
+    assert!(waited < std::time::Duration::from_secs(10), "{waited:?}");
 }
