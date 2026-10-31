@@ -30,6 +30,22 @@ fn start_logging(paths: &FthrPaths) -> Option<LogGuard> {
     guard
 }
 
+/// Removes what a crash left in the clips and recordings folders (hidden
+/// `.partial` files of saves, recordings, exports and screenshots), on a
+/// background thread: the walk can cover a whole drive.
+fn sweep_stale_partials(state: &AppState) {
+    let roots: Vec<_> = [
+        state.settings.clips_directory(),
+        state.settings.recording_directory(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if let Err(e) = fthrust_core::clip_files::spawn_stale_partial_sweep(roots) {
+        tracing::warn!("stale partial sweep not started: {e}");
+    }
+}
+
 fn main() {
     fthrust_media::capabilities::handle_probe_argv();
     let args: Vec<String> = std::env::args().collect();
@@ -93,6 +109,7 @@ fn main() {
         );
     }
     state.diagnostics = Some(fthrust_ui::services::diagnostics::start(&state.paths));
+    sweep_stale_partials(&state);
     state.thumb_pool = Some(fthrust_ui::library::thumbs::ThumbPool::start(
         state.paths.thumbnails_dir(),
     ));
