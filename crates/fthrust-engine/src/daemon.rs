@@ -12,7 +12,9 @@ use fthrust_ipc::{
     BackendKind, Command, Event, IpcError, PROTOCOL_VERSION, RecordingState, SavedClip,
     StatusSnapshot,
 };
+use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use crate::save::{RecordWorker, SaveRequest, SaveWorker};
@@ -21,6 +23,14 @@ use crate::save::{RecordWorker, SaveRequest, SaveWorker};
 pub const HEARTBEAT: Duration = Duration::from_millis(500);
 /// Longest a shutdown waits for a save in flight.
 pub const SHUTDOWN_SAVE_WAIT: Duration = Duration::from_secs(60);
+/// Longest a shutdown waits for capture, audio and a recording to stop.
+pub const SHUTDOWN_STOP_WAIT: Duration = Duration::from_secs(15);
+/// Longest a shutdown waits for its last events to reach the client.
+pub const SHUTDOWN_FLUSH_WAIT: Duration = Duration::from_secs(1);
+/// How long the runtime may take to wind down once the service is done.
+/// Work still running then (a configure job stuck in a driver) is
+/// abandoned with the process.
+const RUNTIME_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
 
 /// Why the service could not run.
 #[derive(Debug, thiserror::Error)]
@@ -33,11 +43,20 @@ pub enum DaemonError {
     Runtime(std::io::Error),
 }
 
+/// What ends the service besides a `Shutdown` command. In production these
+/// come from stdin EOF and SIGTERM/SIGINT; tests send them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The parent closed our stdin.
+    ParentGone,
+    /// SIGTERM or SIGINT.
+    Signal,
+}
+
 enum Internal {
     Notice(EngineNotice),
     Worker(Event),
-    ParentGone,
-    Signal,
+    Stop(Stop),
 }
 
 struct ConfigureOutcome {
@@ -101,7 +120,11 @@ impl Service {
     }
 
     /// Applies a command; returns `Some(code)` when the process must exit.
-    fn handle(&mut self, command: Command, events: &mpsc::Sender<Event>) -> Option<ExitCode> {
+    fn handle(
+        &mut self,
+        command: Command,
+        events: Option<&mpsc::Sender<Event>>,
+    ) -> Option<ExitCode> {
         match command {
             Command::Configure(config) => {
                 let mut config = config;
@@ -109,7 +132,7 @@ impl Service {
                     config.backend_override = self.default_override;
                 }
                 if self.configuring.is_some() {
-                    self.emit(
+                    emit(
                         events,
                         Event::StartupError {
                             code: "ENGINE_BUSY".into(),
@@ -159,8 +182,9 @@ impl Service {
                         seconds,
                     })
                 }
-                None => {
-                    let _ = events.try_send(Event::SaveResult {
+                None => emit(
+                    events,
+                    Event::SaveResult {
                         request_id,
                         result: Err(if self.configuring.is_some() {
                             "Capture is starting"
@@ -168,26 +192,28 @@ impl Service {
                             "Capture is not running"
                         }
                         .into()),
-                    });
-                }
+                    },
+                ),
             },
             Command::StartRecording { request_id, path } => match &self.record {
                 Some(r) => r.start(request_id, path),
-                None => {
-                    let _ = events.try_send(Event::RecordingError {
+                None => emit(
+                    events,
+                    Event::RecordingError {
                         request_id,
                         message: "Capture is not running".into(),
-                    });
-                }
+                    },
+                ),
             },
             Command::StopRecording { request_id } => match &self.record {
                 Some(r) => r.stop(request_id),
-                None => {
-                    let _ = events.try_send(Event::RecordingError {
+                None => emit(
+                    events,
+                    Event::RecordingError {
                         request_id,
                         message: "No recording is in progress".into(),
-                    });
-                }
+                    },
+                ),
             },
             Command::Pause => {
                 if let Some(e) = &self.engine {
@@ -200,7 +226,7 @@ impl Service {
                 }
             }
             Command::GetStatus => {
-                let _ = events.try_send(Event::Status(Box::new(self.status())));
+                emit(events, Event::Status(Box::new(self.status())));
                 self.dirty = false;
             }
             Command::Shutdown => return Some(ExitCode::SUCCESS),
@@ -225,7 +251,7 @@ impl Service {
     fn finish_configure(
         &mut self,
         outcome: ConfigureOutcome,
-        events: &mpsc::Sender<Event>,
+        events: Option<&mpsc::Sender<Event>>,
     ) -> Option<ExitCode> {
         let ConfigureOutcome {
             engine,
@@ -242,7 +268,7 @@ impl Service {
                     if fresh {
                         self.startup_events.push(e.clone());
                     }
-                    self.emit(events, e);
+                    emit(events, e);
                 }
                 if fresh {
                     let handle = engine.handle();
@@ -259,7 +285,7 @@ impl Service {
                     });
                 }
                 self.engine = Some(engine);
-                self.emit(events, Event::Configured { warnings });
+                emit(events, Event::Configured { warnings });
                 self.dirty = true;
                 None
             }
@@ -272,24 +298,13 @@ impl Service {
                 self.dirty = true;
                 if fresh {
                     self.startup_events.push(event.clone());
-                    self.emit(events, event);
+                    emit(events, event);
                     Some(ExitCode::from(1))
                 } else {
-                    self.emit(events, event);
+                    emit(events, event);
                     None
                 }
             }
-        }
-    }
-
-    /// Sends an event; a client that is slow to read gets it delivered by a
-    /// task instead of losing it.
-    fn emit(&self, events: &mpsc::Sender<Event>, event: Event) {
-        if let Err(mpsc::error::TrySendError::Full(event)) = events.try_send(event) {
-            let tx = events.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(event).await;
-            });
         }
     }
 
@@ -306,6 +321,29 @@ impl Service {
     }
 }
 
+/// Sends an event to the client, if there is one. A client that is slow to
+/// read gets it delivered by a task instead of losing it. With no client the
+/// event is dropped: nothing is ever queued for a reader that does not exist.
+fn emit(events: Option<&mpsc::Sender<Event>>, event: Event) {
+    let Some(events) = events else {
+        return;
+    };
+    if let Err(mpsc::error::TrySendError::Full(event)) = events.try_send(event) {
+        let tx = events.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(event).await;
+        });
+    }
+}
+
+/// Sends an event during shutdown: to the client if there is one, and
+/// never past `deadline`.
+async fn deliver(client: Option<&Connection>, event: Event, deadline: Instant) {
+    if let Some(c) = client {
+        let _ = tokio::time::timeout_at(deadline, c.events.send(event)).await;
+    }
+}
+
 /// Runs the service on `socket` until shutdown; returns the exit code.
 pub fn serve(
     socket: PathBuf,
@@ -317,46 +355,63 @@ pub fn serve(
         .enable_all()
         .build()
         .map_err(DaemonError::Runtime)?;
-    runtime.block_on(serve_async(socket, deps, default_override))
-}
-
-async fn serve_async(
-    socket: PathBuf,
-    deps: EngineDeps,
-    default_override: Option<BackendKind>,
-) -> Result<ExitCode, DaemonError> {
-    let (internal_tx, mut internal_rx) = mpsc::channel::<Internal>(256);
-    let (worker_tx, worker_rx) = crossbeam_channel::unbounded::<Event>();
-    {
-        // Parent watch: the UI holds our stdin; EOF means it is gone.
-        let tx = internal_tx.clone();
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 64];
-            let mut stdin = std::io::stdin();
-            loop {
-                match stdin.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-            }
-            let _ = tx.blocking_send(Internal::ParentGone);
-        });
-    }
-    {
+    let served = runtime.block_on(async {
+        let (stop_tx, stop_rx) = mpsc::channel(8);
         // Registered here, before the socket is bound and the ready line is
         // printed, so a signal racing the ready line is caught.
-        let mut term =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
-        let mut int =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
-        let tx = internal_tx.clone();
+        let mut term = tokio::signal::unix::signal(SignalKind::terminate()).ok();
+        let mut int = tokio::signal::unix::signal(SignalKind::interrupt()).ok();
+        let tx = stop_tx.clone();
         tokio::spawn(async move {
             tokio::select! {
                 _ = async { if let Some(t) = term.as_mut() { t.recv().await; } else { std::future::pending::<()>().await } } => {}
                 _ = async { if let Some(i) = int.as_mut() { i.recv().await; } else { std::future::pending::<()>().await } } => {}
             }
-            let _ = tx.send(Internal::Signal).await;
+            let _ = tx.send(Stop::Signal).await;
+        });
+        watch_parent(stop_tx);
+        serve_until(socket, deps, default_override, stop_rx).await
+    });
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_WAIT);
+    served
+}
+
+/// Parent watch: the UI holds our stdin; EOF means it is gone.
+fn watch_parent(stops: mpsc::Sender<Stop>) {
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 64];
+        let mut stdin = std::io::stdin();
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        let _ = stops.blocking_send(Stop::ParentGone);
+    });
+}
+
+/// Runs the service on `socket` until a `Shutdown` command or a [`Stop`]
+/// from `stops`; returns the exit code. [`serve`] wires `stops` to stdin
+/// and the signals; tests drive it directly.
+#[doc(hidden)]
+pub async fn serve_until(
+    socket: PathBuf,
+    deps: EngineDeps,
+    default_override: Option<BackendKind>,
+    mut stops: mpsc::Receiver<Stop>,
+) -> Result<ExitCode, DaemonError> {
+    let (internal_tx, mut internal_rx) = mpsc::channel::<Internal>(256);
+    let (worker_tx, worker_rx) = crossbeam_channel::unbounded::<Event>();
+    {
+        let tx = internal_tx.clone();
+        tokio::spawn(async move {
+            while let Some(stop) = stops.recv().await {
+                if tx.send(Internal::Stop(stop)).await.is_err() {
+                    break;
+                }
+            }
         });
     }
     let server = EngineServer::bind(&socket).await?;
@@ -388,12 +443,9 @@ async fn serve_async(
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut client: Option<Connection> = None;
-    let (dummy_tx, _dummy_rx) = mpsc::channel::<Event>(1);
     let code = loop {
-        let events = client
-            .as_ref()
-            .map(|c| c.events.clone())
-            .unwrap_or_else(|| dummy_tx.clone());
+        let events = client.as_ref().map(|c| c.events.clone());
+        let events = events.as_ref();
         tokio::select! {
             accepted = server.accept(), if client.is_none() => {
                 match accepted {
@@ -416,7 +468,7 @@ async fn serve_async(
             command = async { match client.as_mut() { Some(c) => c.commands.recv().await, None => std::future::pending().await } } => {
                 match command {
                     Some(cmd) => {
-                        if let Some(code) = service.handle(cmd, &events) {
+                        if let Some(code) = service.handle(cmd, events) {
                             break code;
                         }
                     }
@@ -426,10 +478,10 @@ async fn serve_async(
                     }
                 }
             }
-            outcome = async { match service.configuring.as_mut() { Some(j) => j.await, None => std::future::pending().await } } => {
+            joined = async { match service.configuring.as_mut() { Some(j) => j.await, None => std::future::pending().await } } => {
                 service.configuring = None;
-                if let Ok(outcome) = outcome
-                    && let Some(code) = service.finish_configure(outcome, &events)
+                if let Ok(outcome) = joined
+                    && let Some(code) = service.finish_configure(outcome, events)
                 {
                     break code;
                 }
@@ -442,13 +494,13 @@ async fn serve_async(
                     | Some(Internal::Notice(EngineNotice::GenerationStarted { .. })) => service.dirty = true,
                     Some(Internal::Worker(e)) => {
                         service.on_worker(&e);
-                        service.emit(&events, e);
+                        emit(events, e);
                     }
-                    Some(Internal::ParentGone) => {
+                    Some(Internal::Stop(Stop::ParentGone)) => {
                         tracing::info!("parent closed our stdin; shutting down");
                         break ExitCode::SUCCESS;
                     }
-                    Some(Internal::Signal) => {
+                    Some(Internal::Stop(Stop::Signal)) => {
                         tracing::info!("signal received; shutting down");
                         break ExitCode::SUCCESS;
                     }
@@ -463,37 +515,95 @@ async fn serve_async(
                         Event::Heartbeat
                     };
                     service.dirty = false;
-                    service.emit(&events, e);
+                    emit(events, e);
                 }
             }
         }
     };
+    shut_down(service, client.as_ref(), &mut internal_rx).await;
+    if let Some(conn) = client.take() {
+        flush(conn).await;
+    }
+    drop(server);
+    Ok(code)
+}
+
+/// The bounded shutdown: the save in flight, then capture, audio and a
+/// recording, each with its own limit.
+async fn shut_down(
+    mut service: Service,
+    client: Option<&Connection>,
+    internal_rx: &mut mpsc::Receiver<Internal>,
+) {
     // A save in flight finishes first (bounded like the UI's completion
     // timeout), and its events still reach the client.
-    let wait_deadline = tokio::time::Instant::now() + SHUTDOWN_SAVE_WAIT;
-    while service.save.as_ref().is_some_and(|s| s.is_busy())
-        && tokio::time::Instant::now() < wait_deadline
-    {
+    let deadline = Instant::now() + SHUTDOWN_SAVE_WAIT;
+    while service.save.as_ref().is_some_and(|s| s.is_busy()) && Instant::now() < deadline {
         match tokio::time::timeout(Duration::from_millis(50), internal_rx.recv()).await {
             Ok(Some(Internal::Worker(e))) => {
                 service.on_worker(&e);
-                let events = client
-                    .as_ref()
-                    .map(|c| c.events.clone())
-                    .unwrap_or_else(|| dummy_tx.clone());
-                let _ = events.send(e).await;
+                deliver(client, e, deadline).await;
             }
             Ok(Some(_)) => {}
             Ok(None) => break,
             Err(_) => {}
         }
     }
-    service.shutdown();
-    // Let the writer task flush the last events before the process exits.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    drop(client);
-    drop(server);
-    Ok(code)
+    // Capture, audio and a recording stop on a blocking thread, so a stuck
+    // driver or disk cannot keep the process alive; a recording's last
+    // events still go out. A configure job still running is let finish so
+    // its engine is shut down too.
+    let deadline = Instant::now() + SHUTDOWN_STOP_WAIT;
+    let stopping = async move {
+        if let Some(job) = service.configuring.take()
+            && let Ok(outcome) = job.await
+        {
+            service.engine = Some(outcome.engine);
+        }
+        let _ = tokio::task::spawn_blocking(move || service.shutdown()).await;
+    };
+    tokio::pin!(stopping);
+    loop {
+        tokio::select! {
+            () = &mut stopping => break,
+            internal = internal_rx.recv() => match internal {
+                Some(Internal::Worker(e)) => deliver(client, e, deadline).await,
+                Some(_) => {}
+                None => break,
+            },
+            () = tokio::time::sleep_until(deadline) => {
+                tracing::warn!("capture did not stop within {SHUTDOWN_STOP_WAIT:?}; exiting anyway");
+                return;
+            }
+        }
+    }
+    // Events the workers sent while stopping may still be crossing the
+    // forwarder.
+    let deadline = Instant::now() + Duration::from_millis(100);
+    while let Ok(Some(internal)) = tokio::time::timeout_at(deadline, internal_rx.recv()).await {
+        if let Internal::Worker(e) = internal {
+            deliver(client, e, deadline).await;
+        }
+    }
+}
+
+/// Lets the connection's writer send everything queued, bounded.
+async fn flush(conn: Connection) {
+    let Connection {
+        commands,
+        events,
+        mut closed,
+    } = conn;
+    drop(events);
+    let _ = tokio::time::timeout(SHUTDOWN_FLUSH_WAIT, async {
+        while !*closed.borrow_and_update() {
+            if closed.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
+    drop(commands);
 }
 
 /// Builds the production dependencies.
