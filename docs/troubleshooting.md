@@ -13,7 +13,7 @@ When something goes wrong, FTHRust says so in the bar at the bottom of the windo
 ### The status never reaches "Capturing"
 
 - **Is this a Wayland session?** Run `echo $WAYLAND_DISPLAY`. If it's empty, you're on X11, which FTHRust doesn't support.
-- **Did you cancel the screen-sharing dialog, or stop sharing?** On desktops that use the ScreenCast portal, declining the dialog, stopping the share from the desktop, or a recovery that could only continue by asking again all stop capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**) and choose a screen this time.
+- **Did you cancel the screen-sharing dialog, or stop sharing?** On desktops that use the ScreenCast portal, declining the dialog, stopping the share from the desktop, or a recovery that could only continue by asking again all stop capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**), and choose a screen if the dialog comes up.
 - **Is the portal installed?** You need `xdg-desktop-portal` plus a backend for your desktop: `xdg-desktop-portal-hyprland`, `-wlr`, `-kde` or `-gnome`.
 - **Try another capture method.** Start the app with `FTHR_CAPTURE_BACKEND=portal` (or `wlr`, or `ext`) to see if a different one works.
 
