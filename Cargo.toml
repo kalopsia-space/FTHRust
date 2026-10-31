@@ -73,9 +73,10 @@ debug = "line-tables-only"
 opt-level = 2
 
 # Fat LTO with one codegen unit makes the three release binaries a third
-# smaller (76.7 MB to 51.7 MB combined, measured 2026-10-31) at the cost of a
-# slower, memory-hungry link. Not panic = "abort": the engine, export,
-# finalize and upload paths rely on catch_unwind.
+# smaller (76.7 MB without, 50.3 MB with it, combined; the packaging build
+# measured the second) at the cost of a slower, memory-hungry link. Not
+# panic = "abort": the engine, export, finalize and upload paths rely on
+# catch_unwind.
 [profile.release]
 lto = "fat"
 codegen-units = 1

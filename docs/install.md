@@ -62,13 +62,13 @@ Only one copy of the app runs at a time. Launching it again just brings the exis
 
 ### Verifying a download
 
-The `.sha256` files only prove the download is intact. Every release is also built by GitHub Actions from this repository, which signs a build provenance attestation for the AppImage and the tarball. With the [GitHub CLI](https://cli.github.com/):
+The `.sha256` files only prove the download is intact. From the release after 2.0.0-alpha.2 on, the AppImage and the tarball are built by GitHub Actions from this repository, which signs a build provenance attestation for them (alpha.1 and alpha.2 have none). With the [GitHub CLI](https://cli.github.com/):
 
 ```sh
 gh attestation verify FTHRust-*-x86_64.AppImage --repo kalopsia-space/FTHRust
 ```
 
-The same release carries `FTHRust-ffmpeg-source-<version>.tar.xz`, the source of the bundled FFmpeg libraries; see [Licences and notices](packaging.md#licences-and-notices).
+Those releases also carry `FTHRust-ffmpeg-source-<version>.tar.xz`, the source of the bundled FFmpeg libraries; see [Licences and notices](packaging.md#licences-and-notices).
 
 ## Your first minute
 

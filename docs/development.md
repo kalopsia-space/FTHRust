@@ -51,7 +51,7 @@ LD_LIBRARY_PATH=$PWD/packaging/.cache/ffmpeg/lib cargo test --workspace
 cargo build -p fthrust-ui -p fthrust-engine -p fthrust-uploader
 ```
 
-That gives you three binaries in `target/debug/`: `fthrust` (the app), `fthrust-engine` and `fthrust-uploader`. Add `--release` for an optimised build: it links with fat LTO and one codegen unit, which makes the binaries about a third smaller (76.7 MB to 51.7 MB combined) but is a slow link that needs several GB of memory, so use the debug build while you iterate. The uploader is optional; without it, uploads fail with a message saying it's missing.
+That gives you three binaries in `target/debug/`: `fthrust` (the app), `fthrust-engine` and `fthrust-uploader`. Add `--release` for an optimised build: it links with fat LTO and one codegen unit, which makes the binaries about a third smaller (76.7 MB to 50.3 MB combined in the packaging build) but is a slow link that needs several GB of memory, so use the debug build while you iterate. The uploader is optional; without it, uploads fail with a message saying it's missing.
 
 ## Running from a checkout
 
