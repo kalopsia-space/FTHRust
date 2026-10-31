@@ -41,13 +41,13 @@ fn local_offset() -> UtcOffset {
 /// Reads the local UTC offset the log's timestamps use. `main` calls it as its
 /// first statement, while the process has a single thread. That is a
 /// precaution, not a fix for wrong times: the locked `time` (0.3.55) reads the
-/// offset with other threads running too, and only its explicit `refresh_tz`
-/// checks the thread count. But the C library reads the `TZ` environment
-/// variable the first time it is asked, `time`'s documentation requires that
-/// nothing else is changing the environment at that moment, and a single
-/// thread is the one place that is certain; a `time` that refuses the read
-/// once threads exist would also fall back to UTC without it. Without the call
-/// the first log line reads the offset.
+/// offset just as well with other threads running, and only its explicit
+/// `refresh_tz` looks at the thread count. The first read makes the C library
+/// load the `TZ` variable and the zone files, which is only free of races
+/// while no other thread touches the environment, and one thread is the sure
+/// way to have that; a `time` that refused to read the offset once threads
+/// exist would also leave the log in UTC without it. Without this call the
+/// first log line reads the offset.
 pub fn init_local_offset() {
     let _ = local_offset();
 }
