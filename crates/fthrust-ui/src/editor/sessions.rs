@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fthrust_core::clip_metadata::ClipMetadataStore;
+use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::library_ownership::{Ownership, classify_media_path};
 
 use super::{Editor, EditorRequest, PlayerFactory, SessionState};
@@ -190,9 +191,20 @@ pub fn shutdown(state: &mut AppState) {
 /// Opens `path` (library double-click, `OpenClip`).
 pub fn open(state: &mut AppState, path: &Path) -> bool {
     if path.is_file() && !state.readiness.can_access(path) {
+        let (title, detail) = if state.readiness.state(path) == ReadinessState::Recording {
+            (
+                "CLIP STILL RECORDING",
+                "Playback, editing and upload become available when the recording has finished.",
+            )
+        } else {
+            (
+                "CLIP STILL FINALIZING",
+                "Playback, editing and upload become available after optional processing has finished.",
+            )
+        };
         state.error_bar.push_error(
-            "CLIP STILL FINALIZING",
-            "Playback, editing and upload become available after optional processing has finished.",
+            title,
+            detail,
             crate::shell::error_bar::Level::Warning,
             Vec::new(),
             None,

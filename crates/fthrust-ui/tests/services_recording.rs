@@ -547,3 +547,177 @@ fn a_ticking_recording_repaints_its_label() {
     assert_eq!(s.record_label, "Stop  00:00:01");
     assert!(ctx.has_requested_repaint(), "the new time is painted");
 }
+
+/// A manual recording is written straight into its final name, so nothing
+/// but the app says that the file is not a clip yet (final review).
+mod file_in_progress {
+    use super::*;
+    use fthrust_core::clip_readiness::ReadinessState;
+    use fthrust_ui::library::scan::ScanService;
+
+    /// Starts a recording the way the engine would: the name is chosen, then
+    /// the recorder creates the file and reports.
+    fn begin(services: &mut Services, s: &mut AppState) -> (PathBuf, u64) {
+        connected(services, s);
+        services.set_active_config_for_tests(Some(recording_config(s).unwrap().capture));
+        s.record_requested = true;
+        services.tick(s);
+        let Command::StartRecording { path, request_id } =
+            services.drain_commands_for_tests().remove(0)
+        else {
+            panic!()
+        };
+        (path, request_id)
+    }
+
+    fn started(services: &mut Services, s: &mut AppState, path: &PathBuf, request_id: u64) {
+        std::fs::write(path, b"first fragment").unwrap();
+        services.inject(Event::Engine(IpcEvent::RecordingStarted {
+            request_id,
+            path: path.clone(),
+        }));
+        services.tick(s);
+        assert_eq!(services.recording_state(), RecordState::Recording);
+    }
+
+    /// Whether a rescan of the library was asked for: a flag on the state, or
+    /// the request already made of it by the same tick.
+    fn rescan_asked(services: &mut Services, s: &AppState) -> bool {
+        s.scan_clips_requested
+            || services
+                .drain_requests_for_tests()
+                .iter()
+                .any(|r| matches!(r, fthrust_ui::services::Request::Scan))
+    }
+
+    fn until_idle(services: &mut Services, s: &mut AppState) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while services.recording_state() != RecordState::Idle
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            services.tick(s);
+        }
+        assert_eq!(services.recording_state(), RecordState::Idle);
+    }
+
+    #[test]
+    fn the_file_is_no_clip_from_its_name_to_the_end() {
+        let (_tmp, mut s) = state();
+        let ctx = egui::Context::default();
+        let mut services = Services::start_for_tests(&ctx);
+        services.set_recording_check_for_tests(|_| Ok(()));
+        let (path, request_id) = begin(&mut services, &mut s);
+        // Starting: the name is chosen and the recorder has not made the file.
+        assert_eq!(s.readiness.state(&path), ReadinessState::Recording);
+        started(&mut services, &mut s, &path, request_id);
+        assert_eq!(s.readiness.state(&path), ReadinessState::Recording);
+        assert!(
+            !s.readiness.can_access(&path),
+            "it exists, and cannot be opened, renamed, deleted or uploaded"
+        );
+        // Stopped: the file is closed and checked before it is a clip.
+        s.record_requested = true;
+        services.tick(&mut s);
+        let Command::StopRecording { request_id } = services.drain_commands_for_tests().remove(0)
+        else {
+            panic!()
+        };
+        assert_eq!(s.readiness.state(&path), ReadinessState::Finalizing);
+        s.scan_clips_requested = false;
+        services.drain_requests_for_tests();
+        services.inject(Event::Engine(IpcEvent::RecordingStopped {
+            request_id,
+            path: path.clone(),
+            bytes: 14,
+        }));
+        services.tick(&mut s);
+        until_idle(&mut services, &mut s);
+        assert!(s.readiness.can_access(&path), "an ordinary clip now");
+        assert!(!s.readiness.has_blocked(), "nothing is left held back");
+        assert!(
+            rescan_asked(&mut services, &s),
+            "the finished file is read afresh"
+        );
+    }
+
+    #[test]
+    fn a_recording_cut_short_stays_in_the_library_as_a_clip() {
+        let (_tmp, mut s) = state();
+        let ctx = egui::Context::default();
+        let mut services = Services::start_for_tests(&ctx);
+        let (path, request_id) = begin(&mut services, &mut s);
+        started(&mut services, &mut s, &path, request_id);
+        assert!(!s.readiness.can_access(&path));
+        s.scan_clips_requested = false;
+        services.drain_requests_for_tests();
+        // The engine dies: the fragments are kept, and are what is left.
+        services.inject(Event::EngineConnected(false));
+        services.tick(&mut s);
+        assert_eq!(services.recording_state(), RecordState::Idle);
+        assert!(path.exists(), "fragments are kept");
+        assert!(
+            s.readiness.can_access(&path),
+            "visible, and it can be opened"
+        );
+        assert!(!s.readiness.has_blocked());
+        assert!(
+            rescan_asked(&mut services, &s),
+            "the list shows what is left"
+        );
+    }
+
+    #[test]
+    fn a_recording_that_never_started_leaves_nothing_held_back() {
+        let (_tmp, mut s) = state();
+        let ctx = egui::Context::default();
+        let mut services = Services::start_for_tests(&ctx);
+        let (path, _) = begin(&mut services, &mut s);
+        assert!(s.readiness.has_blocked(), "held back from its name on");
+        services.advance_clock_for_tests(10.5);
+        services.tick(&mut s);
+        assert_eq!(services.recording_state(), RecordState::Idle);
+        assert!(!path.exists());
+        assert!(!s.readiness.has_blocked(), "no entry is left behind");
+    }
+
+    #[test]
+    fn the_watcher_ignores_the_file_while_it_is_written() {
+        let (_tmp, mut s) = state();
+        let ctx = egui::Context::default();
+        let mut services = Services::start_for_tests(&ctx);
+        services.set_recording_check_for_tests(|_| Ok(()));
+        let clips = s.settings.clips_directory().unwrap();
+        std::fs::create_dir_all(&clips).unwrap();
+        services.attach_scan_for_tests(ScanService::start(clips, vec![]));
+        let (path, request_id) = begin(&mut services, &mut s);
+        assert!(
+            services.muted_writes_for_tests().contains(&path),
+            "ignored from the moment its name is chosen"
+        );
+        started(&mut services, &mut s, &path, request_id);
+        assert!(services.muted_writes_for_tests().contains(&path));
+        s.record_requested = true;
+        services.tick(&mut s);
+        let Command::StopRecording { request_id } = services.drain_commands_for_tests().remove(0)
+        else {
+            panic!()
+        };
+        services.inject(Event::Engine(IpcEvent::RecordingStopped {
+            request_id,
+            path: path.clone(),
+            bytes: 14,
+        }));
+        services.tick(&mut s);
+        assert!(
+            services.muted_writes_for_tests().contains(&path),
+            "the file is still being closed"
+        );
+        until_idle(&mut services, &mut s);
+        assert!(
+            services.muted_writes_for_tests().is_empty(),
+            "its writes count again once it is over"
+        );
+        services.shutdown();
+    }
+}

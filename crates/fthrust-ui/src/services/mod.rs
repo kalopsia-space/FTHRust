@@ -339,6 +339,8 @@ pub struct Services {
     health: Option<HealthSnapshot>,
     engine_status: Option<StatusText>,
     recording_transition: bool,
+    /// The recording file the library was told is not a clip yet.
+    recording_clip: Option<(PathBuf, recording::FilePhase)>,
     save_transient_ended: bool,
 }
 
@@ -414,6 +416,7 @@ impl Services {
             health: None,
             engine_status: None,
             recording_transition: false,
+            recording_clip: None,
             save_transient_ended: false,
         };
         services.attach_scan(scan);
@@ -679,6 +682,19 @@ impl Services {
         self.scan = Some(scan);
     }
 
+    /// Attaches a running scan service to a runtime made for tests.
+    pub fn attach_scan_for_tests(&mut self, scan: ScanService) {
+        self.attach_scan(scan);
+    }
+
+    /// The files the scan service ignores the writes to (tests).
+    pub fn muted_writes_for_tests(&self) -> Vec<PathBuf> {
+        self.scan
+            .as_ref()
+            .map(ScanService::muted_writes)
+            .unwrap_or_default()
+    }
+
     /// A runtime without background threads; requests are recorded.
     pub fn start_for_tests(ctx: &egui::Context) -> Services {
         let (tx, rx) = channel();
@@ -729,6 +745,7 @@ impl Services {
             health: None,
             engine_status: None,
             recording_transition: false,
+            recording_clip: None,
             save_transient_ended: false,
         }
     }
@@ -870,6 +887,46 @@ impl Services {
         {
             sv.set_recording(self.recording.busy());
             sv.set_recording_preparing(self.recording.state() == recording::RecordState::Preparing);
+        }
+        self.sync_recording_clip(state);
+    }
+
+    /// Keeps what the library thinks of the recording's file in step with the
+    /// recording. The engine writes it straight into its final name, so left
+    /// alone the library would list it as a finished clip that can be opened,
+    /// renamed, deleted and uploaded, and rescan the whole tree for every
+    /// fragment. It is held back from the moment its name is chosen until the
+    /// recording is over, however it ends (a failed one keeps its fragments).
+    fn sync_recording_clip(&mut self, state: &mut AppState) {
+        let now = self
+            .recording
+            .file_in_progress()
+            .map(|(path, phase)| (path.to_path_buf(), phase));
+        if now == self.recording_clip {
+            return;
+        }
+        let before = std::mem::replace(&mut self.recording_clip, now.clone());
+        if let Some((old, _)) = before
+            && now.as_ref().is_none_or(|(path, _)| *path != old)
+        {
+            // Over: an ordinary clip now. The writes in between were not seen,
+            // so its size and thumbnail are read afresh.
+            state.readiness.forget(&old);
+            if let Some(scan) = &self.scan {
+                scan.unmute_writes(&old);
+            }
+            state.scan_clips_requested = true;
+        }
+        if let Some((path, phase)) = now {
+            match phase {
+                recording::FilePhase::Writing => state.readiness.recording(&path),
+                recording::FilePhase::Finishing => {
+                    state.readiness.engine_committed(&path, true);
+                }
+            }
+            if let Some(scan) = &self.scan {
+                scan.mute_writes(&path);
+            }
         }
     }
 

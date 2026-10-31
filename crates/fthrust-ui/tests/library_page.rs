@@ -313,6 +313,72 @@ fn filter_and_sort_rebuild_sections() {
 }
 
 #[test]
+fn a_recording_in_progress_is_listed_badged_and_left_alone() {
+    let (_tmp, mut s) = state(serde_json::json!({}));
+    let root = s.library.clips_root.clone();
+    std::fs::create_dir_all(root.join("Recordings")).unwrap();
+    let rec = root.join("Recordings/FTHR_recording_2027-01-15_10-00-00.mp4");
+    std::fs::write(&rec, b"first fragment").unwrap();
+    assert!(s.library.upsert(&rec, false));
+    s.library_dirty = true;
+    // The recorder writes straight into this name; the services hold the
+    // file back from the moment the name is chosen.
+    s.readiness.recording(&rec);
+    let tokens = s.tokens.clone();
+    // An open request is taken by the editor's service in the next frame:
+    // look for it in the frame that makes it.
+    let opened = std::rc::Rc::new(std::cell::Cell::new(false));
+    let probe = opened.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        probe.set(probe.get() || s.open_clip_requested.is_some());
+    });
+    let m = markers_after(&mut h);
+    assert!(
+        m.iter().any(|m| m.name == "cardRecordingBadge"),
+        "listed, and says what it is"
+    );
+    assert!(m.iter().all(|m| m.name != "cardFinalizingBadge"));
+    let at = |name: &str| m.iter().find(|m| m.name == name).expect(name).rect.center();
+    let (thumb, share, delete, title) = (
+        at("cardThumb"),
+        at("cardShareBtn"),
+        at("cardDeleteBtn"),
+        at("cardTitle"),
+    );
+    click(&mut h, thumb);
+    click(&mut h, share);
+    click(&mut h, delete);
+    h.hover_at(title);
+    h.step();
+    h.key_press(egui::Key::F2);
+    h.run_steps(2);
+    drop(h);
+    assert!(!opened.get(), "it cannot be opened");
+    assert!(s.upload_requested.is_none(), "it cannot be uploaded");
+    assert!(s.dialogs.modal.is_empty(), "it cannot be deleted");
+    assert!(s.rename_draft.is_none(), "it cannot be renamed");
+    assert_eq!(
+        s.thumb_requests_total, 0,
+        "its half-written file is not probed for a thumbnail"
+    );
+    // The recording ends: an ordinary card, thumbnail and all.
+    s.readiness.forget(&rec);
+    let probe = opened.clone();
+    let mut h = common::harness(Vec2::new(1440.0, 900.0), 1.0, &tokens, |ui| {
+        shell::frame(ui, &mut s);
+        probe.set(probe.get() || s.open_clip_requested.is_some());
+    });
+    let m = markers_after(&mut h);
+    assert!(m.iter().all(|m| m.name != "cardRecordingBadge"));
+    let thumb = m.iter().find(|m| m.name == "cardThumb").unwrap().rect;
+    click(&mut h, thumb.center());
+    drop(h);
+    assert!(opened.get(), "the same click opens it now");
+    assert_eq!(s.thumb_requests_total, 1, "and it is probed");
+}
+
+#[test]
 fn delete_question_then_file_removed() {
     let (tmp, mut s) = state(serde_json::json!({}));
     let root = s.library.clips_root.clone();
