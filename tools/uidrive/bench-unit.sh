@@ -116,8 +116,8 @@ bench_dir_refuses_dot_dot() {
   need "the directory to be untouched" test -f "$WORK/dotdot/inner/$MARKER"
 }
 
-# docs-shots.sh used to remove ${DOCS_SHOTS_DIR:-/tmp/fthrust-docs} unasked; it now applies bench.sh's rules to
-# that directory before it does anything else.
+# docs-shots.sh used to remove ${DOCS_SHOTS_DIR:-/tmp/fthrust-docs} and /tmp/fthrust-docs-bench unasked; it now
+# applies bench.sh's rules to both before it does anything else, and removes what it prepared when it ends.
 docs_shots_refuses_a_directory_it_did_not_make() {
   mkdir -p "$WORK/docs-precious"
   echo keep > "$WORK/docs-precious/file"
@@ -125,6 +125,56 @@ docs_shots_refuses_a_directory_it_did_not_make() {
   if out=$(DOCS_SHOTS_DIR="$WORK/docs-precious" "$HERE/docs-shots.sh" 2>&1); then echo "docs-shots.sh succeeded: $out"; exit 1; fi
   need "a refusal in the output (got: $out)" grep -q "refusing to reuse" <<<"$out"
   need "the directory's content to survive" test "$(cat "$WORK/docs-precious/file")" = keep
+}
+
+docs_shots_refuses_a_bench_directory_it_did_not_make_and_removes_the_first() {
+  mkdir -p "$WORK/docs-precious2"
+  echo keep > "$WORK/docs-precious2/file"
+  local out
+  if out=$(DOCS_SHOTS_DIR="$WORK/docs-first" DOCS_SHOTS_BENCH="$WORK/docs-precious2" "$HERE/docs-shots.sh" 2>&1); then
+    echo "docs-shots.sh succeeded: $out"; exit 1
+  fi
+  need "a refusal in the output (got: $out)" grep -q "refusing to reuse" <<<"$out"
+  need "the bench directory's content to survive" test "$(cat "$WORK/docs-precious2/file")" = keep
+  need "the first directory, made for this run, to be removed" test ! -e "$WORK/docs-first"
+}
+
+docs_shots_refuses_symlinks_and_other_users_directories() {
+  mkdir -p "$WORK/docs-real"
+  echo keep > "$WORK/docs-real/file"
+  ln -s "$WORK/docs-real" "$WORK/docs-link"
+  local out
+  if out=$(DOCS_SHOTS_DIR="$WORK/docs-link" "$HERE/docs-shots.sh" 2>&1); then echo "a symlinked DOCS_SHOTS_DIR was accepted: $out"; exit 1; fi
+  need "the symlink to be named (got: $out)" grep -q "must not be a symlink" <<<"$out"
+  if out=$(DOCS_SHOTS_DIR="$WORK/docs-ok" DOCS_SHOTS_BENCH="$WORK/docs-link" "$HERE/docs-shots.sh" 2>&1); then echo "a symlinked DOCS_SHOTS_BENCH was accepted: $out"; exit 1; fi
+  need "the symlink to be named (got: $out)" grep -q "must not be a symlink" <<<"$out"
+  need "the target's content to survive" test "$(cat "$WORK/docs-real/file")" = keep
+  # /usr exists and is somebody else's. Only tried as an ordinary user: if the ownership rule were ever lost, root
+  # would be the one to empty it.
+  [ "$(id -u)" != 0 ] || return 0
+  if out=$(DOCS_SHOTS_DIR=/usr "$HERE/docs-shots.sh" 2>&1); then echo "/usr was accepted: $out"; exit 1; fi
+  need "the ownership to be named (got: $out)" grep -q "not owned by you" <<<"$out"
+  need "/usr to be left alone" test -d /usr/bin
+}
+
+# The screenshots show both paths, so they stay the same from run to run: no mktemp names.
+docs_shots_keeps_the_fixed_directory_names() {
+  need "the app directory default" grep -q 'DOCS_SHOTS_DIR:-/tmp/fthrust-docs}' "$HERE/docs-shots.sh"
+  need "the bench directory default" grep -q 'DOCS_SHOTS_BENCH:-/tmp/fthrust-docs-bench}' "$HERE/docs-shots.sh"
+  need "no random directory names" test -z "$(grep -n 'mktemp' "$HERE/docs-shots.sh")"
+}
+
+docs_shots_cleans_up_when_it_fails_midway() {
+  local stub=$WORK/stub-cargo out rc
+  mkdir -p "$stub" "$WORK/docs-seed"
+  printf '#!/bin/sh\nexit 3\n' > "$stub/cargo"
+  chmod +x "$stub/cargo"
+  out=$(PATH="$stub:$PATH" DOCS_SHOTS_DIR="$WORK/docs-a" DOCS_SHOTS_BENCH="$WORK/docs-b" "$HERE/docs-shots.sh" --seed "$WORK/docs-seed" 2>&1)
+  rc=$?
+  need "the failing command's status (got $rc: $out)" test "$rc" = 3
+  need "the app directory removed" test ! -e "$WORK/docs-a"
+  need "the bench directory removed" test ! -e "$WORK/docs-b"
+  need "the seed folder, which is not ours, left alone" test -d "$WORK/docs-seed"
 }
 
 bench_dir_creates_a_missing_directory() {
@@ -190,6 +240,10 @@ for t in \
   bench_dir_accepts_an_empty_directory \
   bench_dir_creates_a_missing_directory \
   docs_shots_refuses_a_directory_it_did_not_make \
+  docs_shots_refuses_a_bench_directory_it_did_not_make_and_removes_the_first \
+  docs_shots_refuses_symlinks_and_other_users_directories \
+  docs_shots_keeps_the_fixed_directory_names \
+  docs_shots_cleans_up_when_it_fails_midway \
   bench_dir_strips_every_trailing_slash \
   bench_dir_refuses_dot_dot \
   bench_dir_refuses_root_relative_and_symlinks \

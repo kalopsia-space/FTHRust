@@ -78,7 +78,12 @@ crate's fmt, clippy and tests, then the scenarios.
 
 `docs-shots.sh` regenerates `docs/images`: it renders a few demo clips with
 ffmpeg (or takes `--seed DIR`), runs `docs_shots.sh` with `--pipewire`, and
-copies the named shots over.
+copies the named shots over. It works in `/tmp/fthrust-docs` and
+`/tmp/fthrust-docs-bench`: the screenshots show those paths (the Hotkeys popup
+the app's, Settings the clips folder), so the names stay fixed. Both follow the
+bench directory rules (an absent, empty or earlier-bench directory is cleared;
+a symlink, someone else's or any other directory is refused untouched), and
+both are removed when the script ends, failed or not.
 
 ## Reading a failure
 
