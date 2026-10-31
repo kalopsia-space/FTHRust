@@ -68,7 +68,7 @@ The `.sha256` files only prove the download is intact. From the release after 2.
 gh attestation verify FTHRust-*-x86_64.AppImage --repo kalopsia-space/FTHRust
 ```
 
-Those releases also carry `FTHRust-ffmpeg-source-<version>.tar.xz`, the source of the bundled FFmpeg libraries; see [Licences and notices](packaging.md#licences-and-notices).
+Those releases also carry `FTHRust-ffmpeg-source-<version>.tar.xz` (about 600 MB), the source of the bundled FFmpeg libraries and of the libraries compiled into them; see [Licences and notices](packaging.md#licences-and-notices).
 
 ## Your first minute
 

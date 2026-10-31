@@ -60,8 +60,13 @@ jobs:
         with:
           tool: cargo-about@${{ steps.about.outputs.version }}
       - run: packaging/build-appimage.sh
-      # The source of the bundled FFmpeg travels with the release: BtbN's
-      # monthly assets are pruned after about two years.
+      # The source behind the bundled FFmpeg travels with the release: BtbN's
+      # monthly assets are pruned after about two years, and the libraries compiled
+      # into them (one of them GPL) come with their source. LAME is pinned to a
+      # Subversion revision, which needs svn (the runner image has it; this makes sure).
+      - run: sudo apt-get install -y --no-install-recommends subversion
+      # The archive stages about 3.5 GB of source; the release build's target directory is no longer needed.
+      - run: rm -rf target && df -h /
       - run: packaging/archive-ffmpeg-source.sh --out "dist/FTHRust-ffmpeg-source-$(jq -r .corresponding_source.ffmpeg.describe packaging/ffmpeg_manifest_linux.json).tar.xz"
       - run: cd dist && sha256sum -c FTHRust-*.sha256
       - name: Attest the build provenance
@@ -111,7 +116,7 @@ jobs:
             cat notes/release-notes.md
             printf '\n%s\n\n' '---'
             printf '%s\n\n' '**Verify a download.** `sha256sum -c` with its `.sha256` file checks the bytes; `gh attestation verify FTHRust-<version>-x86_64.AppImage --repo '"$GITHUB_REPOSITORY"'` checks that GitHub Actions built it from this repository (build provenance).'
-            printf '%s\n' '**Source of the bundled FFmpeg.** `FTHRust-ffmpeg-source-*.tar.xz` holds the FFmpeg commit and the build scripts behind the FFmpeg libraries in both downloads. `THIRD_PARTY_NOTICES.md` inside them lists every bundled component and its licence.'
+            printf '%s\n' '**Source of the bundled FFmpeg.** `FTHRust-ffmpeg-source-*.tar.xz` holds the FFmpeg commit, the build scripts and the source of every library compiled into the FFmpeg libraries in both downloads. `THIRD_PARTY_NOTICES.md` inside them lists every bundled component and its licence.'
           } > body.md
           gh release create "$GITHUB_REF_NAME" $prerelease --verify-tag \
             --title "FTHRust Clips ${GITHUB_REF_NAME#v}" --notes-file body.md --generate-notes \

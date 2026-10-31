@@ -40,7 +40,7 @@ This is a technical compliance inventory, not legal advice.
 | **Used for** | Encoding and muxing in the capture engine; decoding, export, audio mix and overlays in the app. |
 | **Shipped files** | {{ffmpeg.shipped_files}} — the unmodified upstream files, hash-pinned |
 | **Configuration** | The build's configure line is recorded in [`packaging/ffmpeg_manifest_linux.json`](packaging/ffmpeg_manifest_linux.json), and the release gate checks that every shipped library contains exactly that line. The libraries it enables are listed below. |
-| **Source code** | The FFmpeg commit `{{ffmpeg.commit}}` and BtbN's build scripts at commit `{{ffmpeg.scripts_commit}}` (every script names the upstream repository and commit of one library) are archived with every FTHRust release as `FTHRust-ffmpeg-source-{{ffmpeg.describe}}.tar.xz`. BtbN prunes its monthly builds after about two years, so `packaging/fetch-third-party.sh --ffmpeg` stops working for this pin around July 2028; the archive does not depend on it. |
+| **Source code** | The FFmpeg commit `{{ffmpeg.commit}}`, BtbN's build scripts at commit `{{ffmpeg.scripts_commit}}` (every script names the upstream repository and commit of one library) and the source of every external library compiled into the shipped libraries (listed below, at the commits or tags those scripts build) are archived with every FTHRust release as `FTHRust-ffmpeg-source-{{ffmpeg.describe}}.tar.xz`. BtbN prunes its monthly builds after about two years, so `packaging/fetch-third-party.sh --ffmpeg` stops working for this pin around July 2028; the archive does not depend on it. |
 | **Licence text** | [`licenses/FFmpeg-LICENSE.txt`](licenses/FFmpeg-LICENSE.txt) |
 
 {{ffmpeg.configuration_sentence}} Software H.264 comes from

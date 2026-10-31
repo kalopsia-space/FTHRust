@@ -40,7 +40,7 @@ This is a technical compliance inventory, not legal advice.
 | **Used for** | Encoding and muxing in the capture engine; decoding, export, audio mix and overlays in the app. |
 | **Shipped files** | `libavcodec.so.62`, `libavdevice.so.62`, `libavfilter.so.11`, `libavformat.so.62`, `libavutil.so.60`, `libswresample.so.6`, `libswscale.so.9` — the unmodified upstream files, hash-pinned |
 | **Configuration** | The build's configure line is recorded in [`packaging/ffmpeg_manifest_linux.json`](packaging/ffmpeg_manifest_linux.json), and the release gate checks that every shipped library contains exactly that line. The libraries it enables are listed below. |
-| **Source code** | The FFmpeg commit `9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b` and BtbN's build scripts at commit `a99e8230eae00d1cee38f23076a7a1f55cd984e2` (every script names the upstream repository and commit of one library) are archived with every FTHRust release as `FTHRust-ffmpeg-source-n8.1.2-34-g9b6c8969e0.tar.xz`. BtbN prunes its monthly builds after about two years, so `packaging/fetch-third-party.sh --ffmpeg` stops working for this pin around July 2028; the archive does not depend on it. |
+| **Source code** | The FFmpeg commit `9b6c8969e05b4f0b29f0f85cd501be6b3e582e6b`, BtbN's build scripts at commit `a99e8230eae00d1cee38f23076a7a1f55cd984e2` (every script names the upstream repository and commit of one library) and the source of every external library compiled into the shipped libraries (listed below, at the commits or tags those scripts build) are archived with every FTHRust release as `FTHRust-ffmpeg-source-n8.1.2-34-g9b6c8969e0.tar.xz`. BtbN prunes its monthly builds after about two years, so `packaging/fetch-third-party.sh --ffmpeg` stops working for this pin around July 2028; the archive does not depend on it. |
 | **Licence text** | [`licenses/FFmpeg-LICENSE.txt`](licenses/FFmpeg-LICENSE.txt) |
 
 The configuration enables no GPL or non-free library itself, but BtbN's scripts compile in FFTW (GPL-2.0-or-later) for Chromaprint. Software H.264 comes from
@@ -126,13 +126,14 @@ BtbN's FFmpeg compiles the libraries below into the shared libraries it ships. T
 - **AMD Advanced Media Framework headers**: Headers; AMD's driver is the user's system library.
 - **Chromaprint**: Built against FFTW (GPL-2.0-or-later, listed below), which Chromaprint's own LICENSE.md says to take into account when distributing it in binary form.
 - **GNU MP (GMP)**: BtbN builds its own fork.
-- **libdrm**: No licence file: this is the notice in xf86drm.c.
+- **libdrm**: Loaded from the system at run time (libavutil and libavdevice dlopen libdrm.so.2); none of it is compiled into FFmpeg. No licence file: this is the notice in xf86drm.c.
 - **libjxl**: Also builds highway and skcms (Apache-2.0, BSD-3-Clause); their notices are not reproduced here.
-- **libva (VA-API)**: The VA-API drivers are the user's system libraries.
+- **libva (VA-API)**: Loaded from the system at run time (libavutil dlopens libva.so.2 and libva-drm.so.2); none of it is compiled into FFmpeg. The VA-API drivers are the user's system libraries.
 - **libX11**: Loaded from the system at run time (libavdevice dlopens libX11.so.6, libXext.so.6 and libXv.so.1); none of it is compiled into FFmpeg.
 - **libxcb**: Loaded from the system at run time (libavdevice dlopens libxcb.so.1 and its shm, shape and xfixes extensions); none of it is compiled into FFmpeg.
 - **nv-codec-headers (ffnvcodec)**: No licence file: this is the notice at the top of include/ffnvcodec/dynlink_loader.h. NVENC itself is NVIDIA's driver on the user's system (see licenses/NVIDIA-NVENC-SDK-LICENSE.txt).
-- **OpenCL-Headers**: Headers. FFmpeg links the OpenCL ICD loader statically (listed below); the OpenCL drivers it finds through that are the user's system libraries.
+- **OpenCL-Headers**: Headers. FFmpeg links the OpenCL ICD loader statically (OpenCL-ICD-Loader, an entry of its own); the OpenCL drivers it finds through that are the user's system libraries.
+- **rav1e**: Built with cargo, so the Rust crates it depends on are compiled into the library; their notices are not reproduced here.
 - **SDL 2**: No trace of SDL is in the shipped libraries (it serves BtbN's ffplay, which is not shipped); it is listed because the configure line enables it.
 - **shaderc**: Builds glslang and SPIRV-Tools (Apache-2.0, BSD-3-Clause, MIT) with it; their notices are not reproduced here.
 - **Vulkan-Headers**: Headers; the Vulkan loader is the user's system library.
@@ -167,7 +168,7 @@ Options that add no third-party code:
 
 The configure line also disables these libraries and options (the GPL and non-free libraries among them), so nothing from them is bundled through it: `--disable-avisynth`, `--disable-libdavs2`, `--disable-libdvdread`, `--disable-libdvdnav`, `--disable-libfdk-aac`, `--disable-frei0r`, `--disable-librubberband`, `--disable-libvidstab`, `--disable-whisper`, `--disable-libx264`, `--disable-libx265`, `--disable-libxavs2`, `--disable-libxvid`.
 
-Some of these projects bundle code from further projects (for example shaderc builds glslang and SPIRV-Tools, and libjxl builds highway and skcms); their notices are in the upstream sources named above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`, the FFmpeg commit and BtbN's build scripts that the bundled libraries were built from. This is a technical inventory, not legal advice.
+Some of these projects bundle code from further projects (for example shaderc builds glslang and SPIRV-Tools, and libjxl builds highway and skcms); their notices are in the upstream sources named above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg commit, BtbN's build scripts and the source of every library above that is compiled into the shipped libraries, at the commits or tags named above, with its README. This is a technical inventory, not legal advice.
 
 ### AppImage type-2 runtime
 

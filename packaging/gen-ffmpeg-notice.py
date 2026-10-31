@@ -93,6 +93,20 @@ def main():
                 f"{e['id']} is marked gpl but has no signatures and in_libraries (lists of strings, the signatures printable "
                 "and without spaces): verify-appdir.sh needs them to check the claim"
             )
+    # compiled_in: false says the library's code is not inside the shipped libraries (the source archive leaves it
+    # out), and a note says why; mirror is where the source archive tries first for pinned_repo; fetched_at_build
+    # says what BtbN's script downloads while building that the library's own tree lacks.
+    for e in libs + supporting:
+        if "compiled_in" in e and not isinstance(e["compiled_in"], bool):
+            problems.append(f"{e['id']}: compiled_in must be true or false")
+        if e.get("compiled_in") is False and not e.get("note"):
+            problems.append(f"{e['id']} is marked compiled_in false but has no note saying why")
+        if e.get("compiled_in") is False and e.get("gpl"):
+            problems.append(f"{e['id']} is marked gpl but not compiled in: a GPL library is only listed when it is in a shipped library")
+        if "mirror" in e and not (isinstance(e["mirror"], str) and re.fullmatch(r"(https|git)://\S+", e["mirror"])):
+            problems.append(f"{e['id']}: mirror must be an https:// or git:// URL")
+        if "fetched_at_build" in e and not (isinstance(e["fetched_at_build"], str) and e["fetched_at_build"].strip()):
+            problems.append(f"{e['id']}: fetched_at_build must say what BtbN's script downloads while building")
     # The tables and the GPL wording say what a supporting library is built for.
     needers = {e["id"]: e for e in supporting}
     needers.update({e["id"]: e for e in gpl})
@@ -169,7 +183,7 @@ def main():
         flags = " ".join(f"`{f}`" for f in e["flags"])
         w(f"| {flags} | {e['name']} | {'**' + e['license'] + '**' if e.get('gpl') else e['license']} | {upstream(e)} | [{e['text']}](licenses/ffmpeg/{e['text']}) |")
     w("")
-    notes = [e for e in libs if e.get("note")]
+    notes = [e for e in libs + supporting if e.get("note")]
     if notes:
         for e in sorted(notes, key=lambda e: e["name"].lower()):
             w(f"- **{e['name']}**: {e['note']}")
@@ -194,8 +208,9 @@ def main():
     w(
         "Some of these projects bundle code from further projects (for example shaderc builds glslang and "
         "SPIRV-Tools, and libjxl builds highway and skcms); their notices are in the upstream sources named "
-        "above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`, the FFmpeg "
-        "commit and BtbN's build scripts that the bundled libraries were built from. This is a technical "
+        "above, not repeated here. Each GitHub release also carries `FTHRust-ffmpeg-source-*.tar.xz`: the FFmpeg "
+        "commit, BtbN's build scripts and the source of every library above that is compiled into the shipped "
+        "libraries, at the commits or tags named above, with its README. This is a technical "
         "inventory, not legal advice.\n"
     )
     section = "\n".join(out)

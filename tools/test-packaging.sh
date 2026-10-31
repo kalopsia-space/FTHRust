@@ -305,78 +305,208 @@ EOF
 }
 
 group_archive() {
-    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m reg out r ffc bsc gc
-    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d" "$src/gpl"
+    local arch="$ROOT/packaging/archive-ffmpeg-source.sh" src="$WORK/srcrepos" m reg out r ffc bsc gc oc tc mc
+    local gitq=(git -c user.name=t -c user.email=t@example.invalid)
+    mkdir -p "$src/ffmpeg" "$src/scripts/scripts.d" "$src/gpl" "$src/one" "$src/sub" "$src/tag" "$src/mirrored"
     echo 'int main(void){return 0;}' > "$src/ffmpeg/main.c"
     echo '#!/bin/sh' > "$src/scripts/scripts.d/50-x.sh"
     echo 'double fft(double x){return x;}' > "$src/gpl/fft.c"
-    for r in ffmpeg scripts gpl; do
+    echo 'int one;' > "$src/one/one.c"
+    echo 'int sub;' > "$src/sub/sub.c"
+    echo 'int tagged;' > "$src/tag/tagged.c"
+    echo 'int mirrored;' > "$src/mirrored/mirrored.c"
+    for r in ffmpeg scripts gpl sub tag mirrored; do
         git -C "$src/$r" init -q
         git -C "$src/$r" config uploadpack.allowAnySHA1InWant true
         git -C "$src/$r" add -A
-        git -C "$src/$r" -c user.name=t -c user.email=t@example.invalid commit -q -m init
+        "${gitq[@]}" -C "$src/$r" commit -q -m init
     done
+    "${gitq[@]}" -C "$src/tag" tag -a v1.2 -m "release 1.2"
+    "${gitq[@]}" -C "$src/tag" tag -a libpre-3.1 -m "a tag that starts with the library id"
+    # a library with a submodule, which BtbN's scripts fetch with `git submodule update --init --recursive`
+    git -C "$src/one" init -q
+    git -C "$src/one" config uploadpack.allowAnySHA1InWant true
+    "${gitq[@]}" -C "$src/one" -c protocol.file.allow=always submodule add -q "$src/sub" vendor/sub
+    git -C "$src/one" add -A
+    "${gitq[@]}" -C "$src/one" commit -q -m init
     ffc="$(git -C "$src/ffmpeg" rev-parse HEAD)"
     bsc="$(git -C "$src/scripts" rev-parse HEAD)"
     gc="$(git -C "$src/gpl" rev-parse HEAD)"
+    oc="$(git -C "$src/one" rev-parse HEAD)"
+    tc="$(git -C "$src/tag" rev-parse HEAD)"
+    mc="$(git -C "$src/mirrored" rev-parse HEAD)"
     m="$WORK/source-manifest.json"
     jq --arg a "$src/ffmpeg" --arg b "$ffc" --arg c "$src/scripts" --arg d "$bsc" \
         '.corresponding_source = {ffmpeg: {repo: $a, commit: $b, describe: "n1-test"}, build_scripts: {repo: $c, commit: $d}}' \
         "$ROOT/packaging/ffmpeg_manifest_linux.json" > "$m"
+    git clone -q "$src/mirrored" "$src/mirrored-copy"
+    git -C "$src/mirrored-copy" config uploadpack.allowAnySHA1InWant true
+    # libone: a commit with a submodule, and something BtbN downloads while building; libtag: a tag; libhdr: not compiled in,
+    # its repository does not exist; libmirror: the mirror comes first (the repository exists too); libfallback: its mirror is
+    # gone, so the repository serves it; libsvn: a Subversion revision; gplx: a GPL library.
     reg="$WORK/source-registry.json"
-    jq -n --arg repo "$src/gpl" --arg c "$gc" \
-        '{ignored_options: {}, libraries: [], not_linked: {}, supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $repo, pinned_commit: $c, text: "gplx.txt", needed_by: ["x"], gpl: true, signatures: ["gplx_sig"], in_libraries: ["libavformat"]}]}' > "$reg"
+    jq -n --arg one "$src/one" --arg oc "$oc" --arg tag "$src/tag" --arg mir "$src/mirrored" --arg mircopy "$src/mirrored-copy" --arg mc "$mc" --arg gpl "$src/gpl" --arg gc "$gc" --arg none "$WORK/no-such-repo" \
+        'def lib($id; $repo; $pin): {id: $id, name: ($id | ascii_upcase), flags: ["--enable-lib" + $id], license: "MIT", url: ("https://example.org/" + $id), pinned_repo: $repo, pinned_commit: $pin, text: ($id + ".txt")};
+         {ignored_options: {}, not_linked: {},
+          libraries: [lib("libone"; $one; $oc) + {fetched_at_build: "the crates in its Cargo.lock"}, lib("libtag"; $tag; "v1.2"), lib("libpre"; $tag; "libpre-3.1"), lib("libhdr"; $none; "1111111111111111111111111111111111111111") + {compiled_in: false, note: "Headers only."},
+                      lib("libmirror"; $mir; $mc) + {mirror: $mircopy}, lib("libfallback"; $mir; $mc) + {mirror: $none}, lib("libsvn"; "https://svn.example.org/trunk/lame"; "r42")],
+          supporting_libraries: [{id: "gplx", name: "GPLX", license: "GPL-2.0-or-later", url: "https://example.org/gplx", pinned_repo: $gpl, pinned_commit: $gc, text: "gplx.txt", needed_by: ["x"], gpl: true, signatures: ["gplx_sig"], in_libraries: ["libavformat"]}]}' > "$reg"
     out="$WORK/source-out/src.tar.xz"
+    local svnlog="$WORK/svn-calls" svn_stub="$WORK/svn-stub"
+    printf '#!/bin/sh\necho "$@" >> "%s"\nfor last; do :; done\nmkdir -p "$last"\necho "lame source" > "$last/lame.c"\n' "$svnlog" > "$svn_stub"
+    chmod +x "$svn_stub"
     local opts=(--manifest "$m" --libraries "$reg" --skip-depends-check)
+    # The tests wait for nothing, and compress lightly.
+    export ARCHIVE_FETCH_DELAY=0 ARCHIVE_XZ_OPTS="-T1 -1" ARCHIVE_SVN="$svn_stub" ARCHIVE_ALLOW_LOCAL_REPO=1
 
-    if ! r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" "${opts[@]}" --out "$out" 2>&1)"; then
+    if ! r="$("$arch" "${opts[@]}" --out "$out" 2>&1)"; then
         fail archive_builds "$r"; return
     fi
     local listing missing="" f readme
     listing="$(tar -tJf "$out" | sed 's|^\./||')"
-    for f in ffmpeg-n1-test/main.c "FFmpeg-Builds-${bsc:0:12}/scripts.d/50-x.sh" "gplx-${gc:0:12}/fft.c" README.txt; do
+    for f in ffmpeg-n1-test/main.c "FFmpeg-Builds-${bsc:0:12}/scripts.d/50-x.sh" "gplx-${gc:0:12}/fft.c" "libone-${oc:0:12}/one.c" "libone-${oc:0:12}/vendor/sub/sub.c" \
+             "libtag-v1.2/tagged.c" "libpre-3.1/tagged.c" "libmirror-${mc:0:12}/mirrored.c" "libfallback-${mc:0:12}/mirrored.c" libsvn-r42/lame.c README.txt; do
         grep -qxF "$f" <<<"$listing" || missing="$missing $f"
     done
-    if [ -z "$missing" ]; then pass archive_has_the_trees_the_gpl_library_and_readme; else fail archive_has_the_trees_the_gpl_library_and_readme "missing:$missing"; fi
+    if [ -z "$missing" ]; then pass archive_has_the_trees_and_every_library_compiled_in; else fail archive_has_the_trees_and_every_library_compiled_in "missing:$missing"; fi
+    if grep -E '(^|/)\.git(/|$)' <<<"$listing" >/dev/null; then fail archive_leaves_out_git_data "$(grep -E '(^|/)\.git(/|$)' <<<"$listing" | head -3 | tr '\n' ' ')"; else pass archive_leaves_out_git_data; fi
+    if grep -q '^libhdr' <<<"$listing"; then fail archive_leaves_out_libraries_that_are_not_compiled_in "libhdr is in the archive"; else pass archive_leaves_out_libraries_that_are_not_compiled_in; fi
     readme="$(tar -xJOf "$out" ./README.txt)"
     if grep -qF "$ffc" <<<"$readme" && grep -qF -- "--enable-libdav1d" <<<"$readme" && grep -qF "$(jq -r .source.sha256 "$m")" <<<"$readme"; then
         pass archive_readme_names_commits_configuration_and_binary
     else fail archive_readme_names_commits_configuration_and_binary "$readme"; fi
-    if grep -qF "GPLX (GPL-2.0-or-later) at commit $gc" <<<"$readme" && grep -q "GPL code, so its source is part of this archive" <<<"$readme"; then
+    if grep -qF "commit $gc of $src/gpl" <<<"$readme" && grep -q "compiled into libavformat; GPL code, so its source is part of this archive" <<<"$readme"; then
         pass archive_readme_names_the_gpl_library
     else fail archive_readme_names_the_gpl_library "$readme"; fi
+    if grep -qF "tag v1.2 (commit $tc) of $src/tag" <<<"$readme" && grep -qF "commit $oc of $src/one" <<<"$readme" && grep -qF "Subversion revision 42 of https://svn.example.org/trunk/lame" <<<"$readme"; then
+        pass archive_readme_names_what_each_library_was_fetched_at
+    else fail archive_readme_names_what_each_library_was_fetched_at "$readme"; fi
+    if grep -qF "Libraries the build is configured with that contribute no code" <<<"$readme" && grep -qF "LIBHDR (libhdr)" <<<"$readme" && grep -qF "Headers only." <<<"$readme"; then
+        pass archive_readme_names_the_libraries_it_leaves_out
+    else fail archive_readme_names_the_libraries_it_leaves_out "$readme"; fi
+    if grep -qF "download code while they build" <<<"$readme" && grep -qF "the crates in its Cargo.lock" <<<"$readme"; then
+        pass archive_readme_names_what_btbns_scripts_download_while_building
+    else fail archive_readme_names_what_btbns_scripts_download_while_building "$readme"; fi
+    # the mirror comes first, and the repository serves a library whose mirror is gone
+    if grep -qF "commit $mc of $src/mirrored, fetched from $src/mirrored-copy" <<<"$readme"; then pass archive_fetches_from_the_mirror_first
+    else fail archive_fetches_from_the_mirror_first "$readme"; fi
+    if grep -qF "commit $mc of $src/mirrored" <<<"$readme" && ! grep -F "LIBFALLBACK" -A2 <<<"$readme" | grep -q "fetched from"; then pass archive_falls_back_to_the_repository_when_the_mirror_is_gone
+    else fail archive_falls_back_to_the_repository_when_the_mirror_is_gone "$readme"; fi
+    if ! grep -qF "(LGPL, shared)" <<<"$readme"; then pass archive_readme_does_not_call_the_build_plain_lgpl; else fail archive_readme_does_not_call_the_build_plain_lgpl "$readme"; fi
     if (cd "$WORK/source-out" && sha256sum -c --quiet src.tar.xz.sha256 >/dev/null 2>&1); then pass archive_checksum; else fail archive_checksum "sha256 mismatch"; fi
+    if grep -q "export -q --force --non-interactive https://svn.example.org/trunk/lame@42 " "$svnlog"; then pass archive_exports_the_pinned_subversion_revision
+    else fail archive_exports_the_pinned_subversion_revision "$(cat "$svnlog" 2>/dev/null)"; fi
+
+    # A Subversion pin needs svn, and says so.
+    if r="$(ARCHIVE_SVN="$WORK/no-such-svn" "$arch" "${opts[@]}" --out "$WORK/source-out/nosvn.tar.xz" 2>&1)"; then fail archive_says_when_svn_is_missing "exit 0"
+    elif grep -q "libsvn: the registry pins Subversion revision r42, which needs svn" <<<"$r" && [ ! -e "$WORK/source-out/nosvn.tar.xz" ]; then pass archive_says_when_svn_is_missing
+    else fail archive_says_when_svn_is_missing "$r"; fi
 
     jq '.corresponding_source.ffmpeg.commit = "0000000000000000000000000000000000000000"' "$m" > "$WORK/source-bad-commit.json"
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-bad-commit.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/bad.tar.xz" 2>&1)"; then
+    if r="$("$arch" --manifest "$WORK/source-bad-commit.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/bad.tar.xz" 2>&1)"; then
         fail archive_unknown_commit_fails "exit 0"
     elif grep -q "could not fetch" <<<"$r" && [ ! -e "$WORK/source-out/bad.tar.xz" ]; then pass archive_unknown_commit_fails
     else fail archive_unknown_commit_fails "$r"; fi
 
+    jq '.libraries[0].pinned_commit = "0000000000000000000000000000000000000000"' "$reg" > "$WORK/source-registry-badlib.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-badlib.json" --skip-depends-check --out "$WORK/source-out/badlib.tar.xz" 2>&1)"; then
+        fail archive_unknown_library_commit_fails "exit 0"
+    elif grep -q "libone: could not fetch 0000000000000000000000000000000000000000" <<<"$r" && [ ! -e "$WORK/source-out/badlib.tar.xz" ]; then pass archive_unknown_library_commit_fails
+    else fail archive_unknown_library_commit_fails "$r"; fi
+
     jq '.corresponding_source.ffmpeg.commit = "v8.1"' "$m" > "$WORK/source-tag-pin.json"
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$WORK/source-tag-pin.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/tag.tar.xz" 2>&1)"; then
-        fail archive_rejects_a_movable_pin "exit 0"
-    elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_movable_pin
-    else fail archive_rejects_a_movable_pin "$r"; fi
+    if r="$("$arch" --manifest "$WORK/source-tag-pin.json" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/tag.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_movable_ffmpeg_pin "exit 0"
+    elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_movable_ffmpeg_pin
+    else fail archive_rejects_a_movable_ffmpeg_pin "$r"; fi
 
-    # a GPL library has to be pinned to a full commit as well
-    jq '.supporting_libraries[0].pinned_commit = "openssl-3.6.3"' "$reg" > "$WORK/source-registry-tag.json"
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --libraries "$WORK/source-registry-tag.json" --skip-depends-check --out "$WORK/source-out/gpltag.tar.xz" 2>&1)"; then
-        fail archive_rejects_a_gpl_library_pinned_by_tag "exit 0"
-    elif grep -q "40 lowercase hex" <<<"$r"; then pass archive_rejects_a_gpl_library_pinned_by_tag
-    else fail archive_rejects_a_gpl_library_pinned_by_tag "$r"; fi
+    # a library pin is a commit, a tag or a Subversion revision, and nothing git could read as an option
+    jq '.libraries[1].pinned_commit = "--upload-pack=touch /tmp/pwned"' "$reg" > "$WORK/source-registry-oddpin.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-oddpin.json" --skip-depends-check --out "$WORK/source-out/odd.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_library_pin_that_is_not_a_commit_tag_or_revision "exit 0"
+    elif grep -q "libtag: pin must be a 40-digit commit id, a tag name or a Subversion revision" <<<"$r"; then pass archive_rejects_a_library_pin_that_is_not_a_commit_tag_or_revision
+    else fail archive_rejects_a_library_pin_that_is_not_a_commit_tag_or_revision "$r"; fi
 
-    if r="$("$arch" --manifest "$m" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
+    if r="$(ARCHIVE_ALLOW_LOCAL_REPO= "$arch" --manifest "$m" --libraries "$reg" --skip-depends-check --out "$WORK/source-out/local.tar.xz" 2>&1)"; then
         fail archive_rejects_a_non_https_repo "exit 0"
     elif grep -q "must be https" <<<"$r"; then pass archive_rejects_a_non_https_repo
     else fail archive_rejects_a_non_https_repo "$r"; fi
 
+    jq '(.libraries[] | select(.id == "libmirror") | .mirror) = "http://example.org/mirror.git"' "$reg" > "$WORK/source-registry-badmirror.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-badmirror.json" --skip-depends-check --out "$WORK/source-out/badmirror.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_mirror_that_is_neither_https_nor_git "exit 0"
+    elif grep -q "libmirror: repo must be https (or git for a mirror): http://example.org/mirror.git" <<<"$r"; then pass archive_rejects_a_mirror_that_is_neither_https_nor_git
+    else fail archive_rejects_a_mirror_that_is_neither_https_nor_git "$r"; fi
+
+    echo '{ not json' > "$WORK/source-registry-broken.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-broken.json" --skip-depends-check --out "$WORK/source-out/broken.tar.xz" 2>&1)"; then
+        fail archive_rejects_a_registry_that_is_not_json "exit 0"
+    elif grep -q "is not valid JSON" <<<"$r"; then pass archive_rejects_a_registry_that_is_not_json
+    else fail archive_rejects_a_registry_that_is_not_json "$r"; fi
+    jq '.libraries |= map(. + {compiled_in: false, note: "x"}) | .supporting_libraries = []' "$reg" > "$WORK/source-registry-none.json"
+    if r="$("$arch" --manifest "$m" --libraries "$WORK/source-registry-none.json" --skip-depends-check --out "$WORK/source-out/none.tar.xz" 2>&1)"; then
+        fail archive_needs_at_least_one_library "exit 0"
+    elif grep -q "lists no library whose code is compiled in" <<<"$r"; then pass archive_needs_at_least_one_library
+    else fail archive_needs_at_least_one_library "$r"; fi
+
     # Without --skip-depends-check the registry is checked against the fetched scripts first; these
     # scripts are nothing like BtbN's, so no archive is made.
-    if r="$(ARCHIVE_ALLOW_LOCAL_REPO=1 "$arch" --manifest "$m" --libraries "$reg" --out "$WORK/source-out/nodeps.tar.xz" 2>&1)"; then
+    if r="$("$arch" --manifest "$m" --libraries "$reg" --out "$WORK/source-out/nodeps.tar.xz" 2>&1)"; then
         fail archive_checks_the_registry_against_the_scripts "exit 0"
     elif grep -q "does not match BtbN's build scripts" <<<"$r" && [ ! -e "$WORK/source-out/nodeps.tar.xz" ]; then pass archive_checks_the_registry_against_the_scripts
     else fail archive_checks_the_registry_against_the_scripts "$r"; fi
+
+    # Network steps are tried three times, each with a timeout: here with a git in front of the real one that
+    # fails the first fetches, always, or hangs. The count of fetches of a clean run is the baseline.
+    local stub="$WORK/archive-git-stub" counter="$WORK/archive-git-fetches" sublog="$WORK/archive-git-submodule" real_git base
+    real_git="$(command -v git)"
+    mkdir -p "$stub"
+    cat > "$stub/git" <<EOF
+#!/bin/sh
+sub=""; skip=0
+for a in "\$@"; do
+    if [ \$skip = 1 ]; then skip=0; continue; fi
+    case "\$a" in
+        -c|-C) skip=1 ;;
+        -*) ;;
+        *) sub="\$a"; break ;;
+    esac
+done
+if [ "\$sub" = submodule ]; then echo "\$@" >> "$sublog"; fi
+if [ "\$sub" = fetch ]; then
+    n=\$(cat "$counter" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$counter"
+    case "\${GIT_STUB:-}" in
+        fail) echo "fatal: simulated network failure" >&2; exit 128 ;;
+        fail-twice) if [ \$n -le 2 ]; then echo "fatal: simulated network failure" >&2; exit 128; fi ;;
+        hang) exec sleep 30 ;;
+    esac
+fi
+exec "$real_git" "\$@"
+EOF
+    chmod +x "$stub/git"
+    archiving() { # stub-mode [env...]: an archive of the test registry with the stubbed git first on PATH
+        local mode="$1"
+        shift
+        rm -f "$counter"
+        env PATH="$stub:$PATH" GIT_STUB="$mode" "$@" "$arch" "${opts[@]}" --out "$WORK/source-out/stub.tar.xz"
+    }
+    fetches() { cat "$counter" 2>/dev/null || echo 0; }
+
+    rm -f "$sublog"
+    if r="$(archiving ok 2>&1)"; then base="$(fetches)"; pass archive_counts_its_fetches_in_a_clean_run; else fail archive_counts_its_fetches_in_a_clean_run "$r"; return; fi
+    # git starts a gc or maintenance run in the background after a fetch or clone; it wrote into .git while the script
+    # was removing it, which failed a trial run on libplacebo's submodules.
+    if grep -q -- "-c gc.auto=0 -c maintenance.auto=false" "$sublog" && grep -q "submodule update --init --recursive --depth 1" "$sublog"; then pass archive_keeps_gits_background_maintenance_off
+    else fail archive_keeps_gits_background_maintenance_off "$(cat "$sublog" 2>/dev/null)"; fi
+    if r="$(archiving fail-twice 2>&1)" && [ "$(fetches)" = $((base + 2)) ]; then pass archive_retries_a_failing_fetch
+    else fail archive_retries_a_failing_fetch "$r ($(fetches) fetches, expected $((base + 2)))"; fi
+    if r="$(archiving fail 2>&1)"; then fail archive_gives_up_after_three_attempts "exit 0"
+    elif [ "$(fetches)" = 3 ] && grep -q "ffmpeg: could not fetch $ffc from $src/ffmpeg after 3 attempts" <<<"$r"; then pass archive_gives_up_after_three_attempts
+    else fail archive_gives_up_after_three_attempts "$r ($(fetches) fetches)"; fi
+    if r="$(archiving hang ARCHIVE_FETCH_TIMEOUT=1 2>&1)"; then fail archive_times_out_a_hanging_fetch "exit 0"
+    elif [ "$(fetches)" = 3 ] && grep -q "could not fetch" <<<"$r"; then pass archive_times_out_a_hanging_fetch
+    else fail archive_times_out_a_hanging_fetch "$r ($(fetches) fetches)"; fi
+    unset ARCHIVE_FETCH_DELAY ARCHIVE_XZ_OPTS ARCHIVE_SVN ARCHIVE_ALLOW_LOCAL_REPO
 }
 
 # The dependency check on small synthetic BtbN scripts: the FFTW case, where a library is pulled in by another
@@ -646,6 +776,28 @@ group_ffnotice() {
         elif grep -q "has no needed_by" <<<"$out" && ! grep -q Traceback <<<"$out"; then pass "ffnotice_supporting_libraries_say_what_they_are_for ($bad)"
         else fail "ffnotice_supporting_libraries_say_what_they_are_for ($bad)" "$out"; fi
     done
+
+    # compiled_in and mirror steer the source archive, so the generator checks their shape.
+    registry_rejects() { # name jq-filter expected-fragment
+        jq "$2" "$ROOT/packaging/ffmpeg_libraries.json" > "$WORK/reg-reject.json"
+        if out="$(python3 -I "$gen" --libraries "$WORK/reg-reject.json" 2>&1)"; then fail "$1" "exit 0"
+        elif grep -q -- "$3" <<<"$out" && ! grep -q Traceback <<<"$out"; then pass "$1"
+        else fail "$1" "$out"; fi
+    }
+    registry_rejects ffnotice_compiled_in_false_needs_a_note '(.libraries[] | select(.id == "amf")) |= del(.note)' "amf is marked compiled_in false but has no note"
+    registry_rejects ffnotice_compiled_in_must_be_a_boolean '(.libraries[] | select(.id == "amf") | .compiled_in) = "no"' "amf: compiled_in must be true or false"
+    registry_rejects ffnotice_a_gpl_library_must_be_compiled_in '(.supporting_libraries[] | select(.id == "fftw3")) |= (. + {compiled_in: false, note: "x"})' "fftw3 is marked gpl but not compiled in"
+    registry_rejects ffnotice_mirror_must_be_https_or_git '(.libraries[] | select(.id == "iconv") | .mirror) = "http://example.org/x.git"' "iconv: mirror must be an https:// or git:// URL"
+    registry_rejects ffnotice_fetched_at_build_must_say_what '(.libraries[] | select(.id == "shaderc") | .fetched_at_build) = " "' "shaderc: fetched_at_build must say what BtbN's script downloads while building"
+    out="$(jq -r '[(.libraries[], .supporting_libraries[]) | select(has("fetched_at_build")) | .id] | sort | join(" ")' "$ROOT/packaging/ffmpeg_libraries.json")"
+    if [ "$out" = "rav1e shaderc" ]; then pass ffnotice_registry_names_what_btbns_scripts_download_while_building
+    else fail ffnotice_registry_names_what_btbns_scripts_download_while_building "$out"; fi
+    # The libraries the source archive leaves out are the ones whose code the shipped libraries do not contain
+    # (headers, loaded from the system at run time, SDL which the build only enables). A new entry here is a decision
+    # to review, so it has to be made in this list too.
+    out="$(jq -r '[(.libraries[], .supporting_libraries[]) | select(.compiled_in == false) | .id] | sort | join(" ")' "$ROOT/packaging/ffmpeg_libraries.json")"
+    if [ "$out" = "amf libdrm libva libx11 libxcb opencl-headers sdl2 vulkan-headers" ]; then pass ffnotice_registry_leaves_out_only_what_is_not_compiled_in
+    else fail ffnotice_registry_leaves_out_only_what_is_not_compiled_in "$out"; fi
 
     printf '{{ffmpeg.licence_summary}}|{{ffmpeg.licence_row}}|{{ffmpeg.configuration_sentence}}|{{ffmpeg.gpl_consequence}}\n<!-- ffmpeg-libraries -->\n' > "$WORK/tpl-licence.md"
     out="$(python3 -I "$gen" --template "$WORK/tpl-licence.md" 2>&1 | head -1)"

@@ -1,5 +1,5 @@
 {
-  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signatures are strings only it contains, FFTW's own solver names, which survive stripping; in_libraries are the shipped libraries that hold it; verify-appdir.sh checks both).",
+  "about": "External libraries FFmpeg is configured with (packaging/ffmpeg_manifest_linux.json, configuration). tools/gen-notices.sh turns this into the FFmpeg section of THIRD_PARTY_NOTICES.md and fails when the configure line and this file disagree; packaging/check-ffmpeg-depends.py fails when a library BtbN's scripts pull in for those options is neither here nor in not_linked. \"compiled_in\": false (with a note saying why) marks a library whose code is not inside the shipped libraries (headers only, loaded from the system at run time, or not used by the shipped build); the source archive leaves it out, and every other library is in it. \"mirror\" is where to fetch pinned_repo from when it cannot be reached. \"fetched_at_build\" says what BtbN's script downloads while building that the library's tree does not contain (the archive's README names it). pinned_repo/pinned_commit are what BtbN's build scripts (corresponding_source.build_scripts) use for the library; the text in licenses/ffmpeg/ was taken from that commit. \"gpl\": true marks a library with no non-GPL licence option that is compiled into a shipped library (signatures are strings only it contains, FFTW's own solver names, which survive stripping; in_libraries are the shipped libraries that hold it; verify-appdir.sh checks both).",
   "ignored_options": {
     "--enable-version3": "Selects LGPL version 3 or later (needed by gmp, aribb24, opencore-amr and libvmaf); adds no code.",
     "--enable-shared": "Builds shared libraries; adds no code.",
@@ -16,6 +16,7 @@
       "url": "https://www.gnu.org/software/libiconv/",
       "pinned_repo": "https://git.savannah.gnu.org/git/libiconv.git",
       "pinned_commit": "9d19c66d0a1768cffcf497b2db70bf4018b578d7",
+      "mirror": "git://git.git.savannah.gnu.org/libiconv.git",
       "text": "iconv.txt",
       "source_files": [
         "COPYING.LIB"
@@ -175,6 +176,7 @@
         "LICENSES/Apache-2.0.txt",
         "LICENSES/MIT.txt"
       ],
+      "compiled_in": false,
       "note": "Headers; the Vulkan loader is the user's system library."
     },
     {
@@ -191,7 +193,8 @@
       "source_files": [
         "LICENSE"
       ],
-      "note": "Builds glslang and SPIRV-Tools (Apache-2.0, BSD-3-Clause, MIT) with it; their notices are not reproduced here."
+      "note": "Builds glslang and SPIRV-Tools (Apache-2.0, BSD-3-Clause, MIT) with it; their notices are not reproduced here.",
+      "fetched_at_build": "its third-party projects (glslang, SPIRV-Tools and others), which utils/git-sync-deps fetches at the commits named in the DEPS file of its tree"
     },
     {
       "id": "vorbis",
@@ -222,6 +225,7 @@
       "source_files": [
         "COPYING"
       ],
+      "compiled_in": false,
       "note": "Loaded from the system at run time (libavdevice dlopens libxcb.so.1 and its shm, shape and xfixes extensions); none of it is compiled into FFmpeg."
     },
     {
@@ -238,6 +242,7 @@
       "source_files": [
         "COPYING"
       ],
+      "compiled_in": false,
       "note": "Loaded from the system at run time (libavdevice dlopens libX11.so.6, libXext.so.6 and libXv.so.1); none of it is compiled into FFmpeg."
     },
     {
@@ -319,7 +324,8 @@
       "source_files": [
         "LICENSE"
       ],
-      "note": "Headers. FFmpeg links the OpenCL ICD loader statically (listed below); the OpenCL drivers it finds through that are the user's system libraries."
+      "compiled_in": false,
+      "note": "Headers. FFmpeg links the OpenCL ICD loader statically (OpenCL-ICD-Loader, an entry of its own); the OpenCL drivers it finds through that are the user's system libraries."
     },
     {
       "id": "amf",
@@ -335,6 +341,7 @@
       "source_files": [
         "LICENSE.txt"
       ],
+      "compiled_in": false,
       "note": "Headers; AMD's driver is the user's system library."
     },
     {
@@ -782,7 +789,9 @@
       "source_files": [
         "LICENSE",
         "PATENTS"
-      ]
+      ],
+      "fetched_at_build": "the Rust crates it is built with, which cargo resolves from the Cargo.lock in its tree (BtbN also runs `cargo update cc` first)",
+      "note": "Built with cargo, so the Rust crates it depends on are compiled into the library; their notices are not reproduced here."
     },
     {
       "id": "sdl2",
@@ -798,6 +807,7 @@
       "source_files": [
         "LICENSE.txt"
       ],
+      "compiled_in": false,
       "note": "No trace of SDL is in the shipped libraries (it serves BtbN's ffplay, which is not shipped); it is listed because the configure line enables it."
     },
     {
@@ -890,7 +900,8 @@
       "source_files": [
         "xf86drm.c (the licence comment)"
       ],
-      "note": "No licence file: this is the notice in xf86drm.c."
+      "compiled_in": false,
+      "note": "Loaded from the system at run time (libavutil and libavdevice dlopen libdrm.so.2); none of it is compiled into FFmpeg. No licence file: this is the notice in xf86drm.c."
     },
     {
       "id": "libva",
@@ -906,7 +917,8 @@
       "source_files": [
         "COPYING"
       ],
-      "note": "The VA-API drivers are the user's system libraries."
+      "compiled_in": false,
+      "note": "Loaded from the system at run time (libavutil dlopens libva.so.2 and libva-drm.so.2); none of it is compiled into FFmpeg. The VA-API drivers are the user's system libraries."
     },
     {
       "id": "vvenc",
