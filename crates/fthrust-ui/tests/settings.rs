@@ -243,7 +243,10 @@ fn settings_presets_save_load_delete_roundtrip() {
         vec!["— no presets —".to_owned()]
     );
     general::save_settings_preset(&mut s, "Fast");
-    assert_eq!(general::settings_preset_names(&mut s), vec!["Fast".to_owned()]);
+    assert_eq!(
+        general::settings_preset_names(&mut s),
+        vec!["Fast".to_owned()]
+    );
     s.set_setting("clip_length", serde_json::json!(15));
     assert!(general::load_settings_preset(&mut s, "Fast"));
     assert_eq!(s.settings.get_i64("clip_length"), Some(45));

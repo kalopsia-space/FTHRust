@@ -103,6 +103,12 @@ fn start_with_different_profile_prepares_then_starts() {
     assert_eq!(s.status.text, "PREPARING RECORDING QUALITY");
     let reqs = services.drain_requests_for_tests();
     assert!(reqs.iter().any(|r| matches!(r, fthrust_ui::services::Request::RestartForRecording(cfg) if cfg.capture.fps == 120)), "{reqs:?}");
+    // The restart takes the engine down first, as a real one does: that is
+    // expected while preparing, not a failure (audit 2026-10-31).
+    services.inject(Event::EngineConnected(false));
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Preparing);
+    assert!(errors(&s).is_empty(), "{:?}", errors(&s));
     // The restart comes up with the recording profile active → the start is submitted.
     services.set_active_config_for_tests(Some(recording_config(&s).unwrap().capture));
     connected(&mut services, &mut s);
@@ -475,6 +481,25 @@ fn a_stuck_finalize_check_times_out() {
     services.tick(&mut s);
     assert_eq!(services.recording_state(), RecordState::Finalizing);
     services.advance_clock_for_tests(31.0);
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Idle);
+    assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);
+}
+
+/// Preparing gives up if the engine never comes back with the profile.
+#[test]
+fn preparing_times_out() {
+    use fthrust_ui::services::recording::PREPARE_TIMEOUT_S;
+    let (_tmp, mut s) = state();
+    let ctx = egui::Context::default();
+    let mut services = Services::start_for_tests(&ctx);
+    connected(&mut services, &mut s);
+    s.set_setting("recording_framerate", serde_json::json!(120));
+    s.record_requested = true;
+    services.tick(&mut s);
+    assert_eq!(services.recording_state(), RecordState::Preparing);
+    services.inject(Event::EngineConnected(false));
+    services.advance_clock_for_tests(PREPARE_TIMEOUT_S + 1.0);
     services.tick(&mut s);
     assert_eq!(services.recording_state(), RecordState::Idle);
     assert_eq!(errors(&s), vec!["MANUAL RECORDING FAILED".to_string()]);

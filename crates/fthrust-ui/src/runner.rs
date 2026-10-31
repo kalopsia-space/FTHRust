@@ -27,6 +27,8 @@ pub enum Wake {
     Repaint(Duration),
     /// A service thread queued an event: tick now.
     Tick,
+    /// SIGTERM, SIGINT or SIGHUP: shut down as if the window were closed.
+    Quit,
 }
 
 /// Services tick at least this often even with no events.
@@ -73,6 +75,7 @@ pub fn run(
         .build()
         .map_err(|e| e.to_string())?;
     let proxy: EventLoopProxy<Wake> = event_loop.create_proxy();
+    quit_signals::install(proxy.clone());
     let ctx = new_context();
     {
         let proxy = proxy.clone();
@@ -106,6 +109,64 @@ pub fn run(
     match runner.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+/// SIGTERM (a logout, `systemctl stop`), SIGINT and SIGHUP end the event
+/// loop like closing the window, so the usual shutdown runs: pending
+/// settings are written, a save in flight finishes, the session is closed
+/// cleanly. They used to kill the app on the spot. A second signal exits at
+/// once, in case the shutdown itself is stuck.
+mod quit_signals {
+    use winit::event_loop::EventLoopProxy;
+
+    use super::Wake;
+
+    /// Listens on a thread of its own (tokio's handlers are reset in child
+    /// processes, so the engine and helpers keep the default actions).
+    pub fn install(proxy: EventLoopProxy<Wake>) {
+        let spawned = std::thread::Builder::new()
+            .name("fthrust-quit-signal".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "quit signals not handled");
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    use tokio::signal::unix::{SignalKind, signal};
+                    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+                        signal(SignalKind::terminate()),
+                        signal(SignalKind::interrupt()),
+                        signal(SignalKind::hangup()),
+                    ) else {
+                        tracing::warn!("quit signals not handled");
+                        return;
+                    };
+                    let mut asked = false;
+                    loop {
+                        tokio::select! {
+                            _ = term.recv() => {}
+                            _ = int.recv() => {}
+                            _ = hup.recv() => {}
+                        }
+                        if asked {
+                            tracing::warn!("second quit signal; exiting now");
+                            std::process::exit(1);
+                        }
+                        asked = true;
+                        let _ = proxy.send_event(Wake::Quit);
+                    }
+                });
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "quit signal thread not started");
+        }
     }
 }
 
@@ -296,9 +357,13 @@ impl ApplicationHandler<Wake> for Runner {
         self.schedule(el);
     }
 
-    fn user_event(&mut self, _el: &ActiveEventLoop, event: Wake) {
+    fn user_event(&mut self, el: &ActiveEventLoop, event: Wake) {
         match event {
             Wake::Tick => self.tick(),
+            Wake::Quit => {
+                tracing::info!("quit signal received");
+                el.exit();
+            }
             Wake::Repaint(delay) => {
                 // Service threads wake us through egui's repaint request: tick
                 // now, paint when the compositor lets us.

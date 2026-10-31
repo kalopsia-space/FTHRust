@@ -20,6 +20,9 @@ use crate::state::{AppState, StatusStyle, StatusText};
 
 /// The start acknowledgement deadline.
 pub const START_ACK_S: f64 = 10.0;
+/// How long the engine may take to come back with the recording profile
+/// (the supervisor's apply timeout plus a margin).
+pub const PREPARE_TIMEOUT_S: f64 = 40.0;
 /// Free space required before a recording starts (512 MiB).
 pub const MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
 /// How long `RECORDING SAVED` shows.
@@ -205,7 +208,10 @@ impl RecordingService {
     /// kept when the file exists.
     pub fn on_engine_lost(&mut self, now: f64) -> Vec<RecAction> {
         let mut out = Vec::new();
-        if self.state == RecordState::Idle {
+        // Preparing restarts the engine on purpose: the disconnect is the
+        // restart, not a loss (it used to fail every recording that needed
+        // its own quality profile). Preparing has its own deadline instead.
+        if matches!(self.state, RecordState::Idle | RecordState::Preparing) {
             return out;
         }
         let keep = self.path.as_ref().is_some_and(|p| p.exists());
@@ -376,6 +382,7 @@ impl RecordingService {
         if needs_profile {
             self.profile_is_recording = true;
             self.state = RecordState::Preparing;
+            self.requested_at = now;
             self.set_label("Preparing…", true);
             self.show("PREPARING RECORDING QUALITY", StatusStyle::Idle, None);
             out.push(RecAction::RestartForRecording(desired));
@@ -545,6 +552,14 @@ impl RecordingService {
     pub fn on_tick(&mut self, now: f64) -> Vec<RecAction> {
         let mut out = Vec::new();
         match self.state {
+            RecordState::Preparing if now - self.requested_at > PREPARE_TIMEOUT_S => {
+                self.fail(
+                    "The capture engine did not come back with the recording quality.",
+                    false,
+                    &mut out,
+                    now,
+                );
+            }
             RecordState::Starting if now - self.requested_at > START_ACK_S => {
                 self.fail(
                     "The capture engine did not acknowledge the start request.",
