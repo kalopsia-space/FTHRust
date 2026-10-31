@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use fthrust_wayland::dispatch::{
-    DispatchError, PollEvents, WaitOps, WaitResult, dispatch_until, wait_for_event,
+    DispatchError, PollEvents, WaitOps, WaitResult, WaylandOps, dispatch_until, wait_for_event,
 };
 
 #[derive(Default)]
@@ -85,6 +85,30 @@ fn no_event_is_timeout_without_busy_spin() {
     );
     assert_eq!(f.cancels, f.prepared, "every prepared read was cancelled");
     assert_eq!(f.reads, 0);
+}
+
+#[test]
+fn sub_millisecond_poll_waits_instead_of_spinning() {
+    // A connection over a socket pair whose other end never writes: the poll
+    // can only time out. The last slice of every wait is shorter than a
+    // millisecond; truncating it to poll(0) made the dispatch loop spin.
+    let (ours, _silent_peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let conn = match wayland_client::Connection::from_socket(ours) {
+        Ok(c) => c,
+        Err(e) => return eprintln!("skipping: no libwayland-client ({e})"),
+    };
+    let queue = conn.new_event_queue::<()>();
+    let mut ops = WaylandOps::new(conn, queue, ());
+    assert!(ops.prepare_read());
+    let started = Instant::now();
+    let events = ops.poll(false, Duration::from_micros(800)).unwrap();
+    let waited = started.elapsed();
+    ops.cancel_read();
+    assert!(!events.readable && !events.hangup, "{events:?}");
+    assert!(
+        waited >= Duration::from_micros(700),
+        "a 0.8 ms poll returned after {waited:?}"
+    );
 }
 
 #[test]

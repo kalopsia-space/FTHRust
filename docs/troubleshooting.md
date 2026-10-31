@@ -89,7 +89,8 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **DESKTOP AUDIO UNAVAILABLE** | PipeWire couldn't be reached. Clips are saved without desktop audio. |
 | **MIC NOT FOUND** | The chosen microphone is gone. Pick another in **OPEN AUDIO SETTINGS**. |
 | **CLIP SAVED WITHOUT AUDIO** | The clip is fine, but an audio source wasn't capturing at the time. |
-| **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | The engine noticed frozen or missing frames and is fixing it. |
+| **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | New frames stopped arriving, or capture failed and the engine is restarting it. |
+| **CAPTURE DEGRADED — DARK / UNIFORM** | The picture has been black or one flat colour for 12 seconds. Expected in a dark scene or on a loading screen; the engine restarts capture once in case the feed is broken (not on the portal). |
 | **SETTINGS APPLY TIMED OUT** | Capture didn't come back within 30 seconds of a settings change. Press **RESTART ENGINE**. |
 | **GAME CROP ADJUSTED** | The engine had to change a game's crop to make it fit the captured frame. **EDIT GAME CROP** lets you set it yourself. |
 | **DESKTOP KEPT ITS SHORTCUT** | Your desktop bound a different key than you asked for. |

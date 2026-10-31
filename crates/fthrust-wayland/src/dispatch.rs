@@ -283,8 +283,11 @@ impl<S> WaitOps for WaylandOps<S> {
             flags |= PollFlags::POLLOUT;
         }
         let mut fds = [PollFd::new(fd, flags)];
-        let timeout = PollTimeout::try_from(timeout.as_millis().min(i32::MAX as u128) as i32)
-            .unwrap_or(PollTimeout::MAX);
+        // Rounded up: the last slice before a deadline is usually under a
+        // millisecond, and truncating it to poll(0) would spin until the
+        // deadline passed.
+        let millis = timeout.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+        let timeout = PollTimeout::try_from(millis).unwrap_or(PollTimeout::MAX);
         match poll(&mut fds, timeout) {
             Ok(_) => {
                 let revents = fds[0].revents().unwrap_or(PollFlags::empty());

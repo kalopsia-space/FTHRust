@@ -22,7 +22,8 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
 };
 
 use crate::backend::{
-    BackendError, CaptureFailure, FailureKind, monotonic_ns, open_failure, wait_failure,
+    BackendError, CaptureFailure, DMABUF_FIRST_FRAME_DEADLINE, FailureKind, FirstDmabufFrame,
+    monotonic_ns, open_failure, repeat_deadline, wait_failure,
 };
 use crate::connection::{CoreState, bind_linux_dmabuf, bounded_roundtrip, connect_display};
 use crate::dispatch::{WaitResult, WaylandOps, wait_for_event};
@@ -36,9 +37,11 @@ use crate::shm::{BufferGeometry, MemfdPool, SlotState};
 pub const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 /// Hard limit for one frame when no earlier frame can be repeated.
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(2);
-/// Time allowed for new constraints after a `buffer_constraints` failure.
+/// Time allowed for new constraints after a `buffer_constraints` failure,
+/// and for a new session's first constraints.
 pub const CONSTRAINTS_DEADLINE: Duration = Duration::from_secs(2);
 
+/// The constraints of the current capture session.
 #[derive(Default)]
 struct SessionInfo {
     width: u32,
@@ -51,6 +54,39 @@ struct SessionInfo {
     stopped: bool,
 }
 
+impl SessionInfo {
+    fn on_event(&mut self, event: ext_image_copy_capture_session_v1::Event) {
+        use ext_image_copy_capture_session_v1::Event;
+        match event {
+            Event::BufferSize { width, height } => self.pending_size = Some((width, height)),
+            Event::ShmFormat { format } => self.pending_formats.push(match format {
+                WEnum::Value(f) => f as u32,
+                WEnum::Unknown(v) => v,
+            }),
+            Event::DmabufDevice { device } => self.dmabuf.device(&device),
+            Event::DmabufFormat { format, modifiers } => self.dmabuf.format(format, &modifiers),
+            Event::Done => {
+                if let Some((w, h)) = self.pending_size.take() {
+                    self.width = w;
+                    self.height = h;
+                }
+                if !self.pending_formats.is_empty() {
+                    self.shm_formats = std::mem::take(&mut self.pending_formats);
+                }
+                self.dmabuf.done();
+                self.done_serial += 1;
+            }
+            Event::Stopped => self.stopped = true,
+            _ => {}
+        }
+    }
+
+    /// Whether a constraints batch newer than `serial` has completed.
+    fn batch_after(&self, serial: u64) -> bool {
+        self.done_serial > serial
+    }
+}
+
 #[derive(Default)]
 struct PendingFrame {
     ready: bool,
@@ -61,6 +97,9 @@ struct PendingFrame {
 #[derive(Default)]
 struct ExtState {
     core: CoreState,
+    /// Which session `session` describes: events of any other (an old
+    /// session being replaced) are ignored.
+    session_id: u64,
     session: SessionInfo,
     pending: PendingFrame,
     /// A `zwp_linux_buffer_params_v1.failed` arrived since the last reset.
@@ -115,38 +154,17 @@ impl Dispatch<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1, ()> for ExtSta
     ]);
 }
 
-impl Dispatch<ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1, ()> for ExtState {
+impl Dispatch<ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1, u64> for ExtState {
     fn event(
         state: &mut Self,
         _: &ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1,
         event: ext_image_copy_capture_session_v1::Event,
-        _: &(),
+        id: &u64,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        use ext_image_copy_capture_session_v1::Event;
-        let s = &mut state.session;
-        match event {
-            Event::BufferSize { width, height } => s.pending_size = Some((width, height)),
-            Event::ShmFormat { format } => s.pending_formats.push(match format {
-                WEnum::Value(f) => f as u32,
-                WEnum::Unknown(v) => v,
-            }),
-            Event::DmabufDevice { device } => s.dmabuf.device(&device),
-            Event::DmabufFormat { format, modifiers } => s.dmabuf.format(format, &modifiers),
-            Event::Done => {
-                if let Some((w, h)) = s.pending_size.take() {
-                    s.width = w;
-                    s.height = h;
-                }
-                if !s.pending_formats.is_empty() {
-                    s.shm_formats = std::mem::take(&mut s.pending_formats);
-                }
-                s.dmabuf.done();
-                s.done_serial += 1;
-            }
-            Event::Stopped => s.stopped = true,
-            _ => {}
+        if *id == state.session_id {
+            state.session.on_event(event);
         }
     }
 }
@@ -182,22 +200,30 @@ impl Dispatch<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1, ()> f
 pub struct ExtImageCopy {
     ops: WaylandOps<ExtState>,
     session: ext_image_copy_capture_session_v1::ExtImageCopyCaptureSessionV1,
-    _source: ext_image_capture_source_v1::ExtImageCaptureSourceV1,
+    /// Kept to start fresh sessions on `source` (see `use_dmabuf`).
+    copy_manager: ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
+    source: ext_image_capture_source_v1::ExtImageCaptureSourceV1,
     output_id: wayland_client::backend::ObjectId,
     selected_output: String,
     pool: MemfdPool,
     cancel: Arc<AtomicBool>,
     frame_period: Duration,
     pending_frame: Option<ext_image_copy_capture_frame_v1::ExtImageCopyCaptureFrameV1>,
+    /// The constraints batch the in-flight frame's buffer was made for.
+    requested_serial: u64,
     slots: SlotState,
     pending_slot: usize,
     last_geometry: Option<BufferGeometry>,
     last_transform: OutputTransform,
     last_delivery: Option<Instant>,
+    /// Whether the last frame returned was fresh rather than a repeat.
+    last_fresh: bool,
     last_timestamp_ns: i64,
     native: (u32, u32),
     linux_dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     dmabuf: Option<DmabufMode>,
+    /// Armed by a switch to dmabuf until its session's first dmabuf frame.
+    first_dmabuf: FirstDmabufFrame,
 }
 
 /// Dmabuf mode: one `wl_buffer` per caller image, used round-robin.
@@ -305,36 +331,40 @@ impl ExtImageCopy {
                 (),
             );
         let source = source_manager.create_source(&output_proxy, &qh, ());
+        // Session 0; `ExtState::session_id` starts there.
         let session = copy_manager.create_session(
             &source,
             ext_image_copy_capture_manager_v1::Options::PaintCursors,
             &qh,
-            (),
+            0,
         );
         source_manager.destroy();
-        copy_manager.destroy();
         let linux_dmabuf = bind_linux_dmabuf(&ops.state().core, &registry, &qh);
         let pool = MemfdPool::new(&shm, &qh, 4096)
             .map_err(|e| BackendError::new(FailureKind::Error, e.to_string()))?;
         let mut this = Self {
             ops,
             session,
-            _source: source,
+            copy_manager,
+            source,
             output_id: output_proxy.id(),
             selected_output,
             pool,
             cancel,
             frame_period: Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1))),
             pending_frame: None,
+            requested_serial: 0,
             slots: SlotState::default(),
             pending_slot: 0,
             last_geometry: None,
             last_transform: output_transform,
             last_delivery: None,
+            last_fresh: false,
             last_timestamp_ns: 0,
             native: (0, 0),
             linux_dmabuf,
             dmabuf: None,
+            first_dmabuf: FirstDmabufFrame::default(),
         };
         this.wait_constraints(deadline, 0)
             .map_err(|e| open_failure("buffer constraints", e))?;
@@ -375,12 +405,15 @@ impl ExtImageCopy {
         true
     }
 
-    /// Whether a completed frame exists to repeat on a static screen.
+    /// Whether a completed frame exists to repeat on a static screen: the
+    /// last dmabuf frame, or the last shm frame until a dmabuf frame
+    /// replaces it.
     pub fn last_frame_available(&self) -> bool {
-        match &self.dmabuf {
-            Some(mode) => mode.ring.view().is_some(),
-            None => self.last_geometry.is_some(),
-        }
+        self.delivered_dmabuf().is_some() || self.last_geometry.is_some()
+    }
+
+    fn delivered_dmabuf(&self) -> Option<usize> {
+        self.dmabuf.as_ref().and_then(|mode| mode.ring.view())
     }
 
     /// The session's current dmabuf constraints, when it offers dmabuf and
@@ -396,10 +429,20 @@ impl ExtImageCopy {
     /// round-robin so the most recently delivered image is never
     /// re-attached. Views then carry `FrameSource::Dmabuf(index)`.
     ///
+    /// The switch starts a fresh capture session on the same source: a
+    /// session's first capture may not wait for the screen to change, so
+    /// the first dmabuf frame comes even on a static screen (later ones may
+    /// be held until it changes). Until it comes, the last shm frame (the
+    /// probe, at first) is the one a static screen repeats; if it has not
+    /// come within [`DMABUF_FIRST_FRAME_DEADLINE`], the compositor cannot
+    /// fill the images and capture goes back to shm on its own (see
+    /// [`uses_dmabuf`](Self::uses_dmabuf)).
+    ///
     /// On any error, validation included, the session is left in shm mode
-    /// (the previous mode's buffers and delivered frame are dropped).
+    /// (the previous dmabuf buffers and their delivered frame are dropped).
     pub fn use_dmabuf(&mut self, images: Vec<DmabufImage>) -> Result<(), CaptureFailure> {
         self.leave_mode();
+        self.restart_session()?;
         match self.build_dmabuf_mode(&images) {
             Ok(mode) => {
                 tracing::info!(
@@ -410,10 +453,43 @@ impl ExtImageCopy {
                     "ext-image-copy-capture using dmabuf buffers"
                 );
                 self.dmabuf = Some(mode);
+                self.first_dmabuf.arm(Instant::now());
                 Ok(())
             }
             Err(e) => {
                 self.leave_mode();
+                Err(e)
+            }
+        }
+    }
+
+    /// Replaces the capture session with a fresh one on the same source and
+    /// waits for its constraints. If they do not come, the old session
+    /// stays and nothing changed.
+    fn restart_session(&mut self) -> Result<(), CaptureFailure> {
+        let qh = self.ops.queue().handle();
+        let old_id = self.ops.state().session_id;
+        let new_id = old_id.wrapping_add(1);
+        let old_info = std::mem::take(&mut self.ops.state_mut().session);
+        // From here on only the new session's events reach `session`.
+        self.ops.state_mut().session_id = new_id;
+        let fresh = self.copy_manager.create_session(
+            &self.source,
+            ext_image_copy_capture_manager_v1::Options::PaintCursors,
+            &qh,
+            new_id,
+        );
+        match self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, 0) {
+            Ok(()) => {
+                std::mem::replace(&mut self.session, fresh).destroy();
+                self.requested_serial = 0;
+                Ok(())
+            }
+            Err(e) => {
+                fresh.destroy();
+                let state = self.ops.state_mut();
+                state.session_id = old_id;
+                state.session = old_info;
                 Err(e)
             }
         }
@@ -500,8 +576,16 @@ impl ExtImageCopy {
         }
     }
 
-    /// Drops the in-flight frame, the current mode's delivered frame and
-    /// the dmabuf buffers, if any.
+    /// Whether frames are captured into the dmabuf images. Turns false on
+    /// its own when the compositor filled none of them in
+    /// [`DMABUF_FIRST_FRAME_DEADLINE`]; the caller can then free them.
+    pub fn uses_dmabuf(&self) -> bool {
+        self.dmabuf.is_some()
+    }
+
+    /// Drops the in-flight frame and the dmabuf buffers with their
+    /// delivered frame, if any. A delivered shm frame stays: the shm pool
+    /// is untouched, so it is still a valid frame to repeat.
     fn leave_mode(&mut self) {
         if let Some(frame) = self.pending_frame.take() {
             frame.destroy();
@@ -509,20 +593,50 @@ impl ExtImageCopy {
         if let Some(mode) = self.dmabuf.take() {
             mode.destroy();
         }
-        self.slots.reset();
-        self.last_geometry = None;
+        self.first_dmabuf.clear();
     }
 
     /// Captures one frame. On a static screen the previous frame is
-    /// repeated once per frame period so the stream keeps its rate.
+    /// repeated once per frame period so the stream keeps its rate (see
+    /// [`repeat_deadline`] for when a repeat is due). When the buffers
+    /// changed since the last delivery (a mode switch, a switch between
+    /// shm and dmabuf) there is nothing to repeat, and a request the
+    /// compositor holds is reported as [`CaptureFailure::Unchanged`].
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
+        let now = Instant::now();
         let deadline = match self.last_delivery {
-            Some(last) if self.last_frame_available() => {
-                (last + self.frame_period).max(Instant::now() + Duration::from_millis(1))
-            }
-            _ => Instant::now() + FRAME_DEADLINE,
+            // After the session's first frame the compositor may hold a
+            // request until the screen changes.
+            Some(last) => repeat_deadline(now, last, self.last_fresh, self.frame_period),
+            None => now + FRAME_DEADLINE,
         };
         self.capture_with_deadline(deadline, true)
+    }
+
+    /// The compositor holds the request until the screen changes: repeat
+    /// the previous frame with a fresh timestamp, or say nothing changed
+    /// when the buffers changed since it was delivered.
+    fn held(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
+        if self.first_dmabuf.overdue(Instant::now()) {
+            // The fresh session's first capture is not allowed to wait for
+            // the screen to change: the compositor cannot fill the images.
+            tracing::warn!(
+                "the compositor took the dmabuf capture buffers but filled none in {} s; capturing through shared memory",
+                DMABUF_FIRST_FRAME_DEADLINE.as_secs()
+            );
+            // The shm frame is still there to repeat until shm delivers.
+            self.use_shm();
+        }
+        if self.last_frame_available() {
+            return Ok(self.last_view(true));
+        }
+        if self.last_delivery.is_none() {
+            // The session's first frame is never held: it is just late.
+            return Err(CaptureFailure::Timeout);
+        }
+        self.last_delivery = Some(Instant::now());
+        self.last_fresh = false;
+        Err(CaptureFailure::Unchanged)
     }
 
     fn wait_until(
@@ -543,14 +657,15 @@ impl ExtImageCopy {
         }
     }
 
-    /// Waits for a constraints batch newer than `after_serial`.
+    /// Waits for a constraints batch newer than `after_serial`; returns at
+    /// once when one has already arrived.
     fn wait_constraints(
         &mut self,
         deadline: Instant,
         after_serial: u64,
     ) -> Result<(), CaptureFailure> {
         self.wait_until(deadline, |s| {
-            s.session.stopped || s.session.done_serial > after_serial
+            s.session.stopped || s.session.batch_after(after_serial)
         })?;
         if self.ops.state().session.stopped {
             return Err(CaptureFailure::Failed(
@@ -595,6 +710,7 @@ impl ExtImageCopy {
             .ensure(&qh, geometry, slot)
             .map_err(|e| CaptureFailure::Failed(e.to_string()))?;
         self.pending_slot = slot;
+        self.requested_serial = self.ops.state().session.done_serial;
         self.ops.state_mut().pending = PendingFrame::default();
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(buffer);
@@ -616,6 +732,7 @@ impl ExtImageCopy {
         }
         let slot = mode.ring.next_request();
         self.pending_slot = slot;
+        self.requested_serial = self.ops.state().session.done_serial;
         self.ops.state_mut().pending = PendingFrame::default();
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(&self.dmabuf.as_ref().expect("dmabuf mode").buffers[slot]);
@@ -638,73 +755,79 @@ impl ExtImageCopy {
                 "the capture session was stopped by the compositor".into(),
             ));
         }
-        if self.pending_frame.is_none() {
-            self.request_frame()?;
-        }
-        match self.wait_until(deadline, |s| {
-            s.pending.ready || s.pending.failed.is_some() || s.session.stopped
-        }) {
-            Ok(()) => {}
-            Err(CaptureFailure::Timeout) if allow_repeat && self.last_frame_available() => {
-                // The compositor holds the request until the screen changes:
-                // repeat the previous frame with a fresh timestamp.
-                return Ok(self.last_view(true));
+        use ext_image_copy_capture_frame_v1::FailureReason;
+        let mut reallocated = false;
+        loop {
+            if self.pending_frame.is_none() {
+                self.request_frame()?;
             }
-            Err(e) => return Err(e),
-        }
-        let frame = self.pending_frame.take().expect("requested above");
-        frame.destroy();
-        let state = self.ops.state();
-        if state.session.stopped {
-            return Err(CaptureFailure::Failed(
-                "the capture session was stopped by the compositor".into(),
-            ));
-        }
-        if let Some(reason) = state.pending.failed {
-            use ext_image_copy_capture_frame_v1::FailureReason;
-            return match reason {
+            match self.wait_until(deadline, |s| {
+                s.pending.ready || s.pending.failed.is_some() || s.session.stopped
+            }) {
+                Ok(()) => {}
+                // The request stays pending for the next call.
+                Err(CaptureFailure::Timeout) if allow_repeat => return self.held(),
+                Err(e) => return Err(e),
+            }
+            let frame = self.pending_frame.take().expect("requested above");
+            frame.destroy();
+            let state = self.ops.state();
+            if state.session.stopped {
+                return Err(CaptureFailure::Failed(
+                    "the capture session was stopped by the compositor".into(),
+                ));
+            }
+            let Some(reason) = state.pending.failed else {
+                self.store_frame();
+                return Ok(self.last_view(false));
+            };
+            // The compositor sends the new constraints batch before it fails
+            // the frame, so the batch to wait for is the first one after the
+            // buffer was made, which has usually arrived already.
+            let serial = self.requested_serial;
+            match reason {
                 FailureReason::BufferConstraints if self.dmabuf.is_some() => {
                     // Wait briefly for the new batch so the caller sees
                     // fresh constraints; a missing batch is not an error.
-                    let serial = state.session.done_serial;
                     match self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial) {
                         Ok(()) | Err(CaptureFailure::Timeout) => {}
                         Err(e) => return Err(e),
                     }
-                    Err(CaptureFailure::DmabufInvalidated)
+                    return Err(CaptureFailure::DmabufInvalidated);
+                }
+                FailureReason::BufferConstraints if !reallocated => {
+                    // Ask again with buffers for the new constraints, within
+                    // the same deadline: on a static screen the compositor
+                    // may hold the new request too.
+                    self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial)?;
+                    reallocated = true;
                 }
                 FailureReason::BufferConstraints => {
-                    let serial = state.session.done_serial;
-                    self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial)?;
-                    self.request_frame()?;
-                    self.wait_until(Instant::now() + FRAME_DEADLINE, |s| {
-                        s.pending.ready || s.pending.failed.is_some()
-                    })?;
-                    let frame = self.pending_frame.take().expect("requested above");
-                    frame.destroy();
-                    if self.ops.state().pending.failed.is_some() {
-                        return Err(CaptureFailure::Failed(
-                            "the compositor rejected the frame twice".into(),
-                        ));
-                    }
-                    self.store_frame();
-                    Ok(self.last_view(false))
+                    return Err(CaptureFailure::Failed(
+                        "the compositor rejected the frame twice".into(),
+                    ));
                 }
-                FailureReason::Stopped => Err(CaptureFailure::Failed(
-                    "the capture session was stopped by the compositor".into(),
-                )),
-                _ => Err(CaptureFailure::Failed(
-                    "the compositor failed the frame".into(),
-                )),
-            };
+                FailureReason::Stopped => {
+                    return Err(CaptureFailure::Failed(
+                        "the capture session was stopped by the compositor".into(),
+                    ));
+                }
+                _ => {
+                    return Err(CaptureFailure::Failed(
+                        "the compositor failed the frame".into(),
+                    ));
+                }
+            }
         }
-        self.store_frame();
-        Ok(self.last_view(false))
     }
 
     fn store_frame(&mut self) {
         if let Some(mode) = &mut self.dmabuf {
             mode.ring.delivered(self.pending_slot);
+            self.first_dmabuf.clear();
+            // The dmabuf frame is newer: the shm one is never repeated again.
+            self.slots.reset();
+            self.last_geometry = None;
         } else {
             let geometry = self.pool.geometry();
             self.slots.delivered(self.pending_slot);
@@ -723,15 +846,17 @@ impl ExtImageCopy {
             self.last_transform = info.transform;
         }
         self.last_delivery = Some(Instant::now());
+        self.last_fresh = true;
     }
 
     fn last_view(&mut self, repeated: bool) -> FrameView<'_> {
         if repeated {
             self.last_delivery = Some(Instant::now());
+            self.last_fresh = false;
         }
         let timestamp_ns = monotonic_ns().max(self.last_timestamp_ns + 1);
         self.last_timestamp_ns = timestamp_ns;
-        if let Some(mode) = &self.dmabuf {
+        if let (Some(mode), Some(index)) = (&self.dmabuf, self.delivered_dmabuf()) {
             return FrameView {
                 data: &[],
                 stride: mode.stride as usize,
@@ -746,7 +871,7 @@ impl ExtImageCopy {
                 transform: self.last_transform,
                 timestamp_ns,
                 repeated,
-                source: FrameSource::Dmabuf(mode.ring.view().expect("caller checked")),
+                source: FrameSource::Dmabuf(index),
             };
         }
         let geometry = self.last_geometry.expect("caller checked");
@@ -829,6 +954,8 @@ impl Drop for ExtImageCopy {
             d.destroy();
         }
         self.session.destroy();
+        self.copy_manager.destroy();
+        self.source.destroy();
     }
 }
 
@@ -858,6 +985,33 @@ mod tests {
             device: 1,
             formats: vec![(DRM_FORMAT_XRGB8888, vec![0, 5])],
         }
+    }
+
+    fn batch(s: &mut SessionInfo, width: u32, height: u32) {
+        use ext_image_copy_capture_session_v1::Event;
+        s.on_event(Event::BufferSize { width, height });
+        s.on_event(Event::ShmFormat {
+            format: WEnum::Value(wl_shm::Format::Xrgb8888),
+        });
+        s.on_event(Event::Done);
+    }
+
+    #[test]
+    fn a_batch_sent_before_the_failure_is_not_waited_for() {
+        let mut s = SessionInfo::default();
+        batch(&mut s, 1920, 1080);
+        // The frame's buffer is made for this batch.
+        let requested = s.done_serial;
+        // Mode switch: the compositor sends the new batch, then fails the
+        // frame with buffer_constraints.
+        batch(&mut s, 2560, 1440);
+        assert!(
+            s.batch_after(requested),
+            "the retry may go ahead without waiting"
+        );
+        assert_eq!((s.width, s.height), (2560, 1440));
+        // Only a failure that came before its batch waits for it.
+        assert!(!s.batch_after(s.done_serial));
     }
 
     #[test]

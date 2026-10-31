@@ -189,6 +189,86 @@ fn rotations_and_flips() {
     assert_eq!(at(&o, 1, 2), 1);
 }
 
+/// A tiny image of pixel ids, `w` wide, row-major.
+#[derive(Clone, Debug, PartialEq)]
+struct Ids {
+    w: usize,
+    h: usize,
+    px: Vec<u8>,
+}
+
+impl Ids {
+    fn at(&self, x: usize, y: usize) -> u8 {
+        self.px[y * self.w + x]
+    }
+
+    /// Mirrored around the vertical axis.
+    fn flipped(&self) -> Ids {
+        let px = (0..self.h)
+            .flat_map(|y| (0..self.w).map(move |x| (x, y)))
+            .map(|(x, y)| self.at(self.w - 1 - x, y))
+            .collect();
+        Ids { px, ..self.clone() }
+    }
+
+    /// Rotated 90° counter-clockwise: the top-right corner becomes the
+    /// top-left one.
+    fn rotated_ccw(&self) -> Ids {
+        let (w, h) = (self.h, self.w);
+        let px = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| self.at(self.w - 1 - y, x))
+            .collect();
+        Ids { w, h, px }
+    }
+}
+
+#[test]
+fn all_eight_transforms_restore_the_upright_frame() {
+    // wl_output.transform: the compositor flips around the vertical axis
+    // (the flipped values) and then rotates counter-clockwise, so the buffer
+    // is the upright picture transformed that way. A 3x2 picture with
+    // distinct ids catches any swapped axis or direction.
+    let upright = Ids {
+        w: 3,
+        h: 2,
+        px: vec![1, 2, 3, 4, 5, 6],
+    };
+    let cases = [
+        (OutputTransform::Normal, false, 0),
+        (OutputTransform::Rot90, false, 1),
+        (OutputTransform::Rot180, false, 2),
+        (OutputTransform::Rot270, false, 3),
+        (OutputTransform::Flipped, true, 0),
+        (OutputTransform::Flipped90, true, 1),
+        (OutputTransform::Flipped180, true, 2),
+        (OutputTransform::Flipped270, true, 3),
+    ];
+    for (transform, flip, quarter_turns) in cases {
+        let mut buffer = if flip {
+            upright.flipped()
+        } else {
+            upright.clone()
+        };
+        for _ in 0..quarter_turns {
+            buffer = buffer.rotated_ccw();
+        }
+        let bytes: Vec<u8> = buffer.px.iter().flat_map(|&i| [i, i, i, 255]).collect();
+        let v = FrameView {
+            transform,
+            ..view(&bytes, buffer.w as u32, buffer.h as u32, PixelLayout::Bgra)
+        };
+        let mut out = BgraFrame::default();
+        normalize(&v, &mut out).unwrap();
+        let got = Ids {
+            w: out.width as usize,
+            h: out.height as usize,
+            px: out.data.chunks(4).map(|p| p[0]).collect(),
+        };
+        assert_eq!(got, upright, "{transform:?}");
+    }
+}
+
 #[test]
 fn rejects_bad_input() {
     let px = [0u8; 8];

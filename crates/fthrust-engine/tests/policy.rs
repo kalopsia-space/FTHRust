@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use fthrust_engine::policy::{
-    CaptureRecoveryPolicy, EncodeFailurePolicy, backend_candidates, next_encode_deadline,
-    recovery_order, should_repeat_last_frame, wait_for_recovery_backoff,
+    CaptureRecoveryPolicy, EncodeFailurePolicy, backend_candidates, capture_pacing_wait,
+    next_encode_deadline, recovery_order, should_repeat_last_frame, wait_for_recovery_backoff,
 };
 use fthrust_ipc::BackendKind;
 use fthrust_wayland::dispatch::WaitResult;
@@ -136,6 +136,18 @@ fn encode_deadline_reanchors_after_two_periods() {
         late,
         "later than two periods re-anchors"
     );
+}
+
+#[test]
+fn capture_waits_for_the_next_encode_slot() {
+    let next = 1_000_000_000i64;
+    assert_eq!(
+        capture_pacing_wait(next, next - 4_000_000),
+        Some(Duration::from_millis(4))
+    );
+    assert_eq!(capture_pacing_wait(next, next), None, "due now");
+    assert_eq!(capture_pacing_wait(next, next + 1), None, "late");
+    assert_eq!(capture_pacing_wait(0, next), None, "first frame");
 }
 
 #[test]

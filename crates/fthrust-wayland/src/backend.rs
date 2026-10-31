@@ -39,9 +39,15 @@ impl std::fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
-/// Why a capture call produced no frame; every variant ends the generation.
+/// Why a capture call produced no frame; every variant but
+/// [`CaptureFailure::Unchanged`] ends the generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureFailure {
+    /// The compositor holds the frame request because the screen has not
+    /// changed, and the backend has no frame of its current buffers to
+    /// repeat (they changed with a mode switch or a buffer switch): the
+    /// caller repeats what it has. Not an error.
+    Unchanged,
     /// The compositor did not answer within the frame deadline.
     Timeout,
     /// The cancel flag was set.
@@ -58,6 +64,7 @@ pub enum CaptureFailure {
 impl std::fmt::Display for CaptureFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CaptureFailure::Unchanged => f.write_str("the screen has not changed"),
             CaptureFailure::Timeout => {
                 f.write_str("the compositor did not deliver a frame in time")
             }
@@ -94,7 +101,7 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
             FailureKind::CompositorUnreachable,
             format!("{step}: the Wayland connection was lost"),
         ),
-        CaptureFailure::Timeout => BackendError::new(
+        CaptureFailure::Timeout | CaptureFailure::Unchanged => BackendError::new(
             FailureKind::CompositorUnreachable,
             format!("{step}: the compositor did not answer"),
         ),
@@ -105,6 +112,62 @@ pub(crate) fn open_failure(step: &str, failure: CaptureFailure) -> BackendError 
             FailureKind::Error,
             format!("{step}: {}", CaptureFailure::DmabufInvalidated),
         ),
+    }
+}
+
+/// How long the first capture into freshly switched-to dmabuf images may
+/// take before capture goes back to shm. The switch starts a new capture
+/// session, and a session's first capture may not wait for the screen to
+/// change, so only a compositor that cannot fill the images runs this out.
+pub const DMABUF_FIRST_FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The safety net of a switch to dmabuf: armed when the switch starts its
+/// session, cleared by that session's first dmabuf frame. Held requests
+/// after the first frame (a static screen) never trip it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FirstDmabufFrame {
+    waiting_since: Option<std::time::Instant>,
+}
+
+impl FirstDmabufFrame {
+    /// The switch to dmabuf happened at `now`.
+    pub fn arm(&mut self, now: std::time::Instant) {
+        self.waiting_since = Some(now);
+    }
+
+    /// A dmabuf frame arrived, or dmabuf mode ended.
+    pub fn clear(&mut self) {
+        self.waiting_since = None;
+    }
+
+    /// Whether the first dmabuf frame is [`DMABUF_FIRST_FRAME_DEADLINE`]
+    /// late at `now`.
+    pub fn overdue(&self, now: std::time::Instant) -> bool {
+        self.waiting_since.is_some_and(|since| {
+            now.saturating_duration_since(since) >= DMABUF_FIRST_FRAME_DEADLINE
+        })
+    }
+}
+
+/// When a capture call that started at `now` stops waiting for a fresh
+/// frame and repeats the last one, delivered at `last_delivery`.
+///
+/// After a fresh frame the call waits a frame period and a half: the
+/// engine asks for a frame only when it needs one, and a source running at
+/// about the capture rate delivers within a period of that, so a repeat
+/// due a period after the last frame would race it (and the fresh frame
+/// arriving just after the repeat was dropped). Further repeats of a
+/// static screen follow one period apart, so the frame rate holds.
+pub fn repeat_deadline(
+    now: std::time::Instant,
+    last_delivery: std::time::Instant,
+    last_was_fresh: bool,
+    frame_period: std::time::Duration,
+) -> std::time::Instant {
+    if last_was_fresh {
+        now.max(last_delivery) + frame_period + frame_period / 2
+    } else {
+        (last_delivery + frame_period).max(now + std::time::Duration::from_millis(1))
     }
 }
 

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use fthrust_core::capture_config::CaptureConfig;
 use fthrust_ipc::BackendKind;
-use fthrust_wayland::backend::{self as wb, monotonic_ns};
+use fthrust_wayland::backend::{self as wb, FirstDmabufFrame, monotonic_ns};
 use fthrust_wayland::dmabuf::{DmabufConstraints, DmabufImage};
 use fthrust_wayland::frame::{FrameSource, FrameView, OutputTransform, PixelLayout};
 
@@ -66,6 +66,11 @@ pub trait CaptureBackend: Send {
     }
     /// Captures through shared memory from now on.
     fn use_shm(&mut self) {}
+    /// Whether frames go into the images from `use_dmabuf`. A backend may
+    /// go back to shm on its own (the compositor filled none of them).
+    fn uses_dmabuf(&self) -> bool {
+        false
+    }
 }
 
 /// Creates backends.
@@ -204,6 +209,9 @@ impl CaptureBackend for ExtAdapter {
     fn use_shm(&mut self) {
         self.0.use_shm();
     }
+    fn uses_dmabuf(&self) -> bool {
+        self.0.uses_dmabuf()
+    }
 }
 
 /// The grey level of fresh frame `index` when `SyntheticScript::solid` is set.
@@ -250,13 +258,36 @@ pub struct SyntheticScript {
     /// Fill each fresh frame with one grey level that differs per frame,
     /// so a test can tell which frame a decoded picture came from.
     pub solid: bool,
+    /// Stamp each fresh frame this long before it is returned, as PipeWire
+    /// stamps portal frames with the time they were produced.
+    pub timestamp_lag: Duration,
+    /// After `.0` frames, report [`CaptureError::Unchanged`] `.1` times, a
+    /// frame interval apart, then deliver again: a static screen right
+    /// after a mode switch, with no frame of the new size to repeat.
+    pub unchanged: Option<(u64, u64)>,
     /// Offer dmabuf capture with these constraints. In dmabuf mode frames
     /// arrive as `FrameSource::Dmabuf` views with no pixel data.
     pub dmabuf: Option<DmabufConstraints>,
     /// In dmabuf mode, report `DmabufInvalidated` once after this many frames.
     pub dmabuf_invalidate_after: Option<u64>,
+    /// In dmabuf mode, complete no capture into the images: the shm frame
+    /// repeats until
+    /// [`DMABUF_FIRST_FRAME_DEADLINE`](fthrust_wayland::backend::DMABUF_FIRST_FRAME_DEADLINE)
+    /// runs out, then the backend goes back to shm on its own, as
+    /// ext-image-copy does.
+    ///
+    /// Otherwise dmabuf mode behaves like ext-image-copy after its switch
+    /// to a fresh session: the first dmabuf frame comes even when the
+    /// screen is static (`static_after`), and later ones repeat it.
+    pub dmabuf_never_filled: bool,
     /// `use_dmabuf` calls that succeeded (tests read it).
     pub dmabuf_uses: u64,
+    /// `capture` calls so far, each one a frame the compositor would copy
+    /// (tests read it).
+    pub captures: u64,
+    /// Backends opened so far (for the portal: sessions started; tests
+    /// read it).
+    pub opens: u64,
 }
 
 impl SyntheticScript {
@@ -272,9 +303,14 @@ impl SyntheticScript {
             transform: OutputTransform::Normal,
             static_after: None,
             solid: false,
+            timestamp_lag: Duration::ZERO,
+            unchanged: None,
             dmabuf: None,
             dmabuf_invalidate_after: None,
+            dmabuf_never_filled: false,
             dmabuf_uses: 0,
+            captures: 0,
+            opens: 0,
         }
     }
 
@@ -348,6 +384,7 @@ impl BackendFactory for SyntheticFactory {
         } else {
             outputs.first().cloned().unwrap_or_default()
         };
+        script.opens += 1;
         Ok(Box::new(SyntheticBackend {
             kind,
             script: self.script.clone(),
@@ -361,7 +398,10 @@ impl BackendFactory for SyntheticFactory {
             next_at: Instant::now(),
             dmabuf_images: 0,
             dmabuf_next: 0,
+            dmabuf_last: None,
             dmabuf_invalidated: false,
+            first_dmabuf: FirstDmabufFrame::default(),
+            unchanged_reported: 0,
         }))
     }
 }
@@ -380,7 +420,11 @@ struct SyntheticBackend {
     /// Images handed over by `use_dmabuf`; 0 in shm mode.
     dmabuf_images: usize,
     dmabuf_next: usize,
+    /// The image of the last dmabuf frame of this dmabuf mode.
+    dmabuf_last: Option<usize>,
     dmabuf_invalidated: bool,
+    first_dmabuf: FirstDmabufFrame,
+    unchanged_reported: u64,
 }
 
 impl CaptureBackend for SyntheticBackend {
@@ -393,7 +437,8 @@ impl CaptureBackend for SyntheticBackend {
             return Err(CaptureError::Cancelled);
         }
         let (interval, short_stride, black, error, transform) = {
-            let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            let mut s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            s.captures += 1;
             let k = s.kinds.get(&self.kind);
             (
                 s.frame_interval,
@@ -413,13 +458,22 @@ impl CaptureBackend for SyntheticBackend {
             std::thread::sleep(self.next_at - now);
         }
         self.next_at = Instant::now() + interval;
-        let solid = self.script.lock().unwrap_or_else(|p| p.into_inner()).solid;
-        let is_static = self
-            .script
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .static_after
-            .is_some_and(|n| self.frames >= n);
+        let (solid, is_static, lag, unchanged) = {
+            let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                s.solid,
+                s.static_after.is_some_and(|n| self.frames >= n),
+                s.timestamp_lag,
+                s.unchanged,
+            )
+        };
+        if let Some((after, count)) = unchanged
+            && self.frames >= after
+            && self.unchanged_reported < count
+        {
+            self.unchanged_reported += 1;
+            return Err(CaptureError::Unchanged);
+        }
         let (w, h) = (self.width as usize, self.height as usize);
         let stride = if short_stride { w * 4 - 4 } else { w * 4 };
         self.buffer.resize(stride * h, 0);
@@ -443,21 +497,45 @@ impl CaptureBackend for SyntheticBackend {
             }
         }
         self.frames += 1;
-        let ts = monotonic_ns().max(self.last_ts + 1);
+        let lag = if is_static { 0 } else { lag.as_nanos() as i64 };
+        let ts = (monotonic_ns() - lag).max(self.last_ts + 1);
         self.last_ts = ts;
+        let mut unfilled_repeat = false;
         if self.dmabuf_images > 0 {
-            let invalidate_after = self
-                .script
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .dmabuf_invalidate_after;
+            let (invalidate_after, never_filled) = {
+                let s = self.script.lock().unwrap_or_else(|p| p.into_inner());
+                (s.dmabuf_invalidate_after, s.dmabuf_never_filled)
+            };
             if !self.dmabuf_invalidated && invalidate_after.is_some_and(|n| self.frames > n) {
                 self.dmabuf_invalidated = true;
                 self.dmabuf_images = 0;
                 return Err(CaptureError::DmabufInvalidated);
             }
-            let index = self.dmabuf_next;
-            self.dmabuf_next = (index + 1) % self.dmabuf_images;
+            if never_filled {
+                if self.first_dmabuf.overdue(Instant::now()) {
+                    // As ext-image-copy does: no frame came into the images,
+                    // so capture goes back to shm.
+                    self.dmabuf_images = 0;
+                    self.first_dmabuf.clear();
+                } else {
+                    // The dmabuf request is held: the shm frame repeats.
+                    unfilled_repeat = true;
+                }
+            }
+        }
+        if self.dmabuf_images > 0 && !unfilled_repeat {
+            // The switch to dmabuf started a fresh session, whose first
+            // capture comes even on a static screen; later ones repeat it.
+            let (index, repeated) = match self.dmabuf_last {
+                Some(last) if is_static => (last, true),
+                _ => {
+                    let index = self.dmabuf_next;
+                    self.dmabuf_next = (index + 1) % self.dmabuf_images;
+                    (index, false)
+                }
+            };
+            self.dmabuf_last = Some(index);
+            self.first_dmabuf.clear();
             return Ok(FrameView {
                 data: &[],
                 stride: self.width as usize * 4,
@@ -467,7 +545,7 @@ impl CaptureBackend for SyntheticBackend {
                 y_invert: false,
                 transform,
                 timestamp_ns: ts,
-                repeated: false,
+                repeated,
                 source: FrameSource::Dmabuf(index),
             });
         }
@@ -480,9 +558,13 @@ impl CaptureBackend for SyntheticBackend {
             y_invert: false,
             transform,
             timestamp_ns: ts,
-            repeated: is_static,
+            repeated: is_static || unfilled_repeat,
             source: FrameSource::Shm,
         })
+    }
+
+    fn uses_dmabuf(&self) -> bool {
+        self.dmabuf_images > 0
     }
 
     fn native_size(&self) -> (u32, u32) {
@@ -528,10 +610,14 @@ impl CaptureBackend for SyntheticBackend {
         s.dmabuf_uses += 1;
         self.dmabuf_images = images.len();
         self.dmabuf_next = 0;
+        self.dmabuf_last = None;
+        self.first_dmabuf.arm(Instant::now());
         Ok(())
     }
 
     fn use_shm(&mut self) {
         self.dmabuf_images = 0;
+        self.dmabuf_last = None;
+        self.first_dmabuf.clear();
     }
 }
