@@ -176,6 +176,29 @@ fn a_diagnostics_session_that_cannot_start_leaves_the_app_without_one() {
 }
 
 #[test]
+fn a_report_made_without_a_live_session_leaves_no_crash_marker() {
+    // Diagnostics could not start at launch (a full disk), so there is no
+    // live session; the disk has room again when the user asks for a report.
+    let (_tmp, mut s) = state();
+    assert!(s.diagnostics.is_none());
+    let zip = fthrust_ui::dialogs::diagnostic_report::export(&mut s).unwrap();
+    assert!(zip.exists());
+    assert!(
+        !s.paths
+            .diagnostics_dir()
+            .join("active-session.json")
+            .exists(),
+        "the report's own session is closed: no marker for the next launch to call a crash"
+    );
+    let next =
+        fthrust_core::diagnostics::session::DiagnosticsSession::start(&s.paths, "next").unwrap();
+    assert!(
+        next.previous_unclean().is_none(),
+        "the next launch is not told the previous one did not shut down cleanly"
+    );
+}
+
+#[test]
 fn startup_notices_are_not_swallowed_by_the_error_notification_setting() {
     use fthrust_ui::shell::error_bar::Level;
     let tmp = tempfile::tempdir().unwrap();
