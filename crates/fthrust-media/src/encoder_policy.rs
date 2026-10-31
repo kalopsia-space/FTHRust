@@ -110,9 +110,11 @@ pub fn is_hardware(codec_name: &str) -> bool {
 }
 
 /// The `thread_count` an encoder opens with: `Some(0)`, FFmpeg's automatic
-/// count, for software encoders (most of their wrappers otherwise run the
-/// library on one thread), and `None` to leave hardware encoders as they
-/// are.
+/// count, for software encoders, and `None` to leave hardware encoders as
+/// they are. OpenH264, libaom and rav1e otherwise run on one thread, and
+/// x265 on one frame thread (zerolatency keeps it at one anyway); x264
+/// already defaults to automatic threads, and Kvazaar and SVT-AV1 ignore
+/// `thread_count` and choose their own.
 pub fn thread_count(codec_name: &str) -> Option<i32> {
     (!is_hardware(codec_name)).then_some(0)
 }
