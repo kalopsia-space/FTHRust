@@ -1,6 +1,7 @@
 //! The `~/.fthr` path map and the private runtime directory.
 
 use crate::error::{CoreError, Result};
+use crate::fsutil;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
@@ -109,6 +110,19 @@ impl FthrPaths {
     /// `uploader/`.
     pub fn uploader_dir(&self) -> PathBuf {
         self.root().join("uploader")
+    }
+    /// Creates `uploader/` with mode `0700`, or takes group and other access
+    /// away from an existing one: it holds the upload credentials.
+    pub fn ensure_uploader_dir(&self) -> Result<PathBuf> {
+        let dir = self.uploader_dir();
+        fsutil::ensure_private_dir(&dir)?;
+        Ok(dir)
+    }
+    /// Restricts the directories that hold credentials to their owner when
+    /// they already exist. Called at startup for profiles made before they
+    /// were private; a missing directory stays missing.
+    pub fn restrict_private_dirs(&self) {
+        fsutil::tighten_dir(&self.uploader_dir());
     }
     /// `uploader/settings.json`.
     pub fn uploader_settings_file(&self) -> PathBuf {

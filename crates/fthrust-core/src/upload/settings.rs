@@ -128,12 +128,11 @@ impl UploaderSettings {
         Self { data }
     }
 
-    /// Writes the file atomically with sorted keys, never the password.
+    /// Writes the file atomically with sorted keys, never the password. The
+    /// file is private (`0600`) in a private directory (`0700`).
     pub fn save(&self, paths: &FthrPaths) -> crate::Result<()> {
         let path = paths.uploader_settings_file();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        paths.ensure_uploader_dir()?;
         let mut keys: Vec<&String> = self.data.keys().collect();
         keys.sort();
         let sorted: Map<String, Value> = keys
