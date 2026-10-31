@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice]...
+# Tests for the packaging scripts. Usage: tools/test-packaging.sh [fetch|gate|version|install|notes|archive|links|ffnotice|desktop]...
 # (no argument runs every group). The fetch group downloads the pinned
 # AppImage runtime (~1 MB); the gate group needs the fetched FFmpeg tree,
 # patchelf and cc; the archive group needs git.
@@ -401,8 +401,18 @@ group_ffnotice() {
     else fail ffnotice_committed_notices_have_the_section "run tools/gen-notices.sh"; fi
 }
 
+group_desktop() {
+    local name title
+    name="$(sed -n 's/^Name=//p' "$ROOT/packaging/space.kalopsia.fthrust.desktop")"
+    title="$(sed -n 's/.*\.with_title("\(.*\)").*/\1/p' "$ROOT/crates/fthrust-ui/src/main.rs" | head -1)"
+    if [ -z "$title" ]; then fail desktop_name_is_the_window_title "no window title found in crates/fthrust-ui/src/main.rs"; return; fi
+    # "FTHR Clips" is the original app's name; two launchers with it would be indistinguishable.
+    if [ "$name" = "$title" ] && [ "$name" != "FTHR Clips" ]; then pass desktop_name_is_the_window_title
+    else fail desktop_name_is_the_window_title "launcher Name=$name, window title $title"; fi
+}
+
 groups=("$@")
-[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice)
+[ ${#groups[@]} -eq 0 ] && groups=(fetch gate version install notes archive links ffnotice desktop)
 for g in "${groups[@]}"; do
     if ! declare -F "group_$g" >/dev/null; then fail "group_$g" "no such group"; continue; fi
     "group_$g"
