@@ -538,6 +538,45 @@ fn a_black_screen_restarts_capture_once() {
 }
 
 #[test]
+fn a_black_screen_never_reopens_the_portal() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // On the portal a restart means a new ScreenCast session, which can
+    // put the picker in front of the game: a dark run is only flagged.
+    let mut script = SyntheticScript::new(320, 180);
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    script.black = true;
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script: script.clone(),
+            candidates: vec![BackendKind::PortalScreenCast],
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    let mut engine = CaptureEngine::new(config(|c| c.fps = 30), deps);
+    engine.start().unwrap();
+    // Two samples past the one that makes the content suspect.
+    let s = wait_for(&engine, Duration::from_secs(30), |s| {
+        s.content_suspicious_streak >= 14
+    });
+    engine.shutdown();
+    assert_ne!(s.health_flags & flags::CONTENT_SUSPECT, 0, "{s:?}");
+    assert_eq!(s.capture_generation, 1, "{s:?}");
+    assert_eq!(script.lock().unwrap().opens, 1, "the session was reopened");
+    assert!(sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
 fn startup_without_wayland_is_coded() {
     let deps = EngineDeps {
         backends: Arc::new(RealFactory::assume_wayland(false)),

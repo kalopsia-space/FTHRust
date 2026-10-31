@@ -116,7 +116,7 @@ The monitor list defaults to **First Screen (Default)**. Pick a specific output 
 
 Behind the scenes the engine tries three ways of capturing, in order: `ext-image-copy-capture`, `wlr-screencopy`, then the desktop's ScreenCast portal. The first two need no permission dialog. When one of them is only waiting for the compositor to answer, or for your monitor to come back, the engine waits instead of falling back to the portal. The portal asks once, remembers your answer, and is never re-opened on its own while recovering from an error, so a dialog never pops up mid-game. The cursor is included in all three.
 
-If capture stalls, the engine notices, recovers, and shows **RECOVERING CAPTURE** while it does. If the picture stays black or one flat colour for 12 seconds, it restarts capture once in case the feed itself is broken; if the screen really is that dark, it shows **CAPTURE DEGRADED — DARK / UNIFORM** until the picture changes, without restarting again.
+If capture stalls, the engine notices, recovers, and shows **RECOVERING CAPTURE** while it does. If the picture stays black or one flat colour for 12 seconds, it restarts capture once in case the feed itself is broken (never through the portal, where a restart could bring its dialog back); if the screen really is that dark, it shows **CAPTURE DEGRADED — DARK / UNIFORM** until the picture changes, without restarting again.
 
 ## Game detection
 

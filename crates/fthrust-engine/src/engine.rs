@@ -1186,7 +1186,10 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
             if let Some(m) = sampled {
                 publish_content(&inner, m);
-                if m.recover {
+                // On the portal a restart is a new ScreenCast session, whose
+                // picker could come up over the game (and dismissing it ends
+                // capture): there the content is only flagged.
+                if m.recover && kind != BackendKind::PortalScreenCast {
                     tracing::warn!(
                         samples = m.streak,
                         "{CONTENT_RECOVERY_REASON}; restarting capture"

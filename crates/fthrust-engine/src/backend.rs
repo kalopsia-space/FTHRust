@@ -267,6 +267,9 @@ pub struct SyntheticScript {
     /// `capture` calls so far, each one a frame the compositor would copy
     /// (tests read it).
     pub captures: u64,
+    /// Backends opened so far (for the portal: sessions started; tests
+    /// read it).
+    pub opens: u64,
 }
 
 impl SyntheticScript {
@@ -288,6 +291,7 @@ impl SyntheticScript {
             dmabuf_invalidate_after: None,
             dmabuf_uses: 0,
             captures: 0,
+            opens: 0,
         }
     }
 
@@ -361,6 +365,7 @@ impl BackendFactory for SyntheticFactory {
         } else {
             outputs.first().cloned().unwrap_or_default()
         };
+        script.opens += 1;
         Ok(Box::new(SyntheticBackend {
             kind,
             script: self.script.clone(),
