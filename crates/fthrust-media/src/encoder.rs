@@ -46,6 +46,14 @@ struct FrameTiming {
     wall_time_ns: i64,
 }
 
+/// What choosing a frame's pts and keyframe changes.
+#[derive(Clone, Copy, Debug)]
+struct Clock {
+    epoch_ns: Option<i64>,
+    last_input_pts: i64,
+    keyframe_requested: bool,
+}
+
 /// Where BGRA is converted to the encoder's pixel format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conversion {
@@ -99,6 +107,7 @@ pub struct Encoder {
     /// was last (re)built.
     gpu_proven: bool,
     inject_convert_failure: bool,
+    inject_send_failure: bool,
     hw_frame: Option<OwnedFrame>,
     /// Scratch frame holding a fresh reference to the last frame for repeats.
     repeat_frame: OwnedFrame,
@@ -136,6 +145,20 @@ impl Encoder {
     #[doc(hidden)]
     pub fn inject_gpu_convert_failure(&mut self) {
         self.inject_convert_failure = true;
+    }
+
+    /// Makes the next frame fail before it reaches the codec, on any path
+    /// (tests).
+    #[doc(hidden)]
+    pub fn inject_send_failure(&mut self) {
+        self.inject_send_failure = true;
+    }
+
+    fn injected_send_failure(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.inject_send_failure) {
+            return Err(MediaError::Invalid("injected send failure".into()));
+        }
+        Ok(())
     }
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
@@ -330,6 +353,7 @@ impl Encoder {
             cpu,
             gpu_proven: false,
             inject_convert_failure: false,
+            inject_send_failure: false,
             hw_frame,
             repeat_frame: OwnedFrame::empty()?,
             last_frame_valid: false,
@@ -520,18 +544,10 @@ impl Encoder {
         // Nothing reaches the codec on a failure: restore the clock state
         // so the caller's retry through `encode` gets this frame's pts and
         // keyframe.
-        let saved = (
-            self.pts_epoch_ns,
-            self.last_input_pts,
-            self.keyframe_requested,
-        );
+        let clock = self.clock();
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
         if let Err(e) = self.convert_surface_and_send(index, frame_pts, force_key) {
-            (
-                self.pts_epoch_ns,
-                self.last_input_pts,
-                self.keyframe_requested,
-            ) = saved;
+            self.restore_clock(clock);
             tracing::debug!(reason = %e, "encoding from the capture surface failed");
             return Err(e);
         }
@@ -635,16 +651,16 @@ impl Encoder {
             }
         }
 
+        // A frame that never reaches the codec leaves the clock as it was,
+        // so a pending keyframe request waits for the next frame that does.
+        let clock = self.clock();
         let (frame_pts, force_key) = self.next_pts_and_key(wall_time_ns);
-
-        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
-        let mut sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
-        if first_gpu && let Err(e) = &sent {
-            log_gpu_fallback(e);
-            self.switch_to_cpu(width, height)?;
-            sent = self.convert_and_send(bgra, stride, width, height, frame_pts, force_key);
+        if let Err(e) =
+            self.convert_with_fallback(bgra, stride, width, height, frame_pts, force_key)
+        {
+            self.restore_clock(clock);
+            return Err(e);
         }
-        sent?;
         if self.cpu.is_none() {
             self.gpu_proven = true;
         }
@@ -657,6 +673,44 @@ impl Encoder {
             self.last_forced_keyframe_pts = frame_pts;
         }
         self.drain(wall_time_ns, out)
+    }
+
+    /// [`Encoder::convert_and_send`], retried on the CPU when the first GPU
+    /// frame fails.
+    fn convert_with_fallback(
+        &mut self,
+        bgra: &[u8],
+        stride: usize,
+        width: u32,
+        height: u32,
+        pts: i64,
+        force_key: bool,
+    ) -> Result<()> {
+        let first_gpu = self.cpu.is_none() && !self.gpu_proven;
+        match self.convert_and_send(bgra, stride, width, height, pts, force_key) {
+            Err(e) if first_gpu => {
+                log_gpu_fallback(&e);
+                self.switch_to_cpu(width, height)?;
+                self.convert_and_send(bgra, stride, width, height, pts, force_key)
+            }
+            sent => sent,
+        }
+    }
+
+    /// The clock state [`Encoder::next_pts_and_key`] advances.
+    fn clock(&self) -> Clock {
+        Clock {
+            epoch_ns: self.pts_epoch_ns,
+            last_input_pts: self.last_input_pts,
+            keyframe_requested: self.keyframe_requested,
+        }
+    }
+
+    /// Undoes [`Encoder::next_pts_and_key`] for a frame the codec never got.
+    fn restore_clock(&mut self, clock: Clock) {
+        self.pts_epoch_ns = clock.epoch_ns;
+        self.last_input_pts = clock.last_input_pts;
+        self.keyframe_requested = clock.keyframe_requested;
     }
 
     /// The pts for a frame captured at `wall_time_ns` and whether it is a
@@ -704,10 +758,17 @@ impl Encoder {
             (None, None) => return Ok(false),
         };
         self.repeat_frame.reference(last)?;
+        let clock = self.clock();
         let (pts, force_key) = self.next_pts_and_key(wall_time_ns);
         self.repeat_frame.set_pts(pts);
         self.repeat_frame.set_forced_keyframe(force_key);
-        self.raw.send_frame(Some(&self.repeat_frame))?;
+        let sent = self
+            .injected_send_failure()
+            .and_then(|()| self.raw.send_frame(Some(&self.repeat_frame)));
+        if let Err(e) = sent {
+            self.restore_clock(clock);
+            return Err(e);
+        }
         self.pending.push_back(FrameTiming { pts, wall_time_ns });
         if force_key {
             self.last_forced_keyframe_pts = pts;
@@ -744,6 +805,7 @@ impl Encoder {
         pts: i64,
         force_key: bool,
     ) -> Result<()> {
+        self.injected_send_failure()?;
         if let Some(cpu) = &mut self.cpu {
             if cpu.scaler.source_size() != (width, height) {
                 tracing::info!(
