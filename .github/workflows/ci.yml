@@ -58,6 +58,14 @@ jobs:
             echo "$tracked" >&2
             exit 1
           fi
+      - name: Links and doc references resolve
+        run: |
+          packaging/check-notice-links.sh README.md CHANGES.md docs/*.md
+          missing=0
+          for ref in $(grep -ohE '`docs/[A-Za-z0-9_./-]+\.md`' README.md CHANGES.md docs/*.md | tr -d '`' | sort -u); do
+            [ -e "$ref" ] || { echo "dangling doc reference: $ref" >&2; missing=1; }
+          done
+          exit $missing
       - run: packaging/fetch-third-party.sh --ffmpeg
       - run: tools/gen-notices.sh --check
       - run: tools/test-packaging.sh
