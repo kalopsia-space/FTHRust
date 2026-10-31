@@ -33,6 +33,7 @@ fn config(f: impl FnOnce(&mut CaptureConfig)) -> EngineConfig {
         capture,
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 

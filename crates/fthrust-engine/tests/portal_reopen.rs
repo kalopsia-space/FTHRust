@@ -77,5 +77,6 @@ fn portal_opens_again_in_one_process_and_keeps_the_token() {
         Err(f) => f,
     };
     assert!(failure.retry_pointless, "{failure:?}");
+    assert!(failure.needs_dialog, "{failure:?}");
     assert!(failure.reason.contains("dialog"), "{}", failure.reason);
 }

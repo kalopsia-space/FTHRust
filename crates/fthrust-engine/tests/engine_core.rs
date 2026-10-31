@@ -39,6 +39,7 @@ fn config(f: impl FnOnce(&mut CaptureConfig)) -> EngineConfig {
         capture,
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -605,6 +606,14 @@ fn a_black_screen_never_reopens_the_portal() {
 /// A synthetic engine over `kinds` (in that candidate order) whose
 /// backoffs are recorded instead of slept.
 fn engine_over(script: SyntheticScript, candidates: Vec<BackendKind>) -> Harness {
+    engine_with(config(|_| {}), script, candidates)
+}
+
+fn engine_with(
+    cfg: EngineConfig,
+    script: SyntheticScript,
+    candidates: Vec<BackendKind>,
+) -> Harness {
     let script = Arc::new(Mutex::new(script));
     let sleeps = Arc::new(Mutex::new(Vec::new()));
     let recorded = sleeps.clone();
@@ -620,7 +629,7 @@ fn engine_over(script: SyntheticScript, candidates: Vec<BackendKind>) -> Harness
         }),
     };
     Harness {
-        engine: CaptureEngine::new(config(|_| {}), deps),
+        engine: CaptureEngine::new(cfg, deps),
         script,
         sleeps,
     }
@@ -690,6 +699,57 @@ fn only_the_first_open_may_show_a_dialog() {
         ],
         "{reasons:?}"
     );
+}
+
+#[test]
+fn an_engine_the_app_restarted_on_its_own_never_opens_with_a_dialog() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The app restarts a crashed or hung engine without the user asking:
+    // that engine's first open is already restore-only.
+    let mut script = SyntheticScript::new(320, 180);
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    let mut cfg = config(|_| {});
+    cfg.automatic_start = true;
+    let mut h = engine_with(cfg, script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    h.engine.shutdown();
+    let reasons = h.script.lock().unwrap().open_reasons.clone();
+    assert_eq!(
+        reasons,
+        [(BackendKind::PortalScreenCast, OpenReason::Recovery)],
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn an_automatic_start_the_portal_cannot_restore_is_coded() {
+    // The app restarted the engine on its own, and the portal has no saved
+    // choice: going on would mean its dialog. Capture stops with a code of
+    // its own, not as if the user had dismissed the picker. (No portal is
+    // contacted: without a token the restore-only open fails at once.)
+    let home = tempfile::tempdir().unwrap();
+    let deps = EngineDeps {
+        backends: Arc::new(
+            RealFactory::assume_wayland(true).with_paths(fthrust_core::FthrPaths::new(home.path())),
+        ),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+    };
+    let mut cfg = config(|_| {});
+    cfg.backend_override = Some(BackendKind::PortalScreenCast);
+    cfg.automatic_start = true;
+    let mut engine = CaptureEngine::new(cfg, deps);
+    let err = engine.start().unwrap_err();
+    engine.shutdown();
+    assert_eq!(err.code, "CAPTURE_NOT_RESTORED", "{err:?}");
+    assert!(err.detail.contains("dialog"), "{err:?}");
 }
 
 #[test]

@@ -16,6 +16,7 @@ fn an_engine_that_exits_during_a_quit_is_not_restarted() {
         capture: CaptureConfig::from_settings(&s.settings).unwrap(),
         max_buffer_mb: 256,
         backend_override: None,
+        automatic_start: false,
     };
     let mut sv = Supervisor::new();
     let pid = 4242;

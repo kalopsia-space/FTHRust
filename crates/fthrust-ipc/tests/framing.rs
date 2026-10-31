@@ -59,6 +59,7 @@ fn commands() -> Vec<Command> {
             },
             max_buffer_mb: 512,
             backend_override: Some(BackendKind::WlrScreencopy),
+            automatic_start: true,
         }),
         Command::SaveClip {
             request_id: 1,
@@ -104,6 +105,24 @@ fn roundtrip_command_and_event() {
         let bytes = encode(&e).unwrap();
         assert_eq!(decode::<Event>(&bytes[4..]).unwrap(), e);
     }
+}
+
+/// An app from before `automatic_start` sends a `Configure` without it:
+/// it still parses, as a start the user asked for.
+#[test]
+fn a_configure_without_automatic_start_is_a_users_start() {
+    let Command::Configure(config) = commands().remove(0) else {
+        unreachable!("the first command is a Configure")
+    };
+    let mut json = serde_json::to_value(Command::Configure(config)).unwrap();
+    let fields = json["Configure"].as_object_mut().unwrap();
+    assert_eq!(fields.remove("automatic_start"), Some(true.into()));
+    let body = serde_json::to_vec(&json).unwrap();
+    let Command::Configure(parsed) = decode::<Command>(&body).unwrap() else {
+        panic!("not a Configure")
+    };
+    assert!(!parsed.automatic_start);
+    assert_eq!(parsed.max_buffer_mb, 512);
 }
 
 #[test]

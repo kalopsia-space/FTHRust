@@ -77,6 +77,12 @@ pub enum Input {
         /// An explicit restart (shortcut, error bar) shows `RESTARTING
         /// ENGINE`; a settings apply shows `APPLYING SETTINGS`.
         explicit: bool,
+        /// The app restarts the engine on its own (game detection switching
+        /// to or from a game, the clips profile coming back after a
+        /// recording): the new engine never brings up the portal's dialog.
+        /// Off for every restart the user asked for (a settings apply,
+        /// RESTART ENGINE and the other error-bar restarts, Record).
+        automatic: bool,
     },
     /// Focus pause.
     Pause,
@@ -168,6 +174,37 @@ enum Phase {
     Stopping,
 }
 
+/// A restart waiting its turn: behind a save, or behind the restart under
+/// way.
+#[derive(Clone, Debug)]
+struct WaitingRestart {
+    config: EngineConfig,
+    allow_recording_prepare: bool,
+    explicit: bool,
+    automatic: bool,
+}
+
+impl WaitingRestart {
+    /// Takes the place of `earlier`: the newest settings win, an explicit
+    /// ask stays explicit, and an ask of the user's stays the user's.
+    fn replacing(self, earlier: Option<&WaitingRestart>) -> WaitingRestart {
+        WaitingRestart {
+            explicit: self.explicit || earlier.is_some_and(|e| e.explicit),
+            automatic: self.automatic && earlier.is_none_or(|e| e.automatic),
+            ..self
+        }
+    }
+
+    fn into_input(self) -> Input {
+        Input::Restart {
+            config: self.config,
+            allow_recording_prepare: self.allow_recording_prepare,
+            explicit: self.explicit,
+            automatic: self.automatic,
+        }
+    }
+}
+
 /// The engine supervisor.
 pub struct Supervisor {
     generation: u64,
@@ -183,11 +220,18 @@ pub struct Supervisor {
     restart_pending: bool,
     restart_requested: bool,
     restart_at: Option<f64>,
+    /// The armed `restart_at` is one the app makes on its own (after a
+    /// crash or a hang, or an automatic `Input::Restart`), not one the user
+    /// asked for: the engine it starts is told so, and never brings up the
+    /// portal's dialog.
+    restart_is_automatic: bool,
+    /// The latest start was the app's own; its `Configure` says so.
+    start_is_automatic: bool,
     defer_restart_until: Option<f64>,
-    deferred_restart: Option<(EngineConfig, bool, bool)>,
+    deferred_restart: Option<WaitingRestart>,
     /// A restart asked for after the running one already configured its
     /// process; it runs once that apply settles.
-    queued_restart: Option<(EngineConfig, bool, bool)>,
+    queued_restart: Option<WaitingRestart>,
     /// When the engine was last restarted on its own (crash or hang).
     auto_restarts: Vec<f64>,
     /// The app is quitting: nothing starts the engine again.
@@ -231,6 +275,8 @@ impl Supervisor {
             restart_pending: false,
             restart_requested: false,
             restart_at: None,
+            restart_is_automatic: false,
+            start_is_automatic: false,
             defer_restart_until: None,
             deferred_restart: None,
             queued_restart: None,
@@ -386,10 +432,20 @@ impl Supervisor {
         }));
     }
 
-    fn begin_start(&mut self, config: EngineConfig, out: &mut Vec<Effect>, now: f64) {
+    /// Starts an engine; `automatic` when the app does it on its own (see
+    /// `restart_is_automatic`), never for a start the user asked for. The
+    /// `Configure` of this start carries it, whatever `config` says.
+    fn begin_start(
+        &mut self,
+        config: EngineConfig,
+        automatic: bool,
+        out: &mut Vec<Effect>,
+        now: f64,
+    ) {
         if self.final_stop {
             return;
         }
+        self.start_is_automatic = automatic;
         self.generation += 1;
         self.process_generation = Some(self.generation);
         self.exit_code = None;
@@ -413,6 +469,7 @@ impl Supervisor {
     fn no_more_starts(&mut self, out: &mut Vec<Effect>) {
         self.final_stop = true;
         self.restart_at = None;
+        self.restart_is_automatic = false;
         self.defer_restart_until = None;
         self.deferred_restart = None;
         self.queued_restart = None;
@@ -477,6 +534,7 @@ impl Supervisor {
         }
         self.auto_restarts.push(now);
         self.restart_at = Some(now + AUTO_RESTART_DELAY_S);
+        self.restart_is_automatic = true;
         out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
     }
 
@@ -520,7 +578,7 @@ impl Supervisor {
         match input {
             Input::Start(config) => {
                 if matches!(self.phase, Phase::Stopped) {
-                    self.begin_start(config, &mut out, now);
+                    self.begin_start(config, false, &mut out, now);
                 }
             }
             Input::Quitting => self.no_more_starts(&mut out),
@@ -539,6 +597,7 @@ impl Supervisor {
                 config,
                 allow_recording_prepare,
                 explicit,
+                automatic,
             } => {
                 if self.final_stop {
                     return out;
@@ -560,14 +619,19 @@ impl Supervisor {
                     self.restart_requested = true;
                 }
                 self.applying = true;
+                let waiting = WaitingRestart {
+                    config,
+                    allow_recording_prepare,
+                    explicit,
+                    automatic,
+                };
                 if self.save_busy {
                     self.status(&mut out, self.pending_text(), StatusStyle::Idle);
-                    // The newest settings win; an explicit ask stays explicit.
-                    let explicit = explicit || self.deferred_restart.as_ref().is_some_and(|d| d.2);
                     if self.deferred_restart.is_none() {
                         self.defer_restart_until = Some(now + RESTART_DEFER_S);
                     }
-                    self.deferred_restart = Some((config, allow_recording_prepare, explicit));
+                    let waiting = waiting.replacing(self.deferred_restart.as_ref());
+                    self.deferred_restart = Some(waiting);
                     return out;
                 }
                 if self.restart_pending {
@@ -576,22 +640,28 @@ impl Supervisor {
                     // after that, they need one more restart once this one
                     // settles (both used to be dropped).
                     if self.pending_launch.is_some() {
-                        let explicit =
-                            explicit || self.queued_restart.as_ref().is_some_and(|q| q.2);
-                        self.queued_restart = Some((config, allow_recording_prepare, explicit));
+                        let waiting = waiting.replacing(self.queued_restart.as_ref());
+                        self.queued_restart = Some(waiting);
                     } else {
                         // The tracker must hold what Configure will send, or
                         // the old settings are reported as active.
-                        self.tracker.request(config.capture.clone());
+                        self.tracker.request(waiting.config.capture.clone());
                         let _ = self.tracker.begin_apply();
-                        self.config = Some(config);
+                        self.config = Some(waiting.config);
+                        // Started on its own only if both asks were the
+                        // app's own (the armed restart, or the start whose
+                        // Configure is still to be sent).
+                        self.restart_is_automatic &= waiting.automatic;
+                        self.start_is_automatic &= waiting.automatic;
                     }
                     return out;
                 }
                 self.restart_pending = true;
                 self.apply_deadline = Some(now + APPLY_TIMEOUT_S);
                 self.status(&mut out, self.pending_text(), StatusStyle::Idle);
-                self.config = Some(config);
+                self.config = Some(waiting.config);
+                // Replaces a restart still armed after a crash or hang.
+                self.restart_is_automatic = waiting.automatic;
                 match self.phase {
                     Phase::Stopped => {
                         self.restart_at = Some(now + RESTART_GAP_S);
@@ -668,7 +738,8 @@ impl Supervisor {
                     self.phase = Phase::Connected;
                     self.last_event_at = now;
                     self.disconnected_reported = false;
-                    if let Some(config) = self.config.clone() {
+                    if let Some(mut config) = self.config.clone() {
+                        config.automatic_start = self.start_is_automatic;
                         self.pending_launch = Some((config.clone(), self.generation));
                         out.push(Effect::Send(Command::Configure(config)));
                     }
@@ -698,16 +769,35 @@ impl Supervisor {
                 let explicit = code != "ENGINE_START_FAILED";
                 self.tracker.fail(&detail);
                 self.finish_apply(&mut out);
-                let (title, public) = if explicit {
-                    ("CAPTURE FAILED", "Error 001")
+                let (title, public, text, status) = if code == "CAPTURE_NOT_RESTORED" {
+                    // The app restarted capture on its own, and the portal
+                    // could only have gone on with its dialog.
+                    (
+                        "SCREEN SHARING NOT RESTORED",
+                        "Error 001",
+                        NOT_RESTORED_DETAIL.to_owned(),
+                        "CAPTURE STOPPED",
+                    )
+                } else if explicit {
+                    (
+                        "CAPTURE FAILED",
+                        "Error 001",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 } else {
-                    ("ENGINE NOT RESPONDING", "Error 004")
+                    (
+                        "ENGINE NOT RESPONDING",
+                        "Error 004",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 };
-                self.status(&mut out, "CAPTURE FAILED", StatusStyle::Warning);
+                self.status(&mut out, status, StatusStyle::Warning);
                 self.error(
                     &mut out,
                     title,
-                    format!("{code}: {detail}"),
+                    text,
                     Level::Error,
                     vec![("RESTART ENGINE", "restart")],
                     Some("engine-launch"),
@@ -861,7 +951,8 @@ impl Supervisor {
             && let Some(config) = self.config.clone()
         {
             self.restart_at = None;
-            self.begin_start(config, &mut out, now);
+            let automatic = std::mem::take(&mut self.restart_is_automatic);
+            self.begin_start(config, automatic, &mut out, now);
         }
         if let Some(until) = self.defer_restart_until
             && now >= until
@@ -869,29 +960,15 @@ impl Supervisor {
             self.defer_restart_until = None;
             if self.save_busy {
                 self.defer_restart_until = Some(now + RESTART_DEFER_S);
-            } else if let Some((config, allow, explicit)) = self.deferred_restart.take() {
-                let mut more = self.handle(
-                    Input::Restart {
-                        config,
-                        allow_recording_prepare: allow,
-                        explicit,
-                    },
-                    now,
-                );
+            } else if let Some(waiting) = self.deferred_restart.take() {
+                let mut more = self.handle(waiting.into_input(), now);
                 out.append(&mut more);
             }
         }
         if !self.restart_pending
-            && let Some((config, allow, explicit)) = self.queued_restart.take()
+            && let Some(waiting) = self.queued_restart.take()
         {
-            let mut more = self.handle(
-                Input::Restart {
-                    config,
-                    allow_recording_prepare: allow,
-                    explicit,
-                },
-                now,
-            );
+            let mut more = self.handle(waiting.into_input(), now);
             out.append(&mut more);
         }
         if let Phase::Connecting { since } = self.phase
@@ -995,6 +1072,9 @@ impl Supervisor {
     }
 }
 
+/// The error bar's text for `CAPTURE_NOT_RESTORED`.
+pub const NOT_RESTORED_DETAIL: &str = "FTHRust restarted capture on its own, and your desktop would have to ask again which screen to share. FTHRust doesn't bring that dialog up without you: press RESTART ENGINE to choose a screen.";
+
 fn startup_warning_title(code: &str) -> String {
     match code {
         "DESKTOP_AUDIO_UNAVAILABLE" => "DESKTOP AUDIO UNAVAILABLE".into(),
@@ -1029,6 +1109,7 @@ pub fn engine_config(state: &AppState) -> Result<EngineConfig, String> {
         capture,
         max_buffer_mb,
         backend_override,
+        automatic_start: false,
     })
 }
 

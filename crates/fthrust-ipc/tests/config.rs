@@ -8,6 +8,7 @@ fn cfg(f: impl FnOnce(&mut CaptureConfig)) -> EngineConfig {
         capture,
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -38,6 +39,7 @@ fn clamps_with_one_warning_each() {
         },
         max_buffer_mb: 10,
         backend_override: None,
+        automatic_start: false,
     }
     .normalized();
     assert_eq!(n.capture.fps, 360);
@@ -72,6 +74,7 @@ fn clamps_with_one_warning_each() {
         capture: CaptureConfig::default(),
         max_buffer_mb: 20_000,
         backend_override: None,
+        automatic_start: false,
     }
     .normalized();
     assert_eq!(n.max_buffer_mb, 16384);

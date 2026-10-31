@@ -731,8 +731,14 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     // recovery it asked for (one per run of suspect content).
     let mut watchdog = ContentWatchdog::new(fps);
     // Once a generation ran, every open is a recovery: the portal may then
-    // only restore its saved session, never show its dialog.
-    let mut open_reason = OpenReason::Start;
+    // only restore its saved session, never show its dialog. An engine the
+    // app restarted on its own (after a crash or hang) recovers the capture
+    // of the one before it, from its first open on.
+    let mut open_reason = if config.automatic_start {
+        OpenReason::Recovery
+    } else {
+        OpenReason::Start
+    };
     // The watchdog restarted capture over a black zero-copy feed: the next
     // generation captures through shm, since a compositor that completes
     // captures into the surfaces without drawing would bring it back as is.
@@ -772,7 +778,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         report_first(
                             &inner,
                             FirstOutcome::Failed(StartupError {
-                                code: "CAPTURE_DECLINED",
+                                // A dismissed picker, or (an automatic start)
+                                // a portal that would have had to ask again.
+                                code: if f.needs_dialog {
+                                    "CAPTURE_NOT_RESTORED"
+                                } else {
+                                    "CAPTURE_DECLINED"
+                                },
                                 detail: reason,
                             }),
                         );
@@ -1604,6 +1616,7 @@ mod tests {
             capture: fthrust_core::capture_config::CaptureConfig::default(),
             max_buffer_mb: 0,
             backend_override: None,
+            automatic_start: false,
         };
         let engine = CaptureEngine::new(config, deps);
         let handle = engine.handle();

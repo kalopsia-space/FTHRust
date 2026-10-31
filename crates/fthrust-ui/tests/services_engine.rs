@@ -16,6 +16,7 @@ fn config() -> EngineConfig {
         capture: CaptureConfig::from_settings(&s.settings).unwrap(),
         max_buffer_mb: 256,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -273,6 +274,7 @@ fn process_exit_pushes_engine_stopped_and_restart_recovers() {
             config: config(),
             allow_recording_prepare: false,
             explicit: true,
+            automatic: false,
         },
         now,
     );
@@ -341,6 +343,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -366,6 +369,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now + 0.7,
     );
@@ -380,6 +384,7 @@ fn restart_deferred_while_save_busy() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -402,6 +407,7 @@ fn apply_timeout_after_30s() {
             config: config(),
             allow_recording_prepare: false,
             explicit: false,
+            automatic: false,
         },
         now,
     );
@@ -709,6 +715,7 @@ fn restart(fps: u32) -> Input {
         config: config_fps(fps),
         allow_recording_prepare: false,
         explicit: false,
+        automatic: false,
     }
 }
 
@@ -1131,6 +1138,268 @@ fn a_stop_with_a_recording_finishing_gets_the_recordings_grace() {
             e,
             Effect::Kill { graceful: true, grace_s } if *grace_s == RECORDING_EXIT_GRACE_S
         )),
+        "{fx:?}"
+    );
+}
+
+/// Whether the `Configure` among `fx` says the start was automatic.
+fn configured_automatic(fx: &[Effect]) -> Option<bool> {
+    fx.iter().find_map(|e| match e {
+        Effect::Send(fthrust_ipc::Command::Configure(c)) => Some(c.automatic_start),
+        _ => None,
+    })
+}
+
+/// Lets the armed restart start a process at `now` and returns whether its
+/// `Configure` says the start was automatic.
+fn configure_of_next_start(sv: &mut Supervisor, pid: u32, now: f64) -> Option<bool> {
+    let fx = sv.handle(Input::Tick, now);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    sv.handle(Input::Spawned { pid }, now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid,
+            version: "x".into(),
+        },
+        now,
+    );
+    configured_automatic(&fx)
+}
+
+/// An engine the app restarts on its own after a crash or a hang is told
+/// so (it then never brings up the portal's dialog); every start the user
+/// asked for is not, whatever the config it was given says.
+#[test]
+fn only_the_restart_after_a_crash_or_hang_is_automatic() {
+    use fthrust_ui::services::engine::{AUTO_RESTART_DELAY_S, HANG_RESTART_S, RESTART_GAP_S};
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    // The app's own start, even with a config that claims otherwise.
+    let mut first = config();
+    first.automatic_start = true;
+    sv.handle(Input::Start(first), now);
+    sv.handle(Input::Spawned { pid: 1 }, now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        now,
+    );
+    assert_eq!(configured_automatic(&fx), Some(false), "the app's start");
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // A crash: the supervisor's restart is automatic.
+    now += 1.0;
+    sv.handle(Input::ProcessExited { code: Some(139) }, now);
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 2, now),
+        Some(true),
+        "the restart after a crash"
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // RESTART ENGINE: the user's.
+    now += 1.0;
+    sv.handle(
+        Input::Restart {
+            config: config(),
+            allow_recording_prepare: false,
+            explicit: true,
+            automatic: false,
+        },
+        now,
+    );
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+    now += RESTART_GAP_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 3, now),
+        Some(false),
+        "RESTART ENGINE"
+    );
+    sv.handle(Input::Configured { warnings: vec![] }, now);
+
+    // A hang: stopped, then restarted on its own.
+    now += HANG_RESTART_S + 0.1;
+    let fx = sv.handle(Input::Tick, now);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+        "{fx:?}"
+    );
+    sv.handle(Input::ProcessExited { code: None }, now + 0.1);
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(
+        configure_of_next_start(&mut sv, 4, now),
+        Some(true),
+        "the restart after a hang"
+    );
+}
+
+/// RESTART ENGINE pressed while the automatic restart after a crash is
+/// still waiting makes the next start the user's.
+#[test]
+fn restart_engine_over_a_waiting_automatic_restart_is_the_users() {
+    use fthrust_ui::services::engine::AUTO_RESTART_DELAY_S;
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 20, &mut now);
+    now += 1.0;
+    let fx = sv.handle(Input::ProcessExited { code: Some(139) }, now);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::StartAfter(_))),
+        "{fx:?}"
+    );
+    sv.handle(
+        Input::Restart {
+            config: config(),
+            allow_recording_prepare: false,
+            explicit: true,
+            automatic: false,
+        },
+        now + 0.1,
+    );
+    now += AUTO_RESTART_DELAY_S + 0.01;
+    assert_eq!(configure_of_next_start(&mut sv, 21, now), Some(false));
+}
+
+/// A settings-apply style restart, the app's own (`automatic`) or not.
+fn restart_as(automatic: bool) -> Input {
+    Input::Restart {
+        config: config(),
+        allow_recording_prepare: false,
+        explicit: false,
+        automatic,
+    }
+}
+
+/// Game detection and the clips profile coming back restart the engine on
+/// the app's own initiative; a settings apply is the user's.
+#[test]
+fn the_apps_own_restarts_are_automatic_and_the_users_are_not() {
+    use fthrust_ui::services::engine::RESTART_GAP_S;
+    for automatic in [true, false] {
+        let mut sv = Supervisor::new();
+        let mut now = 0.0;
+        bring_up(&mut sv, 30, &mut now);
+        now += 1.0;
+        sv.handle(restart_as(automatic), now);
+        sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+        now += RESTART_GAP_S + 0.01;
+        assert_eq!(
+            configure_of_next_start(&mut sv, 31, now),
+            Some(automatic),
+            "automatic {automatic}"
+        );
+    }
+}
+
+/// Restarts that merge (behind a save, or into a restart under way) are the
+/// user's when any of them was.
+#[test]
+fn a_restart_merged_with_one_of_the_users_is_the_users() {
+    use fthrust_ui::services::engine::{RESTART_DEFER_S, RESTART_GAP_S};
+    // Deferred behind a save in flight.
+    for (asks, expected) in [
+        ([true, false], false),
+        ([false, true], false),
+        ([true, true], true),
+    ] {
+        let mut sv = Supervisor::new();
+        let mut now = 0.0;
+        bring_up(&mut sv, 40, &mut now);
+        sv.set_save_busy(true);
+        for automatic in asks {
+            sv.handle(restart_as(automatic), now);
+        }
+        sv.set_save_busy(false);
+        now += RESTART_DEFER_S + 0.01;
+        let fx = sv.handle(Input::Tick, now);
+        assert!(
+            fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
+            "{fx:?}"
+        );
+        sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+        now += RESTART_GAP_S + 0.01;
+        assert_eq!(
+            configure_of_next_start(&mut sv, 41, now),
+            Some(expected),
+            "{asks:?}"
+        );
+    }
+    // Game detection's restart has spawned the new engine; the user applies
+    // settings before it is configured: that start is now the user's.
+    let mut sv = Supervisor::new();
+    let mut now = 0.0;
+    bring_up(&mut sv, 50, &mut now);
+    now += 1.0;
+    sv.handle(restart_as(true), now);
+    sv.handle(Input::ProcessExited { code: Some(0) }, now + 0.1);
+    now += RESTART_GAP_S + 0.01;
+    let fx = sv.handle(Input::Tick, now);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Spawn)), "{fx:?}");
+    sv.handle(Input::Spawned { pid: 51 }, now);
+    sv.handle(restart_as(false), now);
+    let fx = sv.handle(
+        Input::Hello {
+            pid: 51,
+            version: "x".into(),
+        },
+        now,
+    );
+    assert_eq!(configured_automatic(&fx), Some(false));
+}
+
+/// An automatic start the portal could only have continued with its
+/// dialog: its own title and words, not a dismissed picker's.
+#[test]
+fn a_restore_only_startup_failure_has_its_own_message() {
+    use fthrust_ui::services::engine::NOT_RESTORED_DETAIL;
+    let mut sv = Supervisor::new();
+    sv.handle(Input::Start(config()), 0.0);
+    sv.handle(Input::Spawned { pid: 1 }, 0.1);
+    sv.handle(
+        Input::Hello {
+            pid: 1,
+            version: "x".into(),
+        },
+        0.2,
+    );
+    let fx = sv.handle(
+        Input::StartupError {
+            code: "CAPTURE_NOT_RESTORED".into(),
+            detail: "the screen-sharing session could not be restored without the desktop's dialog"
+                .into(),
+        },
+        0.3,
+    );
+    let bar = fx.iter().find_map(|e| match e {
+        Effect::Ui(Event::ErrorBar {
+            title,
+            detail,
+            actions,
+            ..
+        }) => Some((
+            title.clone(),
+            detail.clone(),
+            actions.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
+        )),
+        _ => None,
+    });
+    assert_eq!(
+        bar,
+        Some((
+            "SCREEN SHARING NOT RESTORED".to_string(),
+            NOT_RESTORED_DETAIL.to_string(),
+            vec!["restart".to_string()],
+        ))
+    );
+    assert_eq!(
+        status_events(&fx).last().map(|s| s.0.as_str()),
+        Some("CAPTURE STOPPED")
+    );
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Kill { .. })),
         "{fx:?}"
     );
 }
