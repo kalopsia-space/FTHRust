@@ -63,7 +63,7 @@ Scroll on the timeline to zoom in around the cursor, and hold **Shift** while sc
 
 ### Juggling clips
 
-You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor (while the Share picker is open it closes only the picker) and **F11** goes fullscreen. Closing or parking an editor frees its video frame from the graphics card straight away.
+You can keep up to three clips open. The minimise button in the editor header parks the clip in the left rail as **Editor 1**, **Editor 2** and so on. Click one to come back to it, or right-click to close it. **Escape** closes the editor (while the Share picker is open it closes only the picker) and **F11** goes fullscreen. Closing or parking an editor frees its video frame from the graphics card straight away, with **Live edit preview** on or off.
 
 On a slow PC, **Settings → Performance** can turn the full editor off, so clips open in a simple player instead.
 
