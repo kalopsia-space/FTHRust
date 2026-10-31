@@ -1,16 +1,26 @@
-//! A theme import that was killed between its renames is undone at the next
-//! load: the folder it had parked is put back.
+//! A theme import that was killed before it finished is undone at the next
+//! load: every folder it had parked is put back, whatever stands in its place.
+//! One that got as far as replacing `theme.json` did finish and is left alone.
 
 use std::fs;
+use std::path::Path;
 
 use fthrust_core::FthrPaths;
 use fthrust_core::theme::ThemeStore;
+
+const OLD_JSON: &[u8] = br#"{"old":true}"#;
+const NEW_JSON: &[u8] = br#"{"new":true}"#;
 
 fn home() -> (tempfile::TempDir, FthrPaths) {
     let tmp = tempfile::tempdir().unwrap();
     let paths = FthrPaths::new(tmp.path());
     fs::create_dir_all(paths.root()).unwrap();
     (tmp, paths)
+}
+
+fn write(path: &Path, bytes: &[u8]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, bytes).unwrap();
 }
 
 #[test]
@@ -60,20 +70,143 @@ fn every_folder_it_had_parked_comes_back() {
 }
 
 #[test]
-fn a_folder_that_exists_is_never_replaced_by_a_parked_one() {
+fn a_cut_short_import_is_undone_as_a_whole() {
     let (_t, p) = home();
-    // The swap got as far as this folder: the live one is the new one.
-    fs::create_dir_all(p.theme_icons_dir()).unwrap();
-    fs::write(p.theme_icons_dir().join("new.png"), b"NEW").unwrap();
     let staging = p.theme_dir().join(".import-fedcba9876543210");
-    fs::create_dir_all(staging.join("old/icons")).unwrap();
-    fs::write(staging.join("old/icons/old.png"), b"OLD").unwrap();
+    write(&p.theme_file(), OLD_JSON);
+    write(&staging.join("old/theme.json"), OLD_JSON);
+    // icons: already swapped, the live folder is the staged one.
+    write(&p.theme_icons_dir().join("new.png"), b"NEW");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+    // sounds: the app stopped between the two renames.
+    write(&staging.join("old/sounds/old.wav"), b"OLD");
+    write(&staging.join("new/sounds/half.wav"), b"H");
+    // fonts: not reached, nothing parked.
+    write(&p.theme_fonts_dir().join("mine.ttf"), b"MINE");
+
     let store = ThemeStore::load(p.clone()).unwrap();
+
     assert_eq!(
-        fs::read(p.theme_icons_dir().join("new.png")).unwrap(),
-        b"NEW"
+        fs::read(p.theme_icons_dir().join("old.png")).unwrap(),
+        b"OLD",
+        "a folder that was swapped in goes back too, not only the missing one"
     );
+    assert!(!p.theme_icons_dir().join("new.png").exists());
+    assert_eq!(
+        fs::read(p.theme_sounds_dir().join("old.wav")).unwrap(),
+        b"OLD"
+    );
+    assert_eq!(
+        fs::read(p.theme_fonts_dir().join("mine.ttf")).unwrap(),
+        b"MINE"
+    );
+    assert_eq!(fs::read(p.theme_file()).unwrap(), OLD_JSON);
+    assert!(!staging.exists());
+    let issues = store.startup_issues();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(
+        issues[0].contains("icons") && issues[0].contains("sounds") && !issues[0].contains("fonts"),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn an_import_killed_after_all_its_swaps_but_before_theme_json_is_undone() {
+    let (_t, p) = home();
+    let staging = p.theme_dir().join(".import-0000000000000004");
+    // Nothing is missing: all three folders are the staged ones, and
+    // theme.json is still the old one, which they do not belong to.
+    write(&p.theme_file(), OLD_JSON);
+    write(&staging.join("old/theme.json"), OLD_JSON);
+    for (live, parked, name) in [
+        (p.theme_icons_dir(), "old/icons", "a.png"),
+        (p.theme_sounds_dir(), "old/sounds", "a.wav"),
+        (p.theme_fonts_dir(), "old/fonts", "a.ttf"),
+    ] {
+        write(&live.join("new"), b"NEW");
+        write(&staging.join(parked).join(name), b"OLD");
+    }
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    for (live, name) in [
+        (p.theme_icons_dir(), "a.png"),
+        (p.theme_sounds_dir(), "a.wav"),
+        (p.theme_fonts_dir(), "a.ttf"),
+    ] {
+        assert_eq!(fs::read(live.join(name)).unwrap(), b"OLD");
+        assert!(!live.join("new").exists());
+    }
+    assert!(!staging.exists());
+    assert!(
+        store
+            .startup_issues()
+            .iter()
+            .any(|m| m.contains("icons") && m.contains("sounds") && m.contains("fonts")),
+        "{:?}",
+        store.startup_issues()
+    );
+}
+
+#[test]
+fn an_import_that_got_as_far_as_theme_json_is_left_as_it_is() {
+    let (_t, p) = home();
+    let staging = p.theme_dir().join(".import-0000000000000001");
+    // Swapped, and theme.json replaced; the app was killed before the parked
+    // old files were removed. The new theme is the one in force.
+    write(&p.theme_file(), NEW_JSON);
+    write(&staging.join("old/theme.json"), OLD_JSON);
+    write(&p.theme_icons_dir().join("new.png"), b"NEW");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    assert!(p.theme_icons_dir().join("new.png").exists());
+    assert!(!p.theme_icons_dir().join("old.png").exists());
+    assert_eq!(fs::read(p.theme_file()).unwrap(), NEW_JSON);
+    assert!(!staging.exists(), "the old files are removed");
+    assert!(store.startup_issues().is_empty());
+}
+
+#[test]
+fn a_theme_json_that_did_not_exist_before_the_import_marks_its_finish() {
+    let (_t, p) = home();
+    let staging = p.theme_dir().join(".import-0000000000000002");
+    // No theme.json to keep a copy of; there is one now.
+    write(&p.theme_file(), NEW_JSON);
+    write(&p.theme_icons_dir().join("new.png"), b"NEW");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    assert!(p.theme_icons_dir().join("new.png").exists());
     assert!(!p.theme_icons_dir().join("old.png").exists());
     assert!(!staging.exists());
     assert!(store.startup_issues().is_empty());
+}
+
+#[test]
+fn a_staging_that_cannot_be_undone_keeps_the_old_files() {
+    let (_t, p) = home();
+    // A file where the icons folder belongs: the parked folder cannot take
+    // its place, and must not be deleted for that.
+    write(&p.theme_dir().join("icons"), b"in the way");
+    let staging = p.theme_dir().join(".import-0000000000000003");
+    write(&staging.join("old/icons/old.png"), b"OLD");
+
+    let store = ThemeStore::load(p.clone()).unwrap();
+
+    assert_eq!(
+        fs::read(staging.join("old/icons/old.png")).unwrap(),
+        b"OLD",
+        "left for the next start"
+    );
+    assert!(
+        store
+            .startup_issues()
+            .iter()
+            .all(|m| !m.contains("were put back")),
+        "{:?}",
+        store.startup_issues()
+    );
 }

@@ -67,7 +67,7 @@ Theme the whole app. Six sections, each with its own reset:
 
 A live mock window shows your changes before you commit to them. **Apply theme** saves them. **Export theme** saves the theme as a file you can share, and **Import theme** loads one. **Reset all** goes back to stock.
 
-A theme file is a ZIP. Importing one is all or nothing: its icons, sounds and fonts are unpacked beside your current ones and swapped in only once the whole file has been read, so a bad file leaves your theme as it was, and if FTHRust is killed halfway the next start puts your previous icons, sounds and fonts back. It may hold up to 1,000 entries and 256 MB of assets (64 MB for any one), and `theme.json` up to 4 MB; anything bigger is refused.
+A theme file is a ZIP. Importing one is all or nothing: its icons, sounds and fonts are unpacked beside your current ones and swapped in only once the whole file has been read, so a bad file leaves your theme as it was, and if FTHRust is killed before the import is done the next start puts all of your previous icons, sounds and fonts back (and says so). It may hold up to 1,000 entries and 256 MB of assets (64 MB for any one), and `theme.json` up to 4 MB; anything bigger is refused.
 
 ## Performance
 

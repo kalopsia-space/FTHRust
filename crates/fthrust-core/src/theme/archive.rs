@@ -18,6 +18,7 @@ pub const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 use super::{ThemeData, ThemeStore};
 use super::{default_capture_card_colors, default_colors, default_fonts, migrate};
 use crate::error::{CoreError, Result};
+use crate::paths::FthrPaths;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -115,9 +116,13 @@ const FOLDERS: [(Folder, &str); 3] = [
     (Folder::Fonts, "fonts"),
 ];
 
+/// The name `theme.json` is kept under in a staging directory's `old/`.
+const KEPT_THEME_FILE: &str = "theme.json";
+
 /// A directory next to the live theme folders that an import fills before
 /// anything live changes. Its `new/<folder>` directories hold the extracted
-/// assets and its `old/` the folders swapped out. It is removed on drop.
+/// assets and its `old/` the folders swapped out, with a copy of the
+/// `theme.json` they belong to. It is removed on drop.
 struct Staging {
     root: PathBuf,
 }
@@ -125,20 +130,18 @@ struct Staging {
 impl Staging {
     const PREFIX: &'static str = ".import-";
 
-    /// Creates the staging directories and removes the ones a crashed import
-    /// left behind.
-    fn create(theme_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(theme_dir)?;
-        if let Ok(entries) = std::fs::read_dir(theme_dir) {
-            for entry in entries.flatten() {
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(Self::PREFIX)
-                {
-                    let _ = std::fs::remove_dir_all(entry.path());
-                }
-            }
+    /// Creates the staging directories. What a crashed import left behind is
+    /// dealt with first, as at startup: the folders it parked are put back,
+    /// not deleted.
+    fn create(paths: &FthrPaths) -> Result<Self> {
+        let theme_dir = paths.theme_dir();
+        std::fs::create_dir_all(&theme_dir)?;
+        let put_back = recover_crashed_import(paths);
+        if !put_back.is_empty() {
+            tracing::warn!(
+                "put back the theme folders a cut-short import had parked: {}",
+                put_back.join(", ")
+            );
         }
         let root = theme_dir.join(format!("{}{}", Self::PREFIX, uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root)?;
@@ -157,6 +160,18 @@ impl Staging {
     fn parked(&self, name: &str) -> PathBuf {
         self.root.join("old").join(name)
     }
+
+    /// Keeps a copy of the `theme.json` that is about to be replaced. The
+    /// import replaces it last, so a recovery after a crash can tell from
+    /// this copy whether the import got that far. No `theme.json` yet leaves
+    /// nothing to keep.
+    fn keep_theme_file(&self, live: &Path) -> Result<()> {
+        match std::fs::copy(live, self.root.join("old").join(KEPT_THEME_FILE)) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 impl Drop for Staging {
@@ -165,16 +180,25 @@ impl Drop for Staging {
     }
 }
 
-/// Undoes what an import left half done when the app stopped between its
-/// renames: a live folder that is missing while the copy parked in a
-/// `.import-*` directory's `old/` is still there is put back, and the
-/// leftover staging is removed. (A folder that exists is never touched: the
-/// swap got that far, and `theme.json` is written last.) Returns what was
-/// restored, worded for the user. Run before the live folders are created.
-pub(super) fn recover_crashed_import(theme_dir: &Path) -> Vec<String> {
-    let mut restored = Vec::new();
-    let Ok(entries) = std::fs::read_dir(theme_dir) else {
-        return restored;
+/// Undoes what an import left half done when the app was killed, from the
+/// `.import-*` directories it left behind.
+///
+/// An import parks each live folder in its staging's `old/`, moves the staged
+/// one in, and replaces `theme.json` last, after keeping a copy of the old
+/// one in `old/`. While `theme.json` is still that copy the import did not
+/// finish, and every folder it parked is put back over whatever stands in its
+/// place (the staged copy when the swap got that far, nothing when the app
+/// stopped between the two renames): together they are the theme that
+/// `theme.json` describes. Once `theme.json` is not the copy any more the
+/// import did finish, and only the leftover directory is removed. A directory
+/// that cannot be dealt with stays where it is, with the old files in it.
+///
+/// Returns the folders put back, for the user. Run before the live folders
+/// are created.
+pub(super) fn recover_crashed_import(paths: &FthrPaths) -> Vec<String> {
+    let mut put_back = Vec::new();
+    let Ok(entries) = std::fs::read_dir(paths.theme_dir()) else {
+        return put_back;
     };
     for entry in entries.flatten() {
         if !entry
@@ -185,32 +209,51 @@ pub(super) fn recover_crashed_import(theme_dir: &Path) -> Vec<String> {
             continue;
         }
         let root = entry.path();
-        let mut complete = true;
-        for (_, name) in FOLDERS {
-            let live = theme_dir.join(name);
-            let parked = root.join("old").join(name);
-            if std::fs::symlink_metadata(&live).is_ok()
-                || std::fs::symlink_metadata(&parked).is_err()
-            {
-                continue;
+        match undo_unfinished_import(paths, &root, &mut put_back) {
+            Ok(()) => {
+                let _ = std::fs::remove_dir_all(&root);
             }
-            match std::fs::rename(&parked, &live) {
-                Ok(()) => restored.push(name.to_owned()),
-                Err(e) => {
-                    complete = false;
-                    tracing::error!(
-                        "could not put back the theme {name} folder from {}: {e}",
-                        parked.display()
-                    );
-                }
-            }
-        }
-        // What could not be put back stays where it is.
-        if complete {
-            let _ = std::fs::remove_dir_all(&root);
+            Err(e) => tracing::error!(
+                "could not undo the theme import left in {}: {e}",
+                root.display()
+            ),
         }
     }
-    restored
+    put_back
+}
+
+/// Puts back what the import staged in `root` parked, unless it finished.
+fn undo_unfinished_import(
+    paths: &FthrPaths,
+    root: &Path,
+    put_back: &mut Vec<String>,
+) -> std::io::Result<()> {
+    let old = root.join("old");
+    if read_if_there(&paths.theme_file())? != read_if_there(&old.join(KEPT_THEME_FILE))? {
+        return Ok(());
+    }
+    for (_, name) in FOLDERS {
+        let parked = old.join(name);
+        if std::fs::symlink_metadata(&parked).is_err() {
+            continue;
+        }
+        let live = paths.theme_dir().join(name);
+        if std::fs::symlink_metadata(&live).is_ok() {
+            std::fs::remove_dir_all(&live)?;
+        }
+        std::fs::rename(&parked, &live)?;
+        put_back.push(name.to_owned());
+    }
+    Ok(())
+}
+
+/// The bytes of the file, or `None` when there is no such file.
+fn read_if_there(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The three live folders after an import swapped them for the staged ones;
@@ -318,9 +361,11 @@ impl ThemeStore {
     /// The assets are extracted to a directory next to the live folders and
     /// swapped in only when the whole archive has been read and validated;
     /// the current theme and its files are untouched on any error, including
-    /// a failure to write `theme.json` at the end. Entries other than
-    /// `theme.json` and plain files in `icons/`, `sounds/`, `fonts/` are
-    /// ignored (even ones in a compression the build cannot read).
+    /// a failure to write `theme.json` at the end. If the app is killed
+    /// before that last write, the next [`ThemeStore::load`] puts the old
+    /// folders back. Entries other than `theme.json` and plain files in
+    /// `icons/`, `sounds/`, `fonts/` are ignored (even ones in a compression
+    /// the build cannot read).
     pub fn import_zip(&mut self, src: &Path) -> Result<()> {
         let mut zf = zip::ZipArchive::new(std::fs::File::open(src)?).map_err(zip_err)?;
         if zf.len() > MAX_ENTRIES {
@@ -353,7 +398,7 @@ impl ThemeStore {
                 )));
             }
         }
-        let staging = Staging::create(&self.paths.theme_dir())?;
+        let staging = Staging::create(&self.paths)?;
         let mut present: [std::collections::BTreeSet<String>; 3] = Default::default();
         let mut total = 0u64;
         for i in 0..zf.len() {
@@ -426,6 +471,7 @@ impl ThemeStore {
             font_files,
         };
 
+        staging.keep_theme_file(&self.paths.theme_file())?;
         let mut swapped = swap_in(
             &staging,
             [
@@ -441,5 +487,114 @@ impl ThemeStore {
             return Err(e);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OLD_JSON: &[u8] = br#"{"old":true}"#;
+    const NEW_JSON: &[u8] = br#"{"new":true}"#;
+
+    /// A profile whose three theme folders each hold a file named `old`.
+    fn home_with_a_theme() -> (tempfile::TempDir, FthrPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = FthrPaths::new(tmp.path());
+        for dir in [
+            paths.theme_icons_dir(),
+            paths.theme_sounds_dir(),
+            paths.theme_fonts_dir(),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("old"), b"OLD").unwrap();
+        }
+        std::fs::write(paths.theme_file(), OLD_JSON).unwrap();
+        (tmp, paths)
+    }
+
+    /// What the import leaves when the process dies right after its swaps and
+    /// before it replaces `theme.json`, made with the import's own steps. The
+    /// staging is not dropped, as when the process is killed.
+    fn killed_after_the_swaps(paths: &FthrPaths) {
+        let staging = Staging::create(paths).unwrap();
+        std::fs::write(staging.new_dir("icons").join("new.png"), b"NEW").unwrap();
+        staging.keep_theme_file(&paths.theme_file()).unwrap();
+        let _ = swap_in(
+            &staging,
+            [
+                ("icons", paths.theme_icons_dir()),
+                ("sounds", paths.theme_sounds_dir()),
+                ("fonts", paths.theme_fonts_dir()),
+            ],
+        )
+        .unwrap();
+        std::mem::forget(staging);
+    }
+
+    fn staging_dirs(paths: &FthrPaths) -> usize {
+        std::fs::read_dir(paths.theme_dir())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(Staging::PREFIX))
+            .count()
+    }
+
+    #[test]
+    fn an_import_killed_after_its_swaps_is_undone() {
+        let (_t, paths) = home_with_a_theme();
+        killed_after_the_swaps(&paths);
+        assert!(paths.theme_icons_dir().join("new.png").exists());
+        assert!(!paths.theme_icons_dir().join("old").exists());
+        assert_eq!(staging_dirs(&paths), 1);
+
+        let put_back = recover_crashed_import(&paths);
+
+        assert_eq!(put_back, ["icons", "sounds", "fonts"]);
+        for dir in [
+            paths.theme_icons_dir(),
+            paths.theme_sounds_dir(),
+            paths.theme_fonts_dir(),
+        ] {
+            assert_eq!(std::fs::read(dir.join("old")).unwrap(), b"OLD");
+        }
+        assert!(!paths.theme_icons_dir().join("new.png").exists());
+        assert_eq!(std::fs::read(paths.theme_file()).unwrap(), OLD_JSON);
+        assert_eq!(staging_dirs(&paths), 0);
+    }
+
+    #[test]
+    fn an_import_killed_after_replacing_theme_json_is_kept() {
+        let (_t, paths) = home_with_a_theme();
+        killed_after_the_swaps(&paths);
+        // The last step of the import, as `save` does it.
+        std::fs::write(paths.theme_file(), NEW_JSON).unwrap();
+
+        let put_back = recover_crashed_import(&paths);
+
+        assert!(put_back.is_empty());
+        assert!(paths.theme_icons_dir().join("new.png").exists());
+        assert!(!paths.theme_icons_dir().join("old").exists());
+        assert_eq!(std::fs::read(paths.theme_file()).unwrap(), NEW_JSON);
+        assert_eq!(staging_dirs(&paths), 0, "the parked old files are removed");
+    }
+
+    #[test]
+    fn the_next_import_puts_back_what_a_killed_one_parked() {
+        let (_t, paths) = home_with_a_theme();
+        killed_after_the_swaps(&paths);
+
+        // The next import starts by dealing with the leftover, then makes
+        // its own staging: the old files are not deleted from under it.
+        let staging = Staging::create(&paths).unwrap();
+
+        assert_eq!(
+            std::fs::read(paths.theme_icons_dir().join("old")).unwrap(),
+            b"OLD"
+        );
+        assert!(!paths.theme_icons_dir().join("new.png").exists());
+        assert_eq!(staging_dirs(&paths), 1, "only the new import's staging");
+        drop(staging);
+        assert_eq!(staging_dirs(&paths), 0);
     }
 }
