@@ -51,7 +51,8 @@ pub enum DaemonError {
 pub enum Stop {
     /// The parent closed our stdin.
     ParentGone,
-    /// SIGTERM or SIGINT.
+    /// SIGTERM or SIGINT. The first one starts a graceful shutdown; another
+    /// one during it stops waiting for the save and the capture threads.
     Signal,
 }
 
@@ -400,21 +401,35 @@ pub fn serve(
         let (stop_tx, stop_rx) = mpsc::channel(8);
         // Registered here, before the socket is bound and the ready line is
         // printed, so a signal racing the ready line is caught.
-        let mut term = tokio::signal::unix::signal(SignalKind::terminate()).ok();
-        let mut int = tokio::signal::unix::signal(SignalKind::interrupt()).ok();
-        let tx = stop_tx.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = async { if let Some(t) = term.as_mut() { t.recv().await; } else { std::future::pending::<()>().await } } => {}
-                _ = async { if let Some(i) = int.as_mut() { i.recv().await; } else { std::future::pending::<()>().await } } => {}
-            }
-            let _ = tx.send(Stop::Signal).await;
-        });
+        forward_signals(
+            &[SignalKind::terminate(), SignalKind::interrupt()],
+            &stop_tx,
+        );
         watch_parent(stop_tx);
         serve_until(socket, deps, default_override, stop_rx).await
     });
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_WAIT);
     served
+}
+
+/// Sends [`Stop::Signal`] for every delivery of each of `kinds`, for as long
+/// as the service listens. Must run inside the runtime.
+pub fn forward_signals(kinds: &[SignalKind], stops: &mpsc::Sender<Stop>) {
+    for kind in kinds {
+        match tokio::signal::unix::signal(*kind) {
+            Ok(mut stream) => {
+                let tx = stops.clone();
+                tokio::spawn(async move {
+                    while stream.recv().await.is_some() {
+                        if tx.send(Stop::Signal).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Err(e) => tracing::warn!("cannot listen for {kind:?}: {e}"),
+        }
+    }
 }
 
 /// Parent watch: the UI holds our stdin; EOF means it is gone.
@@ -574,7 +589,8 @@ pub async fn serve_until(
 }
 
 /// The bounded shutdown: the save in flight, then capture, audio and a
-/// recording, each with its own limit.
+/// recording, each with its own limit. A signal during either wait cuts it
+/// short.
 async fn shut_down(
     mut service: Service,
     client: Option<&Connection>,
@@ -590,6 +606,10 @@ async fn shut_down(
             Ok(Some(Internal::Worker(e))) => {
                 service.on_worker(&e);
                 deliver(client, e, deadline).await;
+            }
+            Ok(Some(Internal::Stop(Stop::Signal))) => {
+                tracing::warn!("signal received again; not waiting for the clip save");
+                break;
             }
             Ok(Some(_)) => {}
             Ok(None) => break,
@@ -620,6 +640,10 @@ async fn shut_down(
             () = &mut stopping => break,
             internal = internal_rx.recv() => match internal {
                 Some(Internal::Worker(e)) => deliver(client, e, deadline).await,
+                Some(Internal::Stop(Stop::Signal)) => {
+                    tracing::warn!("signal received again; not waiting for capture to stop");
+                    return;
+                }
                 Some(_) => {}
                 None => break,
             },
@@ -664,5 +688,23 @@ pub fn production_deps(paths: Option<fthrust_core::FthrPaths>) -> EngineDeps {
         backends: Arc::new(crate::backend::RealFactory::new(paths)),
         audio: Arc::new(crate::audio::pipewire::PipeWireAudio::new()),
         backoff: crate::engine::real_backoff(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_signal_is_forwarded_not_just_the_first() {
+        // SIGTERM used to be honoured once: the listener ended after the
+        // first, so a second one during a slow shutdown did nothing at all.
+        let (tx, mut rx) = mpsc::channel(8);
+        forward_signals(&[SignalKind::user_defined1()], &tx);
+        for round in 0..3 {
+            nix::sys::signal::raise(nix::sys::signal::Signal::SIGUSR1).unwrap();
+            let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+            assert_eq!(got, Ok(Some(Stop::Signal)), "signal {round}");
+        }
     }
 }

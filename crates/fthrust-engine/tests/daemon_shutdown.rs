@@ -225,6 +225,47 @@ async fn the_ui_dying_during_a_save_does_not_hang_the_shutdown() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_signal_cuts_the_shutdown_short() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The first SIGTERM waits for the save in flight (up to a minute); a
+    // second one means "now". The old listener stopped after the first.
+    let d = start(Arc::new(SlowAudio {
+        inner: SyntheticAudio::new(),
+        delay: Duration::from_secs(5),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 2,
+            path: d.tmp.path().join("slow.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 2 })
+    })
+    .await;
+    d.stops.send(Stop::Signal).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        d.done.try_recv().is_err(),
+        "the first signal waits for the save"
+    );
+    let second = Instant::now();
+    d.stops.send(Stop::Signal).await.unwrap();
+    finished(&d, Duration::from_secs(4)).await.unwrap();
+    assert!(
+        second.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        second.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_panicking_configure_is_reported_and_ends_the_engine() {
     // The configure job runs on a blocking thread; when it panicked, the
     // JoinError was dropped along with the engine inside it, nothing was
