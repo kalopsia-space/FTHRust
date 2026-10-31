@@ -4,11 +4,13 @@
 //! crash loses at most the GOP in progress. Ports the Windows reference's
 //! `continuous_recording_writer.cpp` (the Linux reference had no recorder).
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::ffi::aac::AacEncoder;
 use crate::ffi::mux::Muxer;
 use crate::ring::EncodedPacket;
+use crate::transactional_save::{RealFs, SaveFs};
 use crate::{MediaError, Result};
 
 /// The video stream's MP4 time base (90 kHz, like the reference).
@@ -46,6 +48,9 @@ pub struct RecorderConfig {
 #[derive(Debug)]
 pub struct Recorder {
     mux: Muxer,
+    /// The file claimed for the recording, kept open to start writeback of
+    /// each committed fragment and to fsync the result.
+    file: File,
     path: PathBuf,
     video_index: usize,
     fps: u32,
@@ -59,7 +64,8 @@ pub struct Recorder {
 
 impl Recorder {
     /// Opens `path`, writes the recoverable header and returns a recorder
-    /// that accepts packets.
+    /// that accepts packets. When anything after claiming the name fails,
+    /// the file is removed again.
     pub fn start(path: &Path, cfg: &RecorderConfig) -> Result<Self> {
         crate::init()?;
         if cfg.extradata.is_empty() {
@@ -75,12 +81,12 @@ impl Recorder {
         }
         // Claim the name first so a recording never truncates an existing
         // file (the muxer opens with O_TRUNC).
-        match std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
         {
-            Ok(_) => {}
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(MediaError::Invalid(format!(
                     "recording path already exists: {}",
@@ -88,7 +94,13 @@ impl Recorder {
                 )));
             }
             Err(e) => return Err(MediaError::Io(e)),
-        }
+        };
+        Self::open(path, file, cfg).inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+    }
+
+    fn open(path: &Path, file: File, cfg: &RecorderConfig) -> Result<Self> {
         let mut mux = Muxer::new(path, true)?;
         mux.set_metadata("fthr_frame_rate", &format!("{}/1", cfg.fps))?;
         mux.set_metadata(
@@ -114,6 +126,7 @@ impl Recorder {
         tracing::info!(path = %path.display(), audio = audio.is_some(), "recoverable fragmented MP4 started");
         Ok(Self {
             mux,
+            file,
             path: path.to_path_buf(),
             video_index,
             fps: cfg.fps,
@@ -141,6 +154,9 @@ impl Recorder {
                             "Could not commit a completed recording fragment: {e}"
                         ))
                     })?;
+                    // The fragment is complete: let it reach the disk now
+                    // instead of with the next writeback sweep.
+                    crate::payload::start_writeback(&self.file);
                 }
                 first
             }
@@ -148,15 +164,20 @@ impl Recorder {
                 if !packet.keyframe {
                     return Ok(());
                 }
-                self.first_video_pts = Some(packet.pts);
-                packet.pts
+                // Decoding starts at 0 (a fragmented MP4 cannot start
+                // earlier); with a reorder delay the keyframe presents
+                // `pts - dts` ticks in.
+                let first = packet.dts.min(packet.pts);
+                self.first_video_pts = Some(first);
+                first
             }
         };
         let pts = packet.pts - first;
+        let dts = packet.dts - first;
         let fps = self.fps as i32;
         let index = self.video_index;
         let bytes = packet.data.bytes()?;
-        self.guard(|m| m.write_packet(index, &bytes, pts, pts, 1, packet.keyframe, (1, fps)))
+        self.guard(|m| m.write_packet(index, &bytes, pts, dts, 1, packet.keyframe, (1, fps)))
             .map_err(|e| {
                 MediaError::Invalid(format!(
                     "The recording file could not be written; completed fragments already on disk remain playable: {e}"
@@ -203,7 +224,7 @@ impl Recorder {
     }
 
     /// Flushes the last fragment, drains the audio encoder, writes the
-    /// trailer and returns the file size in bytes.
+    /// trailer, flushes the file to disk and returns its size in bytes.
     pub fn finish(mut self) -> Result<u64> {
         self.check_live()?;
         if let Some((mut enc, index)) = self.audio.take()
@@ -233,6 +254,18 @@ impl Recorder {
             })?;
         }
         self.mux.finish()?;
+        let synced = self
+            .file
+            .sync_all()
+            .and_then(|()| match self.path.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => RealFs.sync_directory(dir),
+                _ => Ok(()),
+            });
+        synced.map_err(|e| {
+            MediaError::Invalid(format!(
+                "The recording was written but could not be flushed to disk: {e}"
+            ))
+        })?;
         Ok(std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0))
     }
 

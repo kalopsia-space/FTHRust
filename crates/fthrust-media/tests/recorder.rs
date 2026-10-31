@@ -227,3 +227,83 @@ fn start_refuses_existing_file() {
         "untouched"
     );
 }
+
+#[test]
+fn a_failed_start_leaves_no_file() {
+    // The name is claimed before the muxer opens; when a later step failed,
+    // an empty FTHR_recording_*.mp4 stayed behind in the user's folder.
+    let Some(src) = encode(1, None) else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("FTHR_recording_test.mp4");
+    let bad = RecorderConfig {
+        audio: Some(RecorderAudio {
+            sample_rate: 0,
+            channels: 2,
+        }),
+        ..src.config.clone()
+    };
+    assert!(Recorder::start(&out, &bad).is_err());
+    assert!(!out.exists(), "the claimed file was removed");
+    assert!(
+        Recorder::start(&out, &src.config).is_ok(),
+        "the name is free again"
+    );
+}
+
+#[test]
+fn decode_timestamps_are_written_as_given() {
+    // The recorder wrote dts = pts. Give the packets a reordered pts pattern
+    // with a monotonic dts, as an encoder with B-frames would: dts = pts
+    // made the muxer reject them, and a correct stream must keep both.
+    let Some(src) = encode(2, None) else { return };
+    let mut packets = src.packets.clone();
+    // Decode order I P B P B ... with one frame of reorder delay: dts
+    // counts packets, the keyframe presents at 1, each P two ahead of its
+    // dts and each B at its dts.
+    for (i, p) in packets.iter_mut().enumerate() {
+        let i = i as i64;
+        p.dts = i;
+        p.pts = if i == 0 {
+            1
+        } else if i % 2 == 1 {
+            i + 2
+        } else {
+            i
+        };
+        p.keyframe = i == 0;
+    }
+    let last = packets.len() - 1;
+    if last % 2 == 1 {
+        // An odd last packet would present after a missing frame.
+        packets.pop();
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("bframes.mp4");
+    let mut rec = Recorder::start(&out, &src.config).unwrap();
+    for p in &packets {
+        rec.write_video(p).unwrap();
+    }
+    rec.finish().unwrap();
+    let mut ictx = ffmpeg_next::format::input(&out).unwrap();
+    let video = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .unwrap();
+    let (index, tb) = (video.index(), video.time_base());
+    let ticks = |t: i64| t * i64::from(tb.denominator()) / (i64::from(tb.numerator()) * 30);
+    let mut read = Vec::new();
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == index {
+            read.push((packet.pts().unwrap(), packet.dts().unwrap()));
+        }
+    }
+    assert_eq!(read.len(), packets.len());
+    let first_dts = read[0].1;
+    for (got, want) in read.iter().zip(&packets) {
+        assert_eq!(
+            (got.0 - first_dts, got.1 - first_dts),
+            (ticks(want.pts), ticks(want.dts)),
+            "pts/dts as written"
+        );
+    }
+}
