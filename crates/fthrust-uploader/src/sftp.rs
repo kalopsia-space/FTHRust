@@ -211,8 +211,9 @@ fn remember(env: &Env, name: &str, key: &PublicKey) -> Result<(), String> {
         out.push(b'\n');
     }
     out.extend_from_slice(format!("{name} {openssh}\n").as_bytes());
-    let dir = path.parent().ok_or("no folder")?;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // The uploader's folder holds credentials: create it private (0700),
+    // as the settings store does, if this runs first.
+    let dir = env.paths.ensure_uploader_dir().map_err(|e| e.to_string())?;
     let tmp = dir.join(".known_hosts.tmp");
     std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
