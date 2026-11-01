@@ -53,10 +53,10 @@ pub struct RateCap {
 /// How an encoder opens, besides its [`EncoderConfig`].
 #[derive(Clone, Copy, Debug, Default)]
 struct Opening {
-    /// Capture: frames must not be held back, so the encoder gets the
-    /// settings [`crate::encoder_policy::low_delay_options`] lists where
-    /// its library takes them.
-    low_delay: bool,
+    /// Capture: the encoder gets the settings
+    /// [`crate::encoder_policy::capture_options`] lists (no frames held
+    /// back, a keyframe every GOP) where its library takes them.
+    capture: bool,
     /// Keyframe interval in frames (`None`: two seconds).
     gop: Option<u32>,
     /// Convert on the CPU even where the GPU could.
@@ -162,10 +162,11 @@ impl Encoder {
     /// Opens the first candidate encoder that initialises, for capture.
     /// VA-API candidates are tried on every render node from
     /// [`crate::vaapi::candidate_devices`] until one encodes. A capture
-    /// encoder must not hold frames back, so it gets the settings
-    /// [`crate::encoder_policy::low_delay_options`] lists where its library
-    /// takes them (SVT-AV1's low delay, Kvazaar without its B-frame pyramid
-    /// and overlapped frames), and its preset's alone where not.
+    /// encoder must not hold frames back and must put a keyframe every GOP,
+    /// so it gets the settings [`crate::encoder_policy::capture_options`]
+    /// lists where its library takes them (SVT-AV1's low delay; Kvazaar
+    /// without its B-frame pyramid and overlapped frames, and with the
+    /// GOP's intra period), and its preset's alone where not.
     /// Exports, which flush at the end, use [`Encoder::open_with_gop`].
     pub fn open(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
@@ -195,7 +196,7 @@ impl Encoder {
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
         let opening = Opening {
-            low_delay: true,
+            capture: true,
             ..Opening::default()
         };
         Self::open_inner(cfg, devices, opening)
@@ -320,7 +321,7 @@ impl Encoder {
         logged: &mut bool,
     ) -> Result<RawEncoder> {
         let Opening {
-            low_delay,
+            capture,
             gop,
             force_cpu,
             inject,
@@ -350,8 +351,10 @@ impl Encoder {
             strict_options: false,
         };
         if !is_vaapi {
-            let preferred = if low_delay {
-                crate::encoder_policy::low_delay_options(name, cfg.preset)
+            let preferred = if capture {
+                // The GOP the codec context and the forced keyframes use.
+                let gop_frames = gop.unwrap_or(cfg.fps * 2).max(1);
+                crate::encoder_policy::capture_options(name, cfg.preset, gop_frames)
             } else {
                 None
             };
@@ -360,7 +363,7 @@ impl Encoder {
             if wanted && !taken {
                 tracing::warn!(
                     encoder = name,
-                    "the encoder refused its low-delay settings: it holds frames back, \
+                    "the encoder refused its capture settings: it may hold frames back, \
                      so a clip ends that much before the moment it was saved"
                 );
             }

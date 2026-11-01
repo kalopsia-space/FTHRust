@@ -549,6 +549,41 @@ fn software_h264_and_hevc_capture_hold_back_no_frames() {
 }
 
 #[test]
+fn software_h264_and_hevc_capture_keyframes_come_every_gop() {
+    // Clips start on keyframes, which capture forces every GOP (two
+    // seconds). Kvazaar ignores forced keyframes, so its own intra period
+    // has to match.
+    let (w, h) = (640u32, 360u32);
+    for codec in [Codec::H264, Codec::Hevc] {
+        let cfg = EncoderConfig {
+            codec,
+            ..software_config(w, h, 30)
+        };
+        let Ok(mut enc) = Encoder::open(&cfg) else {
+            eprintln!("skipping {codec:?}: no software encoder");
+            continue;
+        };
+        let mut out = Vec::new();
+        for i in 0..130u32 {
+            let bgra = support::synthetic_bgra(w, h, i);
+            enc.encode(
+                &bgra,
+                w as usize * 4,
+                w,
+                h,
+                i64::from(i) * SECOND / 30,
+                &mut out,
+            )
+            .unwrap();
+        }
+        enc.flush(&mut out).unwrap();
+        let keys: Vec<i64> = out.iter().filter(|p| p.keyframe).map(|p| p.pts).collect();
+        eprintln!("{codec:?} {}: keyframes at {keys:?}", enc.active_codec());
+        assert_eq!(keys, [0, 60, 120], "{}", enc.active_codec());
+    }
+}
+
+#[test]
 fn software_av1_capture_holds_back_at_most_a_few_frames() {
     // SVT-AV1's default random-access structure holds about 60 to 76
     // frames, two seconds and more that a clip saved now would miss. Its
