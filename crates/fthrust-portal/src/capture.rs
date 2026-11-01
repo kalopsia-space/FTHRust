@@ -3,6 +3,7 @@
 //! (`RunPortalStartupWithRetry`) for a start the user asked for, and
 //! restore-only for an automatic open.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -41,6 +42,8 @@ pub struct PortalCapture {
     // Field order is drop order.
     stream: PipeWireVideoStream,
     session: ScreenCastSession,
+    /// The saved restore token, forgotten when the desktop ends the share.
+    token_path: PathBuf,
 }
 
 impl PortalCapture {
@@ -92,7 +95,13 @@ impl PortalCapture {
                 Some(session.closed()),
             );
             match connected {
-                Ok(stream) => return Ok(Self { stream, session }),
+                Ok(stream) => {
+                    return Ok(Self {
+                        stream,
+                        session,
+                        token_path: token::path(paths),
+                    });
+                }
                 Err(StreamError::Cancelled) => return Err(PortalFailure::Cancelled),
                 Err(e) => {
                     let restored = session.restored();
@@ -116,9 +125,12 @@ impl PortalCapture {
         }
     }
 
-    /// The next frame (see [`PipeWireVideoStream::capture`]).
+    /// The next frame (see [`PipeWireVideoStream::capture`]). When the
+    /// desktop has ended the share ("Stop sharing"), the saved choice is
+    /// forgotten as well: the user took it back, so no later open restores
+    /// it on its own, and the next start the user asks for shows the picker.
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
-        self.stream.capture()
+        forget_choice_when_closed(self.stream.capture(), &self.token_path)
     }
 
     /// Negotiated size.
@@ -129,5 +141,51 @@ impl PortalCapture {
     /// The portal session.
     pub fn session(&self) -> &ScreenCastSession {
         &self.session
+    }
+}
+
+/// Passes `result` on, first forgetting the saved restore token when it
+/// says the desktop closed the session.
+fn forget_choice_when_closed<'a>(
+    result: Result<FrameView<'a>, CaptureFailure>,
+    token_path: &Path,
+) -> Result<FrameView<'a>, CaptureFailure> {
+    if let Err(CaptureFailure::Closed(_)) = &result {
+        match token::save(token_path, "") {
+            Ok(()) => tracing::info!(
+                "screen sharing was stopped from the desktop; its saved choice is forgotten"
+            ),
+            Err(err) => tracing::warn!("could not remove the portal restore token: {err}"),
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_share_the_desktop_stopped_forgets_the_saved_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portal_restore_token");
+        token::save(&path, "saved").unwrap();
+        // Other failures keep it for the next open.
+        for failure in [
+            CaptureFailure::Timeout,
+            CaptureFailure::Failed("stream resolution changed".into()),
+        ] {
+            let _ = forget_choice_when_closed(Err(failure), &path);
+            assert_eq!(token::load(&path).unwrap().as_deref(), Some("saved"));
+        }
+        let result = forget_choice_when_closed(
+            Err(CaptureFailure::Closed("screen sharing was stopped".into())),
+            &path,
+        );
+        assert!(
+            matches!(result, Err(CaptureFailure::Closed(_))),
+            "{result:?}"
+        );
+        assert_eq!(token::load(&path).unwrap(), None, "the choice was kept");
     }
 }

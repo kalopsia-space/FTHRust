@@ -578,7 +578,8 @@ impl ExtImageCopy {
 
     /// Whether frames are captured into the dmabuf images. Turns false on
     /// its own when the compositor filled none of them in
-    /// [`DMABUF_FIRST_FRAME_DEADLINE`]; the caller can then free them.
+    /// [`DMABUF_FIRST_FRAME_DEADLINE`] or failed the first capture into
+    /// them; the caller can then free them.
     pub fn uses_dmabuf(&self) -> bool {
         self.dmabuf.is_some()
     }

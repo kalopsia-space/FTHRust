@@ -72,7 +72,8 @@ pub trait CaptureBackend: Send {
     /// Captures through shared memory from now on.
     fn use_shm(&mut self) {}
     /// Whether frames go into the images from `use_dmabuf`. A backend may
-    /// go back to shm on its own (the compositor filled none of them).
+    /// go back to shm on its own (the compositor filled none of them in
+    /// time, or failed the first capture into them).
     fn uses_dmabuf(&self) -> bool {
         false
     }

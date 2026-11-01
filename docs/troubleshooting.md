@@ -63,7 +63,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | 003 | ENGINE NOT FOUND | `fthrust-engine` is missing from next to the app. Re-download the AppImage. |
 | 004 | ENGINE NOT RESPONDING | The engine stopped answering. FTHRust offers **RESTART ENGINE**. |
 | 005 | ENGINE COULD NOT START | Often no usable encoder. See [above](#no-hardware-encoder-or-engine-could-not-start). |
-| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. A restart FTHRust makes on its own never brings up the screen-sharing dialog: if the portal would have to ask again, capture stops with **SCREEN SHARING NOT RESTORED** instead. |
+| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. A restart FTHRust makes on its own never asks you to choose a screen again: if the portal would have to ask, capture stops with **SCREEN SHARING NOT RESTORED** instead (a desktop that can't restore your choice may show its dialog for up to 3 seconds before FTHRust closes it). |
 | 007 | MANUAL RECORDING FAILED | A recording stopped with an error, for example when writing fell more than 8 seconds behind capture. |
 | 008 | RECORDING COULD NOT START | Often too little disk space (512 MB is needed). |
 | 009 | RECORDING COULD NOT STOP | The recording didn't finish cleanly. |
@@ -92,7 +92,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | New frames stopped arriving, or capture failed and the engine is restarting it. |
 | **CAPTURE DEGRADED — DARK / UNIFORM** | The picture has been black or one flat colour for 12 seconds. Expected in a dark scene or on a loading screen; the engine restarts capture once in case the feed is broken (not on the portal). |
 | **SETTINGS APPLY TIMED OUT** | Capture didn't come back within 30 seconds of a settings change. Press **RESTART ENGINE**. |
-| **SCREEN SHARING NOT RESTORED** | FTHRust restarted capture on its own (after the engine stopped, when game detection switched to or from a game, or after a recording), and your desktop's screen-sharing portal would have had to ask again which screen to share. FTHRust never brings that dialog up without you, so capture stopped. Press **RESTART ENGINE** and choose a screen. |
+| **SCREEN SHARING NOT RESTORED** | FTHRust restarted capture on its own (after the engine stopped, when game detection switched to or from a game, or after a recording), and your desktop's screen-sharing portal would have had to ask again which screen to share. FTHRust doesn't ask you to choose a screen without you starting capture, so it stopped (if the dialog came up anyway, FTHRust closed it after at most 3 seconds). Press **RESTART ENGINE** and choose a screen. |
 | **GAME CROP ADJUSTED** | The engine had to change a game's crop to make it fit the captured frame. **EDIT GAME CROP** lets you set it yourself. |
 | **DESKTOP KEPT ITS SHORTCUT** | Your desktop bound a different key than you asked for. |
 | **STOP RECORDING FIRST**, **WAIT FOR CLIP SAVE** | That action has to wait for the recording or save in progress. |
