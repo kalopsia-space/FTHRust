@@ -504,11 +504,14 @@ fn encode_frame(
 
 #[test]
 fn software_h264_and_hevc_capture_hold_back_no_frames() {
-    // A frame an encoder holds back (x264 or x265 frame threads) is
-    // missing from a clip saved now and from the end of a recording.
-    // tune=zerolatency gives x264 sliced threads and x265 one frame thread;
-    // FFmpeg keeps them only while the context's thread_type is libx264's
-    // default 0 (libx265 takes thread_count as its frame threads).
+    // A frame an encoder holds back is missing from a clip saved now and
+    // from the end of a recording. tune=zerolatency gives x264 sliced
+    // threads and x265 one frame thread; FFmpeg keeps them only while the
+    // context's thread_type is libx264's default 0 (libx265 takes
+    // thread_count as its frame threads). Kvazaar, which HEVC capture
+    // uses wherever FFmpeg has it (the pinned build), holds frames for its
+    // B-frame pyramid and overlapped frames unless capture turns them off.
+    use fthrust_media::encoder::encoder_exists;
     let (w, h) = (1920u32, 1080u32);
     for codec in [Codec::H264, Codec::Hevc] {
         let cfg = EncoderConfig {
@@ -519,6 +522,10 @@ fn software_h264_and_hevc_capture_hold_back_no_frames() {
             eprintln!("skipping {codec:?}: no software encoder");
             continue;
         };
+        if codec == Codec::Hevc && encoder_exists("libkvazaar") {
+            assert_eq!(enc.active_codec(), "libkvazaar");
+        }
+        eprintln!("{codec:?}: {}", enc.active_codec());
         let mut out = Vec::new();
         for i in 0..20u32 {
             let bgra = support::synthetic_bgra(w, h, i);
