@@ -1194,18 +1194,19 @@ fn through_a_black_zero_copy_restart(script: SyntheticScript) -> Option<Harness>
 }
 
 #[test]
-fn a_black_zero_copy_feed_that_shm_shows_fine_stays_on_shm() {
+fn a_zero_copy_feed_black_again_after_a_fine_shm_picture_is_refused() {
     let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
         return eprintln!("skipping: no VA-API device");
     };
     // The synthetic compositor completes dmabuf captures without drawing
     // into the images, so the watchdog reads the surfaces as the driver
     // allocated them; its shm frames show a picture. The content restart
-    // tries shared memory, whose first sample is fine: the zero-copy feed
-    // was the problem, and zero copy stays off for this capture start,
-    // through later generations too (the third comes from a scripted
-    // capture error 450 frames into the second; the first restarts on its
-    // dark run at 360, twelve samples of 30 frames).
+    // tries shared memory, whose first sample is fine; zero copy then gets
+    // a second look, its own first sample is black again, and it is
+    // refused: off for the rest of this capture start, through later
+    // generations too (the third comes from a scripted capture error 450
+    // frames into the second; the first restarts on its dark run at 360,
+    // twelve samples of 30 frames).
     let mut script = ext_dmabuf(320, 180, c);
     script
         .kinds
@@ -1220,10 +1221,18 @@ fn a_black_zero_copy_feed_that_shm_shows_fine_stays_on_shm() {
         s.health_flags & flags::CONTENT_SUSPECT == 0
     });
     assert_eq!(s.capture_generation, 2, "{s:?}");
-    assert!(
-        !h.engine.zero_copy_in_use(),
-        "the restart went back into zero copy"
-    );
+    // The second look (one more use_dmabuf), then shared memory for good.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.script.lock().unwrap().dmabuf_uses < 2 || h.engine.zero_copy_in_use() {
+        assert!(
+            Instant::now() < deadline,
+            "zero copy: in use {}, {} use_dmabuf",
+            h.engine.zero_copy_in_use(),
+            h.script.lock().unwrap().dmabuf_uses
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(h.engine.status().capture_generation, 2, "no restart for it");
     let s = wait_for(&h.engine, Duration::from_secs(30), |s| {
         s.capture_generation == 3
     });
@@ -1234,7 +1243,7 @@ fn a_black_zero_copy_feed_that_shm_shows_fine_stays_on_shm() {
     let zero_copy = h.engine.zero_copy_in_use();
     h.engine.shutdown();
     assert!(!zero_copy, "a later generation went back into zero copy");
-    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "dmabuf again");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 2, "dmabuf again");
 }
 
 #[test]

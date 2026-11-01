@@ -679,14 +679,56 @@ enum ZeroCopyTrust {
     /// Used wherever it applies.
     Trusted,
     /// The next generation starts on shared memory, and its first sample
-    /// decides: still dark, the darkness is real and zero copy comes back
-    /// in place; a picture, and zero copy is `Refused`.
+    /// decides (see [`zero_copy_trial_step`]).
     OnTrial,
-    /// Shared memory showed a picture where zero copy's was black: the
-    /// zero-copy feed is what is broken (a compositor that completes
+    /// Shared memory showed a picture: zero copy is back, and its own first
+    /// sample tells a broken feed from a black screen that just ended.
+    Verifying,
+    /// Zero copy's picture was black right after shared memory's was not:
+    /// the zero-copy feed is what is broken (a compositor that completes
     /// captures into the surfaces without drawing). Off until capture is
     /// started again.
     Refused,
+}
+
+/// What zero copy does in place after a trial step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrialSwitch {
+    Stay,
+    ToZeroCopy,
+    ToSharedMemory,
+}
+
+/// The zero-copy trial's step for a watchdog sample that is `dark` (black-
+/// like or uniform), read from a zero-copy surface (`from_surface`) or from
+/// a shared-memory frame.
+fn zero_copy_trial_step(
+    trust: ZeroCopyTrust,
+    dark: bool,
+    from_surface: bool,
+) -> (ZeroCopyTrust, TrialSwitch) {
+    match trust {
+        // The first shared-memory sample since the restart. Dark too: the
+        // darkness is real. A picture: either the zero-copy feed is broken
+        // or a real black screen just ended, and only zero copy's own next
+        // sample can tell (about a second of black frames on a broken feed).
+        ZeroCopyTrust::OnTrial if !from_surface => (
+            if dark {
+                ZeroCopyTrust::Trusted
+            } else {
+                ZeroCopyTrust::Verifying
+            },
+            TrialSwitch::ToZeroCopy,
+        ),
+        ZeroCopyTrust::Verifying if from_surface => {
+            if dark {
+                (ZeroCopyTrust::Refused, TrialSwitch::ToSharedMemory)
+            } else {
+                (ZeroCopyTrust::Trusted, TrialSwitch::Stay)
+            }
+        }
+        other => (other, TrialSwitch::Stay),
+    }
 }
 
 enum GenerationEnd {
@@ -958,16 +1000,19 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                 false
             }
             ZeroCopyTrust::Refused => false,
-            ZeroCopyTrust::Trusted => match start_zero_copy(backend.as_mut(), enc, buffer) {
-                Ok(()) => {
-                    tracing::info!("zero-copy capture in use");
-                    true
+            // Verifying: its first surface sample still decides.
+            ZeroCopyTrust::Trusted | ZeroCopyTrust::Verifying => {
+                match start_zero_copy(backend.as_mut(), enc, buffer) {
+                    Ok(()) => {
+                        tracing::info!("zero-copy capture in use");
+                        true
+                    }
+                    Err(reason) => {
+                        log_zero_copy_off(&mut zero_copy_logged, &reason);
+                        false
+                    }
                 }
-                Err(reason) => {
-                    log_zero_copy_off(&mut zero_copy_logged, &reason);
-                    false
-                }
-            },
+            }
         };
         let mut surface_proven = false;
         let mut realloc_tried = false;
@@ -1115,6 +1160,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             // The watchdog's sample of this frame, published and acted on
             // once the frame is encoded.
             let mut sampled = None;
+            let mut sampled_from_surface = false;
             let mut update_content = |m: ContentMetrics| sampled = Some(m);
             let encoded = if let FrameSource::Dmabuf(index) = view.source {
                 let upright = view.transform == OutputTransform::Normal && !view.y_invert;
@@ -1136,6 +1182,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                             watchdog.sample_raw(&surface_pixels, columns, rows, columns * 4)
                     {
                         update_content(m);
+                        sampled_from_surface = true;
                     }
                     if inner.keyframe_request.swap(false, Ordering::SeqCst) {
                         enc.request_keyframe();
@@ -1277,36 +1324,54 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
             if let Some(m) = sampled {
                 publish_content(&inner, m);
-                if zero_copy_trust == ZeroCopyTrust::OnTrial {
-                    // The first sample since the black-screen restart that
-                    // left zero copy decides.
-                    if m.streak > 0 {
-                        // Dark through shared memory too: the darkness is
-                        // real. Back to zero copy in place, as after new
-                        // buffer constraints.
-                        zero_copy_trust = ZeroCopyTrust::Trusted;
+                let (mut trust, switch) =
+                    zero_copy_trial_step(zero_copy_trust, m.streak > 0, sampled_from_surface);
+                match switch {
+                    TrialSwitch::Stay => {
+                        if trust != zero_copy_trust {
+                            tracing::info!("the zero-copy picture is fine; zero copy stays");
+                        }
+                    }
+                    TrialSwitch::ToZeroCopy => {
+                        // In place, as after new buffer constraints.
                         let size = backend
                             .buffer_size()
                             .unwrap_or_else(|| backend.native_size());
                         match start_zero_copy(backend.as_mut(), enc, size) {
                             Ok(()) => {
-                                tracing::info!(
-                                    "the picture is dark through shared memory too; zero-copy capture in use again"
-                                );
                                 zero_copy_active = true;
                                 surface_proven = false;
                                 realloc_tried = false;
                                 last_fresh_encoded = false;
+                                if trust == ZeroCopyTrust::Verifying {
+                                    tracing::info!(
+                                        "the picture is fine through shared memory; zero copy again, to see whether its own picture is too"
+                                    );
+                                } else {
+                                    tracing::info!(
+                                        "the picture is dark through shared memory too; zero-copy capture in use again"
+                                    );
+                                }
                             }
-                            Err(reason) => log_zero_copy_off(&mut zero_copy_logged, &reason),
+                            Err(reason) => {
+                                // Without zero copy there is nothing to verify.
+                                trust = ZeroCopyTrust::Trusted;
+                                log_zero_copy_off(&mut zero_copy_logged, &reason);
+                            }
                         }
-                    } else {
-                        zero_copy_trust = ZeroCopyTrust::Refused;
+                    }
+                    TrialSwitch::ToSharedMemory => {
                         tracing::warn!(
-                            "the picture is fine through shared memory but was black through zero copy; zero copy stays off until capture is started again"
+                            "the picture went black again through zero copy right after shared memory showed it; zero copy stays off until capture is started again"
                         );
+                        backend.use_shm();
+                        enc.release_dmabuf_targets();
+                        zero_copy_active = false;
+                        surface_proven = false;
+                        last_fresh_encoded = false;
                     }
                 }
+                zero_copy_trust = trust;
                 // On the portal a restart is a new ScreenCast session, whose
                 // picker could come up over the game (and dismissing it ends
                 // capture): there the content is only flagged.
@@ -1592,6 +1657,52 @@ fn log_zero_copy_off(logged: &mut bool, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_trial_refuses_zero_copy_only_when_black_right_after_a_shm_picture() {
+        use TrialSwitch::{Stay, ToSharedMemory, ToZeroCopy};
+        use ZeroCopyTrust::{OnTrial, Refused, Trusted, Verifying};
+        // Dark through shared memory too: the darkness is real.
+        assert_eq!(
+            zero_copy_trial_step(OnTrial, true, false),
+            (Trusted, ToZeroCopy)
+        );
+        // A picture through shared memory: back to zero copy to look at
+        // its own picture first (a black screen may just have ended).
+        assert_eq!(
+            zero_copy_trial_step(OnTrial, false, false),
+            (Verifying, ToZeroCopy)
+        );
+        // Zero copy black right after that: its feed is broken.
+        assert_eq!(
+            zero_copy_trial_step(Verifying, true, true),
+            (Refused, ToSharedMemory)
+        );
+        // Zero copy fine too: the black screen had ended; zero copy stays.
+        assert_eq!(
+            zero_copy_trial_step(Verifying, false, true),
+            (Trusted, Stay)
+        );
+        // Each step counts only its own kind of sample.
+        assert_eq!(zero_copy_trial_step(OnTrial, true, true), (OnTrial, Stay));
+        assert_eq!(
+            zero_copy_trial_step(Verifying, true, false),
+            (Verifying, Stay)
+        );
+        // Outside the trial nothing changes.
+        for dark in [false, true] {
+            for from_surface in [false, true] {
+                assert_eq!(
+                    zero_copy_trial_step(Trusted, dark, from_surface),
+                    (Trusted, Stay)
+                );
+                assert_eq!(
+                    zero_copy_trial_step(Refused, dark, from_surface),
+                    (Refused, Stay)
+                );
+            }
+        }
+    }
 
     #[test]
     fn zero_copy_that_cannot_start_frees_surfaces_an_earlier_generation_left() {
