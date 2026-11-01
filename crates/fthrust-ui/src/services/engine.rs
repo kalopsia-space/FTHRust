@@ -52,9 +52,10 @@ pub const KILL_GRACE_S: f64 = 2.0;
 /// capturing), so it gets about that long plus a margin. The UI fails a save
 /// that hasn't answered in 60 s anyway.
 pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
-/// The same with a manual recording still finishing: the engine gives a
-/// recording 15 s to stop when it shuts down.
-pub const RECORDING_EXIT_GRACE_S: f64 = 20.0;
+/// The same with a manual recording still finishing: the engine takes up to
+/// 3 s to get its last frames, then finishes the file (its trailer and the
+/// fsync) in the same 60 s wait as a save.
+pub const RECORDING_EXIT_GRACE_S: f64 = SAVE_EXIT_GRACE_S;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]

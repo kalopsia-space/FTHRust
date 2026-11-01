@@ -1744,8 +1744,7 @@ impl Services {
             self.run_rec_actions(state, actions);
         }
         // A recording still finishing gets its time when the engine stops
-        // (the engine gives it 15 s; the stop used to SIGTERM after 2 s,
-        // which cut that short).
+        // (the stop used to SIGTERM after 2 s, which cut its end off).
         let finishing = matches!(
             self.recording.state(),
             recording::RecordState::Starting

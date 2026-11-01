@@ -519,6 +519,8 @@ impl RecordWorker {
             Ok(t) => *thread = Some(t),
             Err(e) => {
                 *self.shared.phase() = Phase::Idle;
+                // Nothing to wait for at shutdown.
+                self.shared.released.store(true, Ordering::SeqCst);
                 let _ = self.events.send(Event::RecordingError {
                     request_id,
                     message: format!("The recording could not be started: {e}"),

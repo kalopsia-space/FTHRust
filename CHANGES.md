@@ -40,7 +40,7 @@ Fixes from a whole-project audit (`docs/superpowers/audit-2026-10-31.md` in the 
 
 ### Quitting, and the engine behind the app
 
-- Quitting while a clip saves lets the save finish (the engine was killed about 200 ms after the request and the clip lost), and a recording that is still finishing gets the engine's 15 s to write its end. The window closes first, so the app never sits frozen on screen while it waits.
+- Quitting while a clip saves lets the save finish (the engine was killed about 200 ms after the request and the clip lost), and so does a recording that is still writing its end (alpha.2 stopped the engine after 2 s). The window closes first, so the app never sits frozen on screen while it waits.
 - SIGTERM, SIGINT and SIGHUP (a logout, `systemctl stop`, Ctrl+C) quit the app the way closing it does: pending settings are written, a save in flight finishes and the session closes cleanly. They used to kill it on the spot; a second signal still quits at once.
 - Starting the app while it is still quitting waits for it, up to two minutes, and then opens the window; it used to say "already running" and show nothing.
 - The engine no longer hangs on exit when the app dies during a save or stops reading, and never drops the result of a save in flight for an app that is still reading. It stops capturing (as soon as a recording has its last frames) and frees its socket before finishing that save, so a relaunched app can start a new engine at once, and a SIGTERM during those waits ends them immediately.
