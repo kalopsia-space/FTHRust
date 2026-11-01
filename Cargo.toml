@@ -50,7 +50,7 @@ russh = { version = "0.64", default-features = false, features = ["ring", "flate
 russh-sftp = "3"
 keyring-core = "1"
 zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
-getrandom = "0.3"
+getrandom = "0.4"
 hmac = "0.13"
 sha1 = "0.11"
 egui = "0.37"
