@@ -97,6 +97,7 @@ Fixes from a whole-project audit (`docs/superpowers/audit-2026-10-31.md` in the 
 - SFTP asks for the host-key type your known_hosts holds for the server, as `ssh` does, so ECDSA and RSA entries are trusted (alpha.2 always asked for Ed25519 first and read them as an untrusted host).
 - A known_hosts file with bytes that are not UTF-8 no longer breaks SFTP trust, and FTHRust's own known_hosts keeps lines it cannot decode when it records a host.
 - SFTP removes what a failed upload left on the server (including a file renamed into place that then failed its checks), and an upload killed mid-transfer is cleaned up by the next upload of the same clip.
+- SFTP uses russh 0.65: with 0.64 a server could make the uploader allocate without bound (EXT_INFO packets) or stall every write by declaring a zero maximum packet size.
 - SFTP keeps 64 write requests in flight instead of 16: over a 60 ms round trip a clip uploads at 13.6 MB/s instead of 6.4.
 - A server URL or Auth header that cannot be sent is reported at once as an upload settings problem; the reference and alpha.2 retried it as a network error. Error messages no longer show the query string, fragment or credentials of the server URL.
 - Release builds of the uploader ignore the test-only `FTHRUST_UPLOADER_CATBOX_URL` and `FTHRUST_UPLOADER_NO_RETRY_DELAY` variables, and `fthrust-uploader --version` prints the version.

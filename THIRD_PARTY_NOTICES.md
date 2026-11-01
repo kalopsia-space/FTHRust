@@ -1998,7 +1998,7 @@ Apache License
 
 - `russh-cryptovec` 0.62.0
 - `russh-util` 0.52.0
-- `russh` 0.64.1
+- `russh` 0.65.0
 - `spirv` 0.4.0+sdk-1.4.341.0
 - `sync_wrapper` 1.0.2
 
