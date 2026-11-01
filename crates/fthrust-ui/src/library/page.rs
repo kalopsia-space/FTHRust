@@ -702,7 +702,7 @@ pub fn ui(ui: &mut Ui, state: &mut AppState) {
                         visible.push(path.clone());
                         let is_video = fthrust_core::clip_files::is_completed_video_path(path);
                         // Listed files exist; only a tracked, unfinished clip is not ready.
-                        let readiness = any_blocked.then(|| state.readiness.state(path));
+                        let readiness = any_blocked.then(|| state.readiness.listed_state(path));
                         let writing = readiness == Some(ReadinessState::Recording);
                         let (metadata, duration) =
                             state.thumb_meta.get(path).cloned().unwrap_or_else(|| {

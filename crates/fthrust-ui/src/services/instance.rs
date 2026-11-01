@@ -30,6 +30,11 @@ pub const PREVIOUS_INSTANCE_WAIT: Duration = Duration::from_secs(120);
 /// How often a waiting launch tries the lock again.
 const LOCK_POLL: Duration = Duration::from_millis(100);
 
+/// How long a launch waits on a lock holder that doesn't answer at all (no
+/// activation socket): one that has just taken the lock listens within
+/// milliseconds, and one that never will can't be waited out.
+pub const NO_ANSWER_WAIT: Duration = Duration::from_secs(2);
+
 /// What the running instance said to `activate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activation {
@@ -132,6 +137,7 @@ pub fn become_primary_within(
 ) -> Result<Instance, String> {
     let deadline = Instant::now() + wait;
     let mut told = false;
+    let mut silent_since: Option<Instant> = None;
     loop {
         match InstanceLock::acquire(lock_file) {
             LockResult::Acquired(lock) => return Ok(listen(Some(lock), runtime_dir, ctx)),
@@ -144,9 +150,19 @@ pub fn become_primary_within(
         // Asked again each turn: an instance that has only just taken the
         // lock may not listen yet.
         let answer = request_activation(runtime_dir);
-        if answer == Activation::Shown {
-            tracing::info!("another FTHR Clips instance owns the lock");
-            return Ok(Instance::secondary());
+        match answer {
+            Activation::Shown => {
+                tracing::info!("another FTHR Clips instance owns the lock");
+                return Ok(Instance::secondary());
+            }
+            Activation::Exiting => silent_since = None,
+            Activation::NoInstance => {
+                if silent_since.get_or_insert_with(Instant::now).elapsed() >= NO_ANSWER_WAIT {
+                    return Err(
+                        "another FTHR Clips holds the instance lock but does not answer".into(),
+                    );
+                }
+            }
         }
         if Instant::now() >= deadline {
             return Err(match answer {

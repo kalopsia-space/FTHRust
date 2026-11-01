@@ -239,9 +239,12 @@ fn while_a_clip_is_finalizing_the_cards_ask_for_their_readiness() {
     // The shortcut above must not hide a clip that is not ready.
     let page = settled_page(12_000, true);
     assert!(page.state_lookups > 0, "nothing asked about the clip");
+    // Only the card that shares the tracked clip's name asks the file
+    // system (final review: every visible card did, for as long as a
+    // recording ran).
     assert!(
-        page.state_lookups <= (page.built * FRAMES) as u64,
-        "{} questions for {} cards over {FRAMES} frames: more than one per card and frame",
+        page.state_lookups <= FRAMES as u64,
+        "{} questions for {} cards over {FRAMES} frames: more than the tracked card's",
         page.state_lookups,
         page.built
     );

@@ -42,7 +42,7 @@ Automatic encoder mode only uses GPU encoders, and won't quietly switch to your 
 
 ### "FTHR Clips is already running"
 
-Only one copy runs at a time; starting another brings the existing window forward. A copy that is still quitting (finishing a save, a recording or an export) is waited for, up to two minutes, and then the new one starts. If no window appears after that, the first copy may be stuck: `pkill -x fthrust` asks it to quit as if you had closed it, and a second `pkill -x fthrust` ends it at once. A capture engine it leaves behind is stopped by the next start.
+Only one copy runs at a time; starting another brings the existing window forward. A copy that is still quitting (finishing a save, a recording or an export) is waited for, and the new one starts once it has finished; after two minutes the new launch gives up and says the first copy is still shutting down. If no window appears after that, the first copy may be stuck: `pkill -x fthrust` asks it to quit as if you had closed it, and a second `pkill -x fthrust` ends it at once. A capture engine it leaves behind is stopped by the next start.
 
 ### Clips look blocky or smeared
 

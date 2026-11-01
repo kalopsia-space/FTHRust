@@ -342,6 +342,9 @@ impl Runner {
             );
             if self.info.events.contains(&egui::ViewportEvent::Close) {
                 tracing::info!("window closed by the app");
+                // As for the compositor's close: a launch from now on is told
+                // this instance is quitting.
+                crate::services::set_quitting();
                 el.exit();
                 return;
             }

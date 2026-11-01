@@ -142,6 +142,34 @@ fn a_launch_waits_for_an_instance_that_is_quitting() {
     assert_eq!(request_activation(&runtime), Activation::Shown);
 }
 
+/// A lock holder that never answers (its activation socket elsewhere, or
+/// none) is given up on after a short wait, not the two minutes a quitting
+/// instance gets.
+#[test]
+fn a_lock_holder_that_never_answers_is_given_up_on_quickly() {
+    use fthrust_core::single_instance::{InstanceLock, LockResult};
+    use fthrust_ui::services::instance::{NO_ANSWER_WAIT, become_primary_within};
+    let d = tempfile::tempdir().unwrap();
+    let runtime = d.path().join("rt");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let lock = d.path().join("fthr.lock");
+    let LockResult::Acquired(_held) = InstanceLock::acquire(&lock) else {
+        panic!("lock")
+    };
+    let ctx = egui::Context::default();
+    let started = Instant::now();
+    let r = become_primary_within(&lock, &runtime, &ctx, Duration::from_secs(60));
+    assert!(
+        r.is_err(),
+        "no secondary for an instance that never answered"
+    );
+    assert!(
+        started.elapsed() < NO_ANSWER_WAIT + Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn hotkey_client_writes_action_and_fails_without_socket() {
     let d = tempfile::tempdir().unwrap();

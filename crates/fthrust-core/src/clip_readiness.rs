@@ -182,6 +182,19 @@ impl ClipReadinessRegistry {
         }
     }
 
+    /// [`Self::state`] for a file the library lists, which exists: one whose
+    /// file name no tracked clip has is ready without asking the file system
+    /// (a canonicalise and a stat, which a page of cards can't afford every
+    /// frame while a recording runs).
+    pub fn listed_state(&self, path: &Path) -> ReadinessState {
+        if let Some(name) = path.file_name()
+            && !self.handles.keys().any(|k| k.file_name() == Some(name))
+        {
+            return ReadinessState::Ready;
+        }
+        self.state(path)
+    }
+
     /// Whether the clip may be opened, listed or uploaded.
     pub fn can_access(&self, path: &Path) -> bool {
         matches!(
