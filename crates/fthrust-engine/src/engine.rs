@@ -1035,13 +1035,14 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
             if zero_copy_active && !backend.uses_dmabuf() {
                 // The backend went back to shm on its own (the compositor
-                // filled none of the surfaces): free them, keep capturing.
+                // filled no surface in time, or failed the first capture
+                // into them): free them, keep capturing.
                 zero_copy_active = false;
                 surface_proven = false;
                 enc.release_dmabuf_targets();
                 log_zero_copy_off(
                     &mut zero_copy_logged,
-                    "the compositor filled none of the dmabuf capture buffers",
+                    "the compositor did not fill the dmabuf capture buffers (no first frame within 5 s, or it failed the first capture into them)",
                 );
             }
             inner.zero_copy.store(zero_copy_active, Ordering::Relaxed);
