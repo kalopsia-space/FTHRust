@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs with the version in a comment; Dependabot
+  # moves both together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # 1.98.1 is a branch of dtolnay/rust-toolchain, not a version tag: the
+      # pinned commit installs exactly that Rust. Change it together with
+      # rust-toolchain.toml when the toolchain moves.
+      - dependency-name: dtolnay/rust-toolchain
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # The egui family, wgpu and winit have to move together.
+      gui:
+        patterns: ["egui*", "ecolor", "emath", "epaint", "wgpu*", "winit", "accesskit*"]
+      rust-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The bench has its own workspace and lockfile.
+  - package-ecosystem: cargo
+    directory: /tools/uidrive
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      rust-minor-and-patch:
+        update-types: [minor, patch]

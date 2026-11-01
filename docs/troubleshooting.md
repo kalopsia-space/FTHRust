@@ -13,7 +13,7 @@ When something goes wrong, FTHRust says so in the bar at the bottom of the windo
 ### The status never reaches "Capturing"
 
 - **Is this a Wayland session?** Run `echo $WAYLAND_DISPLAY`. If it's empty, you're on X11, which FTHRust doesn't support.
-- **Did you cancel the screen-sharing dialog?** On desktops that use the ScreenCast portal, declining it stops capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**) and choose a screen this time.
+- **Did you cancel the screen-sharing dialog, or stop sharing?** On desktops that use the ScreenCast portal, declining the dialog, stopping the share from the desktop, or a recovery that could only continue by asking again all stop capture. Press **RESTART ENGINE** in the error bar (or **Alt+Shift+R**), and choose a screen if the dialog comes up.
 - **Is the portal installed?** You need `xdg-desktop-portal` plus a backend for your desktop: `xdg-desktop-portal-hyprland`, `-wlr`, `-kde` or `-gnome`.
 - **Try another capture method.** Start the app with `FTHR_CAPTURE_BACKEND=portal` (or `wlr`, or `ext`) to see if a different one works.
 
@@ -42,7 +42,7 @@ Automatic encoder mode only uses GPU encoders, and won't quietly switch to your 
 
 ### "FTHR Clips is already running"
 
-Only one copy runs at a time; starting another brings the existing window forward. If no window appears, the first copy may be stuck. Run `pkill fthrust` and start again.
+Only one copy runs at a time; starting another brings the existing window forward. A copy that is still quitting (finishing a save, a recording or an export) is waited for, and the new one starts once it has finished; after two minutes the new launch gives up and says the first copy is still shutting down. If no window appears after that, the first copy may be stuck: `pkill -x fthrust` asks it to quit as if you had closed it, and a second `pkill -x fthrust` ends it at once. A capture engine it leaves behind is stopped by the next start.
 
 ### Clips look blocky or smeared
 
@@ -63,7 +63,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | 003 | ENGINE NOT FOUND | `fthrust-engine` is missing from next to the app. Re-download the AppImage. |
 | 004 | ENGINE NOT RESPONDING | The engine stopped answering. FTHRust offers **RESTART ENGINE**. |
 | 005 | ENGINE COULD NOT START | Often no usable encoder. See [above](#no-hardware-encoder-or-engine-could-not-start). |
-| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. |
+| 006 | ENGINE STOPPED | The engine exited unexpectedly or stopped answering. FTHRust restarts it on its own up to 3 times in 10 minutes; after that, clips can't be saved until you press **RESTART ENGINE**. A restart FTHRust makes on its own never asks you to choose a screen again: if the portal would have to ask, capture stops with **SCREEN SHARING NOT RESTORED** instead (a desktop that can't restore your choice may show its dialog for up to 3 seconds before FTHRust closes it). |
 | 007 | MANUAL RECORDING FAILED | A recording stopped with an error, for example when writing fell more than 8 seconds behind capture. |
 | 008 | RECORDING COULD NOT START | Often too little disk space (512 MB is needed). |
 | 009 | RECORDING COULD NOT STOP | The recording didn't finish cleanly. |
@@ -92,6 +92,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 | **CAPTURE DEGRADED**, **CAPTURE STALLED**, **RECOVERING CAPTURE** | New frames stopped arriving, or capture failed and the engine is restarting it. |
 | **CAPTURE DEGRADED — DARK / UNIFORM** | The picture has been black or one flat colour for 12 seconds. Expected in a dark scene or on a loading screen; the engine restarts capture once in case the feed is broken (not on the portal). |
 | **SETTINGS APPLY TIMED OUT** | Capture didn't come back within 30 seconds of a settings change. Press **RESTART ENGINE**. |
+| **SCREEN SHARING NOT RESTORED** | FTHRust restarted capture on its own (after the engine stopped, when game detection switched to or from a game, or after a recording), and your desktop's screen-sharing portal would have had to ask again which screen to share. FTHRust doesn't ask you to choose a screen without you starting capture, so it stopped (if the dialog came up anyway, FTHRust closed it after at most 3 seconds). Press **RESTART ENGINE** and choose a screen. |
 | **GAME CROP ADJUSTED** | The engine had to change a game's crop to make it fit the captured frame. **EDIT GAME CROP** lets you set it yourself. |
 | **DESKTOP KEPT ITS SHORTCUT** | Your desktop bound a different key than you asked for. |
 | **STOP RECORDING FIRST**, **WAIT FOR CLIP SAVE** | That action has to wait for the recording or save in progress. |
@@ -114,7 +115,7 @@ Errors in the bottom bar are shown as `[Error NNN] TITLE`. Quote the number when
 - **The engine's** log is written to `~/.fthr/logs/engine.log`, rotated at 2 MB. `FTHRUST_LOG=debug` makes it more detailed.
 - **FFmpeg's** messages go into both logs under `fthrust_media::ffmpeg`, warnings and errors only. `FTHRUST_FFMPEG_LOG=info` (or `verbose`, `debug`, `trace`) lets more through. Each log's own filter must allow that level too: `RUST_LOG` for the app (it already passes `info`), `FTHRUST_LOG` for the engine, for example `RUST_LOG=debug FTHRUST_LOG=debug`.
 
-If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that.
+If the app was closed in any way other than quitting it (a crash, a power cut, a `kill -9`), the next start notes `previous_session_unclean` in its diagnostics. Quitting normally clears that, and so does logging out or the compositor exiting: the app shuts down in order then too.
 
 ## Diagnostic reports
 

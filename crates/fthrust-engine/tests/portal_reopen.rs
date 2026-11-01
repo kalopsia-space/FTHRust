@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use fthrust_core::FthrPaths;
 use fthrust_core::capture_config::CaptureConfig;
-use fthrust_engine::backend::{BackendFactory, RealFactory};
+use fthrust_engine::backend::{BackendFactory, OpenReason, RealFactory};
 use fthrust_ipc::BackendKind;
 
 #[test]
@@ -26,12 +26,18 @@ fn portal_opens_again_in_one_process_and_keeps_the_token() {
     let factory = RealFactory::new(Some(paths));
     let cfg = CaptureConfig::default();
     let mut reasons = Vec::new();
-    for attempt in 0..2 {
+    // The capture the user started, then a recovery re-open (restore-only,
+    // which goes to the portal because a token is saved).
+    for (attempt, open_reason) in [OpenReason::Start, OpenReason::Recovery]
+        .into_iter()
+        .enumerate()
+    {
         let started = Instant::now();
         let failure = match factory.create(
             BackendKind::PortalScreenCast,
             &cfg,
             false,
+            open_reason,
             Arc::new(AtomicBool::new(false)),
         ) {
             Ok(_) => panic!("no portal runs on the private bus"),
@@ -56,4 +62,21 @@ fn portal_opens_again_in_one_process_and_keeps_the_token() {
         Some("restore-me"),
         "a portal that is not there must not cost the restore token"
     );
+
+    // Without a saved choice a recovery can only fail: the portal would
+    // ask, and only the user may bring its dialog up. Capture stops.
+    fthrust_portal::token::save(&token_path, "").unwrap();
+    let failure = match factory.create(
+        BackendKind::PortalScreenCast,
+        &cfg,
+        false,
+        OpenReason::Recovery,
+        Arc::new(AtomicBool::new(false)),
+    ) {
+        Ok(_) => panic!("no portal runs on the private bus"),
+        Err(f) => f,
+    };
+    assert!(failure.retry_pointless, "{failure:?}");
+    assert!(failure.needs_dialog, "{failure:?}");
+    assert!(failure.reason.contains("dialog"), "{}", failure.reason);
 }

@@ -38,8 +38,10 @@ pub struct CardData {
     pub upload_enabled: bool,
     /// Queued or uploading right now.
     pub uploading: bool,
-    /// Accessible (else `Finalizing`).
+    /// Accessible (else `Finalizing`, or `Recording`).
     pub ready: bool,
+    /// Not ready because a recording is still writing the file.
+    pub recording: bool,
     /// Transient feedback text.
     pub feedback: Option<String>,
     /// The thumbnail texture and its pixel size.
@@ -484,11 +486,16 @@ pub fn card(
             "cardUploadedBadge",
         );
     }
-    // Finalizing badge or action feedback, top-left at 8,8.
+    // Finalizing (or Recording) badge or action feedback, top-left at 8,8.
     if busy {
+        let (text, marker) = if d.recording {
+            ("Recording", "cardRecordingBadge")
+        } else {
+            ("Finalizing", "cardFinalizingBadge")
+        };
         let sz = badge_size(
             ui,
-            "Finalizing",
+            text,
             size::MICRO,
             Weight::W400,
             Vec2::new(7.0, 3.0),
@@ -498,13 +505,13 @@ pub fn card(
             ui,
             t,
             Rect::from_min_size(thumb.min + Vec2::splat(8.0), sz),
-            "Finalizing",
+            text,
             size::MICRO,
             Weight::W400,
             t.color(Color::Warning),
             Color::Bg,
             None,
-            "cardFinalizingBadge",
+            marker,
         );
     } else if let Some(fb) = &d.feedback {
         let sz = badge_size(ui, fb, size::LABEL, Weight::W400, Vec2::new(8.0, 4.0), 1.0);

@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -15,11 +15,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fthrust_core::clip_readiness::ReadinessState;
 use fthrust_core::export_presets::ExportPreset;
+use fthrust_core::library_ownership::{Ownership, classify_media_path};
 use fthrust_core::upload::history::{Entry, History};
 use fthrust_core::upload::settings::Provider;
 use fthrust_core::upload::{CATBOX_LIMIT_BYTES, validate};
 use serde_json::{Map, Value, json};
 
+use crate::library::page::NotDeleted;
 use crate::services::CardKind;
 use crate::shell::error_bar::{Action, Level};
 use crate::state::{AppState, DialogKind, DialogResult, StatusStyle, StatusText};
@@ -42,7 +44,11 @@ pub const AGAIN_ACTION: &str = "upload-again:";
 /// Error-bar action that opens the upload settings.
 pub const OPEN_SETTINGS_ACTION: &str = "open-upload-settings";
 
-/// Process timeouts per request kind (`_invoke_plugin`).
+/// How long the uploader may go without a word per request kind
+/// (`_invoke_plugin`), before it is stopped: a program that keeps writing
+/// (an upload reports its progress on stderr) is working, however long it
+/// takes, and a clip as big as it is on a link as slow as it is must not be
+/// cut off for that.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeouts {
     /// `upload`.
@@ -52,6 +58,11 @@ pub struct Timeouts {
     /// `sftp_save` / `sftp_forget`.
     pub credentials: Duration,
 }
+
+/// The start of the lines in which an upload reports its progress on stderr
+/// (`[Uploader] Sent 12.0 of 456.7 MB`). Any output counts as a sign of
+/// life; these are not the reason a crashed uploader gives.
+const PROGRESS_LINE: &str = "[Uploader] Sent ";
 
 impl Default for Timeouts {
     fn default() -> Self {
@@ -73,11 +84,15 @@ pub struct Reply {
     /// The upload settings are wrong (URL, token); retrying cannot help.
     pub settings_problem: bool,
     /// What the user should know about an upload that worked: no link came
-    /// back, the clip could not be deleted, the history was not saved.
+    /// back, the history was not saved.
     pub warning: Option<String>,
     /// The history entry of the upload, as the uploader made it. The history
     /// file is where the app learns it; this is for when that write failed.
     pub upload_info: Option<Map<String, Value>>,
+    /// The upload is confirmed and the settings ask for the clip to be
+    /// deleted: the uploader leaves that to the app (see
+    /// [`delete_uploaded`]).
+    pub delete: bool,
 }
 
 impl Reply {
@@ -89,6 +104,7 @@ impl Reply {
             settings_problem: false,
             warning: None,
             upload_info: None,
+            delete: false,
         }
     }
 }
@@ -127,31 +143,64 @@ pub fn uploader_exe() -> Option<PathBuf> {
 }
 
 /// Runs one request (`_invoke_plugin`): the request on stdin, the last
-/// non-blank stdout line parsed as the reply; the process is killed when
-/// `timeout` passes.
+/// non-blank stdout line parsed as the reply; the process is killed when it
+/// has written nothing, on stdout or stderr, for `timeout`.
 pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildSlot) -> Reply {
     use std::os::unix::process::CommandExt;
-    let mut child = match Command::new(exe)
-        .process_group(0)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let spawn = || {
+        Command::new(exe)
+            .process_group(0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    // "Text file busy": a program that was just written can't be started
+    // while another thread's freshly forked child still holds it open for
+    // writing (until that child execs). It clears within milliseconds.
+    let mut spawned = spawn();
+    for _ in 0..10 {
+        match &spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+                spawned = spawn();
+            }
+            _ => break,
+        }
+    }
+    let mut child = match spawned {
         Ok(c) => c,
-        Err(_) => return Reply::fail(MISSING),
+        Err(e) => {
+            tracing::warn!(exe = %exe.display(), error = %e, "uploader could not be started");
+            return Reply::fail(MISSING);
+        }
     };
     slot.set(Some(child.id()));
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(request.to_string().as_bytes());
     }
+    let started = Instant::now();
+    // When the process last wrote a byte, in milliseconds since `started`.
+    let heard = Arc::new(AtomicU64::new(0));
     let read = |r: Option<Box<dyn Read + Send>>| {
+        let heard = heard.clone();
         std::thread::spawn(move || {
-            let mut s = String::new();
+            let mut bytes = Vec::new();
             if let Some(mut r) = r {
-                let _ = r.read_to_string(&mut s);
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match r.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            bytes.extend_from_slice(&chunk[..n]);
+                            heard.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
             }
-            s
+            String::from_utf8_lossy(&bytes).into_owned()
         })
     };
     let out = read(
@@ -166,11 +215,17 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
             .take()
             .map(|s| Box::new(s) as Box<dyn Read + Send>),
     );
-    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break Some(s),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None)
+                if started
+                    .elapsed()
+                    .saturating_sub(Duration::from_millis(heard.load(Ordering::Relaxed)))
+                    < timeout =>
+            {
+                std::thread::sleep(Duration::from_millis(25))
+            }
             _ => {
                 slot.kill();
                 let _ = child.kill();
@@ -186,7 +241,14 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
         return Reply::fail("The uploader did not finish in time.");
     };
     let Some(line) = stdout.lines().rev().find(|l| !l.trim().is_empty()) else {
-        let e = stderr.trim();
+        // What it said, bar the progress lines: how far it got is not why it
+        // died.
+        let said: Vec<&str> = stderr
+            .lines()
+            .filter(|l| !l.starts_with(PROGRESS_LINE))
+            .collect();
+        let e = said.join("\n");
+        let e = e.trim();
         return Reply::fail(if e.is_empty() {
             format!("Uploader exited with code {}", status.code().unwrap_or(-1))
         } else {
@@ -212,6 +274,7 @@ pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildS
                 Some(Value::Object(info)) if !info.is_empty() => Some(info.clone()),
                 _ => None,
             },
+            delete: m.get("delete").and_then(Value::as_bool) == Some(true),
         },
         _ => Reply::fail("Uploader returned an invalid response."),
     }
@@ -484,6 +547,7 @@ impl UploadService {
         if mtime != self.history_mtime {
             self.history_mtime = mtime;
             state.upload_history = History::load(&state.paths);
+            restore_unsaved(state);
         }
     }
 
@@ -557,7 +621,11 @@ impl UploadService {
         let mut later = VecDeque::new();
         while let Some((path, compress)) = self.waiting.pop_front() {
             match state.readiness.state(&path) {
-                ReadinessState::EngineCommitted | ReadinessState::Finalizing => {
+                // A recording is held back as long as it is written: an
+                // upload that deletes the file would take a live one.
+                ReadinessState::Recording
+                | ReadinessState::EngineCommitted
+                | ReadinessState::Finalizing => {
                     later.push_back((path, compress));
                     continue;
                 }
@@ -689,17 +757,29 @@ impl UploadService {
                 state
                     .upload_history
                     .alias_compressed(&original, &done.key, *size);
+                keep_for_session(state, &original);
             }
+            keep_for_session(state, &done.key);
         }
         if let Some(warning) = &done.reply.warning {
-            state.error_bar.push_error(
+            notice(
+                state,
                 "UPLOAD WARNING",
                 warning,
-                Level::Warning,
                 Vec::new(),
-                Some(format!("upload-warning:{}", done.path.display())),
+                format!("upload-warning:{}", done.path.display()),
                 false,
             );
+        }
+        // The uploader says the clip may go; whether it does is up to the
+        // library's rules, asked now rather than when the upload started.
+        if done.reply.delete && done.reply.warning.is_none() {
+            // The file that went out: the clip, or the compressed copy of it.
+            let sent = done
+                .compressed
+                .as_ref()
+                .map_or(done.path.as_path(), |(copy, _, _)| copy.as_path());
+            delete_uploaded(state, sent);
         }
         let (text, kind) = if compressed {
             ("UPLOADED COMPRESSED COPY", "COMPRESSED COPY")
@@ -766,6 +846,7 @@ impl Drop for UploadService {
 
 /// The library's own spelling of `path` (scans see resolved paths; cards,
 /// renames and deletes use the library's), so one clip is one queue entry.
+/// The records carry their resolved path: only `path` is resolved here, once.
 fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
     if state.library.records.iter().any(|r| r.path == path) {
         return path;
@@ -775,7 +856,7 @@ fn library_path(state: &AppState, path: PathBuf) -> PathBuf {
         .library
         .records
         .iter()
-        .find(|r| resolved(&r.path) == real)
+        .find(|r| r.identity == real)
         .map(|r| r.path.clone())
         .unwrap_or(path)
 }
@@ -801,24 +882,149 @@ fn unsaved_entry(
     }
 }
 
+/// Why an automatic delete leaves a clip alone, as the bar says it.
+const KEPT_BUSY: &str =
+    "an export or share of it is queued or running. Delete it yourself when that has finished.";
+const KEPT_OPEN: &str = "it is open in the editor. Delete it yourself once you have closed it.";
+
+/// Auto-delete: removes the file an upload confirmed, `sent`, the way the bin
+/// button would (`library::page::remove_clip`), only more carefully. The
+/// uploader leaves this to the app because only the app knows what has become
+/// of the clip since the upload began: an export or share that reads it keeps
+/// it, and so does an editor session on it, open or parked, which the bin
+/// button (pressed by the user) would close but an automatic delete must not
+/// pull a clip out from under; the bar says so in both cases. Nothing outside
+/// the clips folder is ever removed, imported libraries least of all.
+fn delete_uploaded(state: &mut AppState, sent: &Path) {
+    // Switched off while the upload ran: the setting counts at this moment.
+    if !state.uploader_settings.flag("upload_auto_delete") {
+        return;
+    }
+    let imports = crate::library::page::imported_roots(state);
+    let ours =
+        classify_media_path(sent, &state.library.clips_root, &imports) == Ownership::FthrOwned;
+    // Gone already (deleted in a file manager meanwhile): the library's
+    // watcher takes it from here.
+    if !ours || !sent.is_file() {
+        return;
+    }
+    let name = file_name(sent);
+    let kept = |state: &mut AppState, why: &str| {
+        notice(
+            state,
+            "UPLOAD WARNING",
+            &format!("{name} was uploaded, but not deleted: {why}"),
+            Vec::new(),
+            format!("upload-warning:{}", sent.display()),
+            false,
+        )
+    };
+    // The export first: closing an editor would not free the clip from it.
+    if crate::editor::sessions::exporting(state, sent) {
+        return kept(state, KEPT_BUSY);
+    }
+    if crate::editor::sessions::holds(state, sent) {
+        return kept(state, KEPT_OPEN);
+    }
+    match crate::library::page::remove_clip(state, sent) {
+        Ok(()) => {}
+        Err(NotDeleted::Busy) => kept(state, KEPT_BUSY),
+        Err(NotDeleted::Failed(e)) => notice(
+            state,
+            "UPLOAD WARNING",
+            &format!("Uploaded, but local delete failed: {e}"),
+            Vec::new(),
+            format!("upload-warning:{}", sent.display()),
+            false,
+        ),
+    }
+}
+
+/// A bar entry about what an upload came to. Shown whatever "Show capture
+/// error messages" says: it holds what nothing else tells (a link, why a
+/// clip was kept, why a button does nothing).
+fn notice(
+    state: &mut AppState,
+    title: &str,
+    detail: &str,
+    actions: Vec<Action>,
+    key: String,
+    dismiss_on_action: bool,
+) {
+    let detail: String = detail.trim().chars().take(240).collect();
+    state.error_bar.push(
+        title,
+        &detail,
+        Level::Warning,
+        actions,
+        Some(key),
+        dismiss_on_action,
+    );
+}
+
+/// Remembers `key`'s entry, as the history has it now, for the rest of the
+/// session: the upload worked, but nothing could write it to the file, and
+/// the entry is the only record of the clip's link.
+fn keep_for_session(state: &mut AppState, key: &Path) {
+    if let Some(entry) = state.upload_history.get(key) {
+        state.upload_unsaved.insert(key.to_path_buf(), entry);
+    }
+}
+
+/// Puts the entries only this session knows back into the history after it was
+/// read from its file again. An entry the file has by now is the file's.
+pub fn restore_unsaved(state: &mut AppState) {
+    state
+        .upload_unsaved
+        .retain(|key, _| !state.upload_history.is_uploaded(key));
+    for (key, entry) in &state.upload_unsaved {
+        state.upload_history.record(key, entry.clone());
+    }
+}
+
+/// The library renamed a clip: an entry only this session knows follows it.
+pub fn unsaved_renamed(state: &mut AppState, old: &Path, new: &Path) {
+    if let Some(entry) = state.upload_unsaved.remove(old) {
+        state.upload_history.rename(old, new);
+        state.upload_unsaved.insert(new.to_path_buf(), entry);
+    }
+}
+
 /// The user asked to upload a clip that is uploaded already but has no link
 /// (its server sent none back, so the card offers "Upload clip" and nothing
 /// would happen): say so, and offer to upload it again.
 fn explain_no_link(state: &mut AppState, path: &Path) {
     let name = file_name(path);
-    state.error_bar.push_error(
+    notice(
+        state,
         "ALREADY UPLOADED",
         &format!(
             "{name} was uploaded, but its server sent no link back, so there is nothing to copy. Upload it again to try for one."
         ),
-        Level::Warning,
         vec![Action {
             label: "UPLOAD AGAIN".into(),
             id: format!("{AGAIN_ACTION}{}", path.display()),
         }],
-        Some(format!("{AGAIN_ACTION}{}", path.display())),
+        format!("{AGAIN_ACTION}{}", path.display()),
         true,
     );
+}
+
+/// The clip is in the upload history but has no link to copy: its server took
+/// it and sent none back. The card and the editor offer to upload it again.
+pub fn uploaded_without_link(state: &AppState, path: &Path) -> bool {
+    let key = resolved(path);
+    state.upload_history.is_uploaded(&key) && state.upload_history.link(&key).is_none()
+}
+
+/// The library renamed or deleted the clip at `path`: the bar's RETRY NOW and
+/// UPLOAD AGAIN for it name that path, so they would do nothing now.
+pub fn forget_clip_notices(state: &mut AppState, path: &Path) {
+    for prefix in ["upload:", AGAIN_ACTION] {
+        state
+            .error_bar
+            .remove_by_key(&format!("{prefix}{}", path.display()));
+    }
 }
 
 fn file_name(path: &Path) -> String {
@@ -878,8 +1084,9 @@ impl Worker {
         if !path.is_file() {
             return Reply::fail("File no longer exists (deleted before upload)");
         }
-        // `clips_root` is the only folder the uploader may delete from after
-        // an upload; imported folders are in `roots` but never deleted from.
+        // `clips_root` is the only folder whose clips the uploader reports as
+        // deletable after an upload (the app does the deleting); imported
+        // folders are in `roots` but never deleted from.
         let request = json!({
             "action": "upload",
             "path": path,

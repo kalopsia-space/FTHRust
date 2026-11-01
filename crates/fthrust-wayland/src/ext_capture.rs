@@ -578,7 +578,8 @@ impl ExtImageCopy {
 
     /// Whether frames are captured into the dmabuf images. Turns false on
     /// its own when the compositor filled none of them in
-    /// [`DMABUF_FIRST_FRAME_DEADLINE`]; the caller can then free them.
+    /// [`DMABUF_FIRST_FRAME_DEADLINE`] or failed the first capture into
+    /// them; the caller can then free them.
     pub fn uses_dmabuf(&self) -> bool {
         self.dmabuf.is_some()
     }
@@ -755,7 +756,6 @@ impl ExtImageCopy {
                 "the capture session was stopped by the compositor".into(),
             ));
         }
-        use ext_image_copy_capture_frame_v1::FailureReason;
         let mut reallocated = false;
         loop {
             if self.pending_frame.is_none() {
@@ -785,8 +785,9 @@ impl ExtImageCopy {
             // the frame, so the batch to wait for is the first one after the
             // buffer was made, which has usually arrived already.
             let serial = self.requested_serial;
-            match reason {
-                FailureReason::BufferConstraints if self.dmabuf.is_some() => {
+            let dmabuf = self.dmabuf.is_some();
+            match on_failed_frame(reason, dmabuf, self.first_dmabuf.pending(), reallocated) {
+                FailedFrame::Invalidated => {
                     // Wait briefly for the new batch so the caller sees
                     // fresh constraints; a missing batch is not an error.
                     match self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial) {
@@ -795,24 +796,32 @@ impl ExtImageCopy {
                     }
                     return Err(CaptureFailure::DmabufInvalidated);
                 }
-                FailureReason::BufferConstraints if !reallocated => {
+                FailedFrame::Reallocate => {
                     // Ask again with buffers for the new constraints, within
                     // the same deadline: on a static screen the compositor
                     // may hold the new request too.
                     self.wait_constraints(Instant::now() + CONSTRAINTS_DEADLINE, serial)?;
                     reallocated = true;
                 }
-                FailureReason::BufferConstraints => {
+                FailedFrame::BackToShm => {
+                    tracing::warn!(
+                        "the compositor failed the first capture into the dmabuf buffers; capturing through shared memory"
+                    );
+                    // Ask again through shm within the same deadline; the shm
+                    // frame repeats meanwhile.
+                    self.use_shm();
+                }
+                FailedFrame::RejectedTwice => {
                     return Err(CaptureFailure::Failed(
                         "the compositor rejected the frame twice".into(),
                     ));
                 }
-                FailureReason::Stopped => {
+                FailedFrame::Stopped => {
                     return Err(CaptureFailure::Failed(
                         "the capture session was stopped by the compositor".into(),
                     ));
                 }
-                _ => {
+                FailedFrame::Failed => {
                     return Err(CaptureFailure::Failed(
                         "the compositor failed the frame".into(),
                     ));
@@ -887,6 +896,41 @@ impl ExtImageCopy {
             repeated,
             source: FrameSource::Shm,
         }
+    }
+}
+
+/// What capture does with a frame the compositor failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailedFrame {
+    /// New constraints in dmabuf mode: the caller makes new images.
+    Invalidated,
+    /// New constraints in shm mode: reallocate and ask again, once.
+    Reallocate,
+    /// Dmabuf mode still waits for its first frame and the compositor
+    /// fails the copies: back to shm, as when that frame is overdue.
+    BackToShm,
+    /// New constraints right after a reallocation.
+    RejectedTwice,
+    /// The session is gone.
+    Stopped,
+    /// Anything else ends the generation.
+    Failed,
+}
+
+fn on_failed_frame(
+    reason: ext_image_copy_capture_frame_v1::FailureReason,
+    dmabuf: bool,
+    first_dmabuf_pending: bool,
+    reallocated: bool,
+) -> FailedFrame {
+    use ext_image_copy_capture_frame_v1::FailureReason;
+    match reason {
+        FailureReason::BufferConstraints if dmabuf => FailedFrame::Invalidated,
+        FailureReason::BufferConstraints if !reallocated => FailedFrame::Reallocate,
+        FailureReason::BufferConstraints => FailedFrame::RejectedTwice,
+        FailureReason::Stopped => FailedFrame::Stopped,
+        _ if dmabuf && first_dmabuf_pending => FailedFrame::BackToShm,
+        _ => FailedFrame::Failed,
     }
 }
 
@@ -1012,6 +1056,43 @@ mod tests {
         assert_eq!((s.width, s.height), (2560, 1440));
         // Only a failure that came before its batch waits for it.
         assert!(!s.batch_after(s.done_serial));
+    }
+
+    #[test]
+    fn a_failed_first_dmabuf_capture_goes_back_to_shm() {
+        use ext_image_copy_capture_frame_v1::FailureReason::{BufferConstraints, Stopped, Unknown};
+        // Before the first dmabuf frame, a compositor that fails the copies
+        // cannot fill the images: shm, like an overdue first frame.
+        assert_eq!(
+            on_failed_frame(Unknown, true, true, false),
+            FailedFrame::BackToShm
+        );
+        // Once dmabuf frames came, or in shm mode, a failure still ends the
+        // generation; constraints and a stopped session keep their meaning.
+        assert_eq!(
+            on_failed_frame(Unknown, true, false, false),
+            FailedFrame::Failed
+        );
+        assert_eq!(
+            on_failed_frame(Unknown, false, false, false),
+            FailedFrame::Failed
+        );
+        assert_eq!(
+            on_failed_frame(BufferConstraints, true, true, false),
+            FailedFrame::Invalidated
+        );
+        assert_eq!(
+            on_failed_frame(BufferConstraints, false, false, false),
+            FailedFrame::Reallocate
+        );
+        assert_eq!(
+            on_failed_frame(BufferConstraints, false, false, true),
+            FailedFrame::RejectedTwice
+        );
+        assert_eq!(
+            on_failed_frame(Stopped, true, true, false),
+            FailedFrame::Stopped
+        );
     }
 
     #[test]

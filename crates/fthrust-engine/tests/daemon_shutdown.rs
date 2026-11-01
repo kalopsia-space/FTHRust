@@ -12,6 +12,7 @@ use fthrust_engine::audio::{AudioConfig, AudioProvider, AudioSourceKind, Synthet
 use fthrust_engine::backend::{KindScript, SyntheticFactory, SyntheticScript};
 use fthrust_engine::daemon::{CONFIGURE_FAILED, Stop, serve_until};
 use fthrust_engine::engine::EngineDeps;
+use fthrust_engine::save::RECORD_FINISH_DELAY_MS;
 use fthrust_ipc::transport::EngineClient;
 use fthrust_ipc::{AudioStatus, BackendKind, Command, EngineConfig, Event};
 use tokio::sync::mpsc;
@@ -65,7 +66,7 @@ impl AudioProvider for NotingAudio {
     fn stop(&self) {
         self.stopped
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .get_or_insert_with(Instant::now);
         self.inner.stop()
     }
@@ -146,6 +147,7 @@ fn config() -> EngineConfig {
         },
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -406,7 +408,8 @@ async fn capture_stops_before_the_engine_waits_for_a_save() {
         matches!(e, Event::SaveResult { result: Ok(_), .. }),
         "{e:?}"
     );
-    let stopped = stopped.lock().unwrap().expect("capture was stopped");
+    let stopped = *stopped.lock().unwrap_or_else(|p| p.into_inner());
+    let stopped = stopped.expect("capture was stopped");
     assert!(
         stopped < answered,
         "capture stopped only after the save had finished"
@@ -467,4 +470,129 @@ async fn a_client_that_stops_reading_cannot_hold_up_the_shutdown() {
         signalled.elapsed()
     );
     drop(client);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_keeps_hearing_from_an_engine_finishing_a_save() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // During the shutdown the engine sent nothing until the save's result,
+    // so the UI's hang check (15 s without an event) took an engine
+    // finishing a long save for a hung one and killed it, losing the save.
+    let d = start(Arc::new(SlowAudio {
+        inner: SyntheticAudio::new(),
+        delay: Duration::from_secs(3),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::SaveClip {
+            request_id: 6,
+            path: d.tmp.path().join("long-save.mp4"),
+            seconds: 0,
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::SaveStarted { request_id: 6 })
+    })
+    .await;
+    client.send(Command::Shutdown).await.unwrap();
+    let mut last = Instant::now();
+    let (mut longest, mut heartbeats) = (Duration::ZERO, 0);
+    loop {
+        let e = tokio::time::timeout(Duration::from_secs(20), client.events().recv())
+            .await
+            .expect("an event within 20 s")
+            .expect("the engine hung up before the save's result");
+        longest = longest.max(last.elapsed());
+        last = Instant::now();
+        match e {
+            Event::Heartbeat => heartbeats += 1,
+            Event::SaveResult { request_id: 6, .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        heartbeats >= 3,
+        "{heartbeats} heartbeats while the save ran"
+    );
+    assert!(
+        longest < Duration::from_millis(1500),
+        "{longest:?} without a word from the engine"
+    );
+    finished(&d, Duration::from_secs(10)).await.unwrap();
+}
+
+/// Sets the record thread's test-only finish delay for one test.
+struct SlowRecordingFinish;
+
+impl SlowRecordingFinish {
+    fn set(ms: u64) -> Self {
+        RECORD_FINISH_DELAY_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for SlowRecordingFinish {
+    fn drop(&mut self) {
+        RECORD_FINISH_DELAY_MS.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capture_stops_before_a_recording_finishes_writing() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The shutdown joined the recording, including its trailer and fsync,
+    // before stopping capture, so a slow disk kept the screen captured.
+    // The recording only needs capture until it has its last frames.
+    let _slow = SlowRecordingFinish::set(3000);
+    let stopped = Arc::new(Mutex::new(None));
+    let d = start(Arc::new(NotingAudio {
+        inner: SlowAudio {
+            inner: SyntheticAudio::new(),
+            delay: Duration::ZERO,
+        },
+        stopped: stopped.clone(),
+    }));
+    let mut client = connect(&d.socket).await;
+    capture_running(&mut client).await;
+    client
+        .send(Command::StartRecording {
+            request_id: 7,
+            path: d.tmp.path().join("slow-finish.mp4"),
+        })
+        .await
+        .unwrap();
+    next_event(&mut client, Duration::from_secs(10), |e| {
+        matches!(e, Event::RecordingStarted { request_id: 7, .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let asked = Instant::now();
+    client.send(Command::Shutdown).await.unwrap();
+    let e = next_event(&mut client, Duration::from_secs(20), |e| {
+        matches!(
+            e,
+            Event::RecordingStopped { .. } | Event::RecordingError { .. }
+        )
+    })
+    .await;
+    let written = Instant::now();
+    assert!(matches!(e, Event::RecordingStopped { .. }), "{e:?}");
+    let stopped = *stopped.lock().unwrap_or_else(|p| p.into_inner());
+    let stopped = stopped.expect("capture was stopped");
+    assert!(
+        stopped.duration_since(asked) < Duration::from_secs(2),
+        "capture stopped {:?} after the shutdown",
+        stopped.duration_since(asked)
+    );
+    assert!(
+        stopped < written,
+        "capture stopped only after the recording was written"
+    );
+    finished(&d, Duration::from_secs(10)).await.unwrap();
 }

@@ -327,6 +327,10 @@ pub const RECORD_STOP_WAIT: Duration = Duration::from_millis(500);
 const RECORD_AUDIO_MAX_MS: u32 = 1000;
 /// Frames per millisecond at the capture rate.
 const FRAMES_PER_MS: u64 = SAMPLE_RATE as u64 / 1000;
+/// Milliseconds added before a recording's finish, standing in for a slow
+/// disk (tests).
+#[doc(hidden)]
+pub static RECORD_FINISH_DELAY_MS: AtomicU64 = AtomicU64::new(0);
 
 /// A recording's audio clock. It starts at the capture time of the
 /// track's first sample and counts the frames handed out, always whole
@@ -417,6 +421,10 @@ struct RecordShared {
     stop_request: AtomicU64,
     /// When the stop was asked for: frames captured before it are kept.
     stop_ns: AtomicI64,
+    /// Set once the recording needs no more frames or audio: it has taken
+    /// its tail, failed, or never got going. What is left (the trailer and
+    /// the fsync) does not need capture.
+    released: AtomicBool,
 }
 
 impl RecordShared {
@@ -457,6 +465,7 @@ impl RecordWorker {
                 stop: AtomicBool::new(false),
                 stop_request: AtomicU64::new(0),
                 stop_ns: AtomicI64::new(0),
+                released: AtomicBool::new(true),
             }),
             thread: Mutex::new(None),
             backlog_seconds,
@@ -492,6 +501,7 @@ impl RecordWorker {
             *phase = Phase::Starting;
         }
         self.shared.stop.store(false, Ordering::SeqCst);
+        self.shared.released.store(false, Ordering::SeqCst);
         let mut thread = self.thread.lock().unwrap_or_else(|p| p.into_inner());
         let job = RecordJob {
             engine: self.engine.clone(),
@@ -509,6 +519,8 @@ impl RecordWorker {
             Ok(t) => *thread = Some(t),
             Err(e) => {
                 *self.shared.phase() = Phase::Idle;
+                // Nothing to wait for at shutdown.
+                self.shared.released.store(true, Ordering::SeqCst);
                 let _ = self.events.send(Event::RecordingError {
                     request_id,
                     message: format!("The recording could not be started: {e}"),
@@ -538,14 +550,32 @@ impl RecordWorker {
     /// Stops a recording in progress (or still starting) and waits for its
     /// thread (shutdown).
     pub fn shutdown(&self) {
-        {
-            let mut phase = self.shared.phase();
-            if matches!(*phase, Phase::Starting | Phase::Recording { .. }) {
-                *phase = Phase::Stopping;
-                self.shared.request_stop(0);
-            }
-        }
+        self.begin_shutdown();
         self.join();
+    }
+
+    /// Asks a recording in progress (or still starting) to stop, answering
+    /// with request id 0, without waiting.
+    pub fn begin_shutdown(&self) {
+        let mut phase = self.shared.phase();
+        if matches!(*phase, Phase::Starting | Phase::Recording { .. }) {
+            *phase = Phase::Stopping;
+            self.shared.request_stop(0);
+        }
+    }
+
+    /// Waits until the recording needs no more capture (it has taken the
+    /// frames and audio up to its stop, or is not running), or `timeout`
+    /// passes; true when it did. Only its trailer and fsync are left then.
+    pub fn wait_released(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !self.shared.released.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
     }
 
     /// Waits for the record thread to finish.
@@ -577,6 +607,7 @@ impl RecordJob {
         match self.open() {
             Ok(opened) => self.record(opened),
             Err(message) => {
+                self.shared.released.store(true, Ordering::SeqCst);
                 *self.shared.phase() = Phase::Idle;
                 let _ = self.events.send(Event::RecordingError {
                     request_id: self.request_id,
@@ -584,6 +615,7 @@ impl RecordJob {
                 });
             }
         }
+        self.shared.released.store(true, Ordering::SeqCst);
         crate::alloc::trim();
     }
 
@@ -719,6 +751,13 @@ impl RecordJob {
                 Some(e)
             }
         };
+        // Everything captured is in; capture may stop while the file is
+        // finished.
+        self.shared.released.store(true, Ordering::SeqCst);
+        let delay = RECORD_FINISH_DELAY_MS.load(Ordering::Relaxed);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
         let path = recorder.path().to_path_buf();
         let finished = recorder.finish().map_err(|e| e.to_string());
         *self.shared.phase() = Phase::Idle;

@@ -37,6 +37,7 @@ fn data() -> CardData {
         upload_enabled: true,
         uploading: false,
         ready: true,
+        recording: false,
         feedback: None,
         thumbnail: None,
     }
@@ -145,6 +146,96 @@ fn clip_card_hover_shows_play_icon() {
         r.marker("cardFinalizingBadge").is_some(),
         "Finalizing badge while not ready"
     );
+    assert!(
+        r.marker("cardRecordingBadge").is_none(),
+        "not the Recording one"
+    );
+}
+
+/// Clicks the thumbnail, the share and the delete buttons and presses F2 over
+/// the title; what the card answered, and whether it went into rename.
+fn use_the_card(t: &Tokens, d: &CardData) -> (Vec<CardResponse>, bool) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let r = render_card(t, d, None);
+    let share = r
+        .marker("cardShareBtn")
+        .expect("share button")
+        .rect
+        .center();
+    let delete = r
+        .marker("cardDeleteBtn")
+        .expect("delete button")
+        .rect
+        .center();
+    let mut icons = fthrust_ui::icons::IconCache::default();
+    let editing: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let seen: Rc<RefCell<Vec<CardResponse>>> = Rc::new(RefCell::new(Vec::new()));
+    let (e2, s2) = (editing.clone(), seen.clone());
+    let (tc, dc) = (t.clone(), d.clone());
+    let mut h = common::harness(Vec2::new(320.0, 268.0), 1.0, t, move |ui| {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 268.0))),
+            |ui| {
+                let mut e = e2.borrow_mut();
+                let r = card(ui, &tc, &mut icons, 320.0, &dc, &mut e, "card");
+                s2.borrow_mut().push(r);
+            },
+        );
+    });
+    h.run_steps(2);
+    for at in [Pos2::new(120.0, 60.0), share, delete] {
+        h.hover_at(at);
+        h.step();
+        h.drag_at(at);
+        h.step();
+        h.drop_at(at);
+        h.run_steps(2);
+    }
+    h.hover_at(Pos2::new(100.0, 206.0));
+    h.step();
+    h.key_press(egui::Key::F2);
+    h.run_steps(2);
+    drop(h);
+    let responses = seen.borrow().clone();
+    let renaming = editing.borrow().is_some();
+    (responses, renaming)
+}
+
+#[test]
+fn a_card_for_a_recording_in_progress_says_so_and_cannot_be_used() {
+    let t = tokens();
+    // The same presses do open, share, delete and rename a finished clip.
+    let (seen, renaming) = use_the_card(&t, &data());
+    assert!(seen.iter().any(|r| r.opened), "opens");
+    assert!(seen.iter().any(|r| r.share_clicked), "shares");
+    assert!(seen.iter().any(|r| r.delete_requested), "deletes");
+    assert!(renaming, "renames");
+    let mut d = data();
+    d.ready = false;
+    d.recording = true;
+    let r = render_card(&t, &d, Some(Pos2::new(120.0, 60.0)));
+    let badge = r.marker("cardRecordingBadge").expect("Recording badge");
+    assert_eq!(
+        badge.rect.min,
+        Pos2::new(8.0, 8.0),
+        "where the Finalizing badge goes"
+    );
+    assert!(
+        r.marker("cardFinalizingBadge").is_none(),
+        "instead of the Finalizing one"
+    );
+    // Nothing on it opens, shares, deletes or renames.
+    let (seen, renaming) = use_the_card(&t, &d);
+    assert!(
+        seen.iter().all(|r| !r.opened
+            && !r.delete_requested
+            && !r.share_clicked
+            && r.rename_committed.is_none()),
+        "{seen:?}"
+    );
+    assert!(!renaming, "F2 starts no rename");
 }
 
 #[test]

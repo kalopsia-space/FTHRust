@@ -1,9 +1,12 @@
 //! A running ScreenCast capture: the portal session plus its negotiated
 //! PipeWire stream, opened with the reference's restore-token rule
-//! (`RunPortalStartupWithRetry`).
+//! (`RunPortalStartupWithRetry`) for a start the user asked for, and
+//! restore-only for an automatic open.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use fthrust_core::FthrPaths;
 use fthrust_wayland::backend::CaptureFailure;
@@ -13,33 +16,72 @@ use crate::screencast::{PortalFailure, ScreenCastSession, Timeouts, should_retry
 use crate::stream::{PipeWireVideoStream, StreamError};
 use crate::token;
 
+/// How long `Start` may take when only the saved session may be restored.
+/// A portal that restores answers at once; one that does not is showing
+/// its dialog, which is then dismissed.
+pub const RESTORE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Whether an open may bring up the portal's dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dialog {
+    /// A start the user asked for (the app starting, a settings change,
+    /// RESTART ENGINE): the dialog comes up when there is no saved choice
+    /// or the portal rejects it, and a restored session whose stream never
+    /// settles a format is retried once without its token.
+    Allowed,
+    /// An automatic open (recovery, or an engine the app restarted on its
+    /// own after a crash or hang): only the saved session is restored. Without a saved token, or when the portal does not restore
+    /// it within [`RESTORE_TIMEOUT`], the open fails with
+    /// [`PortalFailure::NeedsDialog`]; the token is never forgotten.
+    Forbidden,
+}
+
 /// A portal session and its stream. Dropping it stops the stream, then
 /// closes the session.
 pub struct PortalCapture {
     // Field order is drop order.
     stream: PipeWireVideoStream,
     session: ScreenCastSession,
+    /// The saved restore token, forgotten when the desktop ends the share.
+    token_path: PathBuf,
 }
 
 impl PortalCapture {
     /// Runs the portal flow (the user's dialog unless the saved token
-    /// restores the last choice) on the portal runtime and connects the
-    /// stream. A restored session whose stream never settles a format is
-    /// closed, its token is forgotten and the flow runs once more without
-    /// it. Nothing else is retried and nothing else forgets the token: a
-    /// missing or silent portal, or a PipeWire error, leaves it for the
-    /// next start.
+    /// restores the last choice, see [`Dialog`]) on the portal runtime and
+    /// connects the stream. Only a restored session whose stream never
+    /// settles a format, on a start that allows the dialog, forgets its
+    /// token and runs once more without it. Nothing else is retried and
+    /// nothing else forgets the token: a missing or silent portal, or a
+    /// PipeWire error, leaves it for the next start.
     pub fn open(
         paths: &FthrPaths,
         fps: u32,
         cancel: Arc<AtomicBool>,
-        timeouts: Timeouts,
+        mut timeouts: Timeouts,
+        dialog: Dialog,
     ) -> Result<Self, PortalFailure> {
+        if dialog == Dialog::Forbidden {
+            if !matches!(token::load(&token::path(paths)), Ok(Some(_))) {
+                // Without a saved choice the portal can only ask.
+                return Err(PortalFailure::NeedsDialog);
+            }
+            timeouts.dialog = timeouts.dialog.min(RESTORE_TIMEOUT);
+        }
         let runtime = crate::runtime()?;
         let mut attempt = 0;
         loop {
-            let mut session =
-                runtime.block_on(ScreenCastSession::start(paths, cancel.clone(), timeouts))?;
+            let started =
+                runtime.block_on(ScreenCastSession::start(paths, cancel.clone(), timeouts));
+            let mut session = match started {
+                Ok(session) => session,
+                // In restore-only mode an unanswered Start is the dialog
+                // waiting (the session close dismissed it).
+                Err(PortalFailure::UserDeclined) if dialog == Dialog::Forbidden => {
+                    return Err(PortalFailure::NeedsDialog);
+                }
+                Err(e) => return Err(e),
+            };
             let Some(fd) = session.take_fd() else {
                 return Err(PortalFailure::Failed(
                     "the portal session has no PipeWire fd".into(),
@@ -53,12 +95,21 @@ impl PortalCapture {
                 Some(session.closed()),
             );
             match connected {
-                Ok(stream) => return Ok(Self { stream, session }),
+                Ok(stream) => {
+                    return Ok(Self {
+                        stream,
+                        session,
+                        token_path: token::path(paths),
+                    });
+                }
                 Err(StreamError::Cancelled) => return Err(PortalFailure::Cancelled),
                 Err(e) => {
                     let restored = session.restored();
                     session.close_blocking();
-                    if e.negotiation_timed_out() && should_retry_startup(attempt, restored) {
+                    if dialog == Dialog::Allowed
+                        && e.negotiation_timed_out()
+                        && should_retry_startup(attempt, restored)
+                    {
                         tracing::warn!(
                             "the restored portal session did not negotiate ({e}); retrying without its restore token"
                         );
@@ -74,9 +125,12 @@ impl PortalCapture {
         }
     }
 
-    /// The next frame (see [`PipeWireVideoStream::capture`]).
+    /// The next frame (see [`PipeWireVideoStream::capture`]). When the
+    /// desktop has ended the share ("Stop sharing"), the saved choice is
+    /// forgotten as well: the user took it back, so no later open restores
+    /// it on its own, and the next start the user asks for shows the picker.
     pub fn capture(&mut self) -> Result<FrameView<'_>, CaptureFailure> {
-        self.stream.capture()
+        forget_choice_when_closed(self.stream.capture(), &self.token_path)
     }
 
     /// Negotiated size.
@@ -87,5 +141,51 @@ impl PortalCapture {
     /// The portal session.
     pub fn session(&self) -> &ScreenCastSession {
         &self.session
+    }
+}
+
+/// Passes `result` on, first forgetting the saved restore token when it
+/// says the desktop closed the session.
+fn forget_choice_when_closed<'a>(
+    result: Result<FrameView<'a>, CaptureFailure>,
+    token_path: &Path,
+) -> Result<FrameView<'a>, CaptureFailure> {
+    if let Err(CaptureFailure::Closed(_)) = &result {
+        match token::save(token_path, "") {
+            Ok(()) => tracing::info!(
+                "screen sharing was stopped from the desktop; its saved choice is forgotten"
+            ),
+            Err(err) => tracing::warn!("could not remove the portal restore token: {err}"),
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_share_the_desktop_stopped_forgets_the_saved_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portal_restore_token");
+        token::save(&path, "saved").unwrap();
+        // Other failures keep it for the next open.
+        for failure in [
+            CaptureFailure::Timeout,
+            CaptureFailure::Failed("stream resolution changed".into()),
+        ] {
+            let _ = forget_choice_when_closed(Err(failure), &path);
+            assert_eq!(token::load(&path).unwrap().as_deref(), Some("saved"));
+        }
+        let result = forget_choice_when_closed(
+            Err(CaptureFailure::Closed("screen sharing was stopped".into())),
+            &path,
+        );
+        assert!(
+            matches!(result, Err(CaptureFailure::Closed(_))),
+            "{result:?}"
+        );
+        assert_eq!(token::load(&path).unwrap(), None, "the choice was kept");
     }
 }

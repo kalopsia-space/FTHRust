@@ -102,10 +102,20 @@ pub fn run(
     // The window is gone by now (see `exiting`), so the bounded shutdown
     // waits (exports, a recording, a save in flight) don't leave a frozen
     // window on screen.
-    if let Some(mut app) = runner.app.take() {
-        app.on_exit();
+    let shut_down = match runner.app.take() {
+        Some(mut app) => {
+            app.on_exit();
+            true
+        }
+        None => false,
+    };
+    match ran {
+        // winit ends the loop with an error when the compositor goes away
+        // (a logout, the compositor's own exit); the app has shut down in
+        // order all the same.
+        Err(e) if shut_down => tracing::info!("the window loop ended: {e}"),
+        r => r?,
     }
-    ran?;
     match runner.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
@@ -332,6 +342,9 @@ impl Runner {
             );
             if self.info.events.contains(&egui::ViewportEvent::Close) {
                 tracing::info!("window closed by the app");
+                // As for the compositor's close: a launch from now on is told
+                // this instance is quitting.
+                crate::services::set_quitting();
                 el.exit();
                 return;
             }

@@ -139,6 +139,12 @@ fn runner_parses_last_line_and_failures() {
         t,
     );
     assert_eq!((r.ok, r.message.as_str()), (true, "fine"));
+    assert!(!r.delete, "a clip may go only when the reply says so");
+    let r = run(
+        "cat >/dev/null; echo '{\"ok\":true,\"message\":\"gone\",\"delete\":true}'",
+        t,
+    );
+    assert!(r.ok && r.delete);
     let r = run("cat >/dev/null; echo 'boom happened' >&2; exit 2", t);
     assert_eq!((r.ok, r.message.as_str()), (false, "boom happened"));
     let r = run("cat >/dev/null; exit 3", t);
@@ -168,6 +174,53 @@ fn runner_parses_last_line_and_failures() {
     );
     let r = run_request(&exe, &req, t, &slot);
     assert_eq!(r.message, "test_connection");
+}
+
+/// A big upload on a slow link takes as long as it takes: the uploader is
+/// stopped when it goes quiet, not when it has been running for a while. It
+/// reports its progress on stderr while bytes move.
+#[test]
+fn a_slow_uploader_that_keeps_reporting_is_not_stopped_but_a_quiet_one_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let slot = ChildSlot::default();
+    let req = json!({"action": "upload"});
+    let limit = Duration::from_millis(500);
+    // Reports every 100 ms for 1.5 s, three times the limit, then answers.
+    let slow = script(
+        dir.path(),
+        "slow",
+        "cat >/dev/null; i=0; while [ $i -lt 15 ]; do echo \"[Uploader] Sent $i.0 of 15.0 MB\" >&2; sleep 0.1; i=$((i+1)); done; echo '{\"ok\":true,\"message\":\"fine\"}'",
+    );
+    let started = Instant::now();
+    let r = run_request(&slow, &req, limit, &slot);
+    assert_eq!((r.ok, r.message.as_str()), (true, "fine"));
+    assert!(
+        started.elapsed() > Duration::from_millis(1200),
+        "{:?}",
+        started.elapsed()
+    );
+    // One that says something and then goes quiet is stopped a limit after
+    // its last word.
+    let quiet = script(
+        dir.path(),
+        "quiet",
+        "cat >/dev/null; echo '[Uploader] Sent 1.0 of 15.0 MB' >&2; sleep 30",
+    );
+    let started = Instant::now();
+    let r = run_request(&quiet, &req, limit, &slot);
+    assert_eq!(
+        (r.ok, r.message.as_str()),
+        (false, "The uploader did not finish in time.")
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // Progress is not the reason for a crash.
+    let crash = script(
+        dir.path(),
+        "crash",
+        "cat >/dev/null; echo '[Uploader] Sent 1.0 of 15.0 MB' >&2; echo 'thread panicked' >&2; exit 101",
+    );
+    let r = run_request(&crash, &req, Duration::from_secs(5), &slot);
+    assert_eq!((r.ok, r.message.as_str()), (false, "thread panicked"));
 }
 
 #[test]
@@ -304,6 +357,98 @@ fn an_entry_the_uploader_could_not_save_is_kept() {
     assert!(!r.svc.busy(), "queued again although it was uploaded");
 }
 
+/// An entry that only this session knows (neither the uploader nor the app
+/// could write the history) is the only record of the clip's link: it must
+/// outlive the next reload of the history from its file, which a later upload
+/// that did get through causes, and follow its clip when the library renames
+/// it.
+#[test]
+fn an_entry_only_this_session_knows_survives_reloads_and_renames() {
+    let url = "https://cdn.example/session";
+    let reply = format!(
+        r#"cat >/dev/null; echo '{{"ok":true,"message":"{url}","upload_info":{{"status":"ok","provider":"custom","url":"{url}","raw_url":"{url}"}},"warning":"{url}: uploaded, but the upload history could not be saved (disk full). The clip was kept."}}'"#
+    );
+    let mut r = rig(&reply, json!({}));
+    let clip = r.clip("s.mp4");
+    let key = clip.canonicalize().unwrap();
+    // Nowhere to write the history: the entry lives for this session only.
+    let file = r.state.paths.upload_history_file();
+    std::fs::create_dir_all(&file).unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert_eq!(r.state.upload_history.link(&key).unwrap().url, url);
+
+    // The disk recovers and another upload's entry is written: the history
+    // is read from the file again, which knows nothing of this clip.
+    let write_another = |r: &mut Rig, name: &str| {
+        std::thread::sleep(Duration::from_millis(30));
+        let other = r.clip(name).canonicalize().unwrap();
+        let entry = Entry(
+            json!({"status": "ok", "url": "https://cdn.example/other"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        History::update(&r.state.paths, |h| h.record(&other, entry)).unwrap();
+        r.svc.tick(&mut r.state, 5.0);
+        assert!(
+            r.state.upload_history.is_uploaded(&other),
+            "the history was not read again"
+        );
+    };
+    std::fs::remove_dir(&file).unwrap();
+    write_another(&mut r, "o1.mp4");
+    assert_eq!(
+        r.state.upload_history.link(&key).unwrap().url,
+        url,
+        "lost with the reload"
+    );
+
+    // Renamed in the library, the entry goes with the clip.
+    r.state
+        .dialogs
+        .results
+        .push(fthrust_ui::state::DialogResult::Answer {
+            tag: format!("rename-clip:{}\u{1f}renamed", clip.display()),
+            yes: true,
+        });
+    fthrust_ui::library::page::consume_results(&mut r.state);
+    let renamed = clip.with_file_name("renamed.mp4");
+    assert!(renamed.exists());
+    let new_key = renamed.canonicalize().unwrap();
+    assert_eq!(
+        r.state.upload_history.link(&new_key).unwrap().url,
+        url,
+        "lost with the rename"
+    );
+    assert!(
+        !r.state.upload_history.is_uploaded(&key),
+        "left under the old name"
+    );
+
+    // And it survives the next reload under its new name.
+    write_another(&mut r, "o2.mp4");
+    assert_eq!(r.state.upload_history.link(&new_key).unwrap().url, url);
+    assert!(!r.state.upload_history.is_uploaded(&key));
+
+    // Once the file has an entry for the clip, the file's is the one that
+    // counts, and nothing is kept back.
+    std::thread::sleep(Duration::from_millis(30));
+    let filed = Entry(
+        json!({"status": "ok", "url": "https://cdn.example/filed"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    History::update(&r.state.paths, |h| h.record(&new_key, filed)).unwrap();
+    r.svc.tick(&mut r.state, 6.0);
+    assert!(r.state.upload_unsaved.is_empty());
+    assert_eq!(
+        r.state.upload_history.link(&new_key).unwrap().url,
+        "https://cdn.example/filed"
+    );
+}
+
 /// A server that took a clip and sent no link leaves a card that offers
 /// "Upload clip" and a history that calls the clip uploaded: pressing the
 /// button used to do nothing at all. Now the bar says why and offers to
@@ -356,6 +501,62 @@ fn an_uploaded_clip_without_a_link_says_so_and_can_be_uploaded_again() {
     assert_eq!(r.requests().len(), 2);
 }
 
+/// A scan sees resolved paths; the library may list the same clip under
+/// another spelling (a clips folder behind a symlink), and the queue keeps one
+/// entry per clip, under the library's. The records hold their resolved path
+/// already, so finding a clip must not resolve every record again: a round of
+/// n clips did n² file system lookups on the UI thread.
+#[test]
+fn a_scanned_path_is_queued_under_the_librarys_spelling() {
+    let mut r = rig(&uploader_ok("https://cdn.example/s.mp4"), json!({}));
+    let clip = r.clip("s.mp4");
+    r.state.library.upsert(&clip, false);
+    // Nothing is at the library's spelling to resolve: only the record's own
+    // resolved path says which clip it is.
+    let spelled = PathBuf::from("/library/spelling/s.mp4");
+    r.state.library.records[0].path = spelled.clone();
+    r.svc.enqueue(&mut r.state, clip.canonicalize().unwrap());
+    let queued: Vec<&PathBuf> = r.state.upload_status.keys().collect();
+    assert_eq!(queued, vec![&spelled]);
+}
+
+/// A link, or the reason a button does nothing, is not a "capture error":
+/// the notices that carry them are shown whatever "Show capture error
+/// messages" says.
+#[test]
+fn the_notices_that_carry_a_link_or_explain_a_button_ignore_the_error_message_setting() {
+    // The history could not be saved: the warning holds the link.
+    let reply = r#"cat >/dev/null; echo '{"ok":true,"message":"https://cdn.example/w","upload_info":{"status":"ok","provider":"custom","url":"https://cdn.example/w","raw_url":"https://cdn.example/w"},"warning":"https://cdn.example/w: uploaded, but the upload history could not be saved (disk full). The clip was kept."}'"#;
+    let mut r = rig(reply, json!({}));
+    r.state.error_bar.enabled = false;
+    let clip = r.clip("w.mp4");
+    std::fs::create_dir_all(r.state.paths.upload_history_file()).unwrap();
+    r.svc.enqueue(&mut r.state, clip);
+    r.settle();
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("the link was not shown")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert!(
+        e.detail.starts_with("https://cdn.example/w: uploaded"),
+        "{}",
+        e.detail
+    );
+
+    // Upload is pressed on a clip whose server sent no link.
+    let mut r = rig(&uploader_ok(""), json!({}));
+    let clip = r.clip("n.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    r.state.error_bar.enabled = false;
+    r.svc.enqueue(&mut r.state, clip);
+    r.settle();
+    assert_eq!(r.error_titles(), vec!["ALREADY UPLOADED"]);
+}
+
 /// Auto-delete removes the clip, and the clips folder may be reached through
 /// a symlink: the history entry is the uploader's, under the real path. The
 /// app must not add a second one under the symlink's spelling (a path that
@@ -367,10 +568,9 @@ fn a_deleted_clip_behind_a_symlink_keeps_one_history_entry() {
         r#"read -r line
 path=$(echo "$line" | sed 's/.*"path":"\([^"]*\)".*/\1/')
 real=$(readlink -f "$path")
-rm -f "$path"
 mkdir -p "$(dirname "$HISTORY")"
 printf '{{"%s": %s}}' "$real" '{entry}' > "$HISTORY"
-echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry}}}'"#
+echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry},"delete":true}}'"#
     );
     let mut r = rig(&script, json!({"upload_auto_delete": true}));
     let real_dir = r.dir.path().join("real");
@@ -387,7 +587,8 @@ echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry}}}'"#
     let real = clip.canonicalize().unwrap();
     r.svc.enqueue(&mut r.state, clip.clone());
     r.settle();
-    assert!(!real.exists(), "the fake uploader was meant to delete it");
+    assert!(!real.exists(), "the clip was not deleted");
+    assert!(r.state.library.record(&clip).is_none());
     let file: Value = serde_json::from_str(
         &std::fs::read_to_string(r.state.paths.upload_history_file()).unwrap(),
     )
@@ -399,6 +600,267 @@ echo '{{"ok":true,"message":"https://cdn.example/d","upload_info":{entry}}}'"#
     );
     assert!(r.state.upload_history.is_uploaded(&real));
     assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+}
+
+/// Like [`uploader_ok`], and says the clip may be deleted: auto-delete is on
+/// and the upload is confirmed. The uploader never deletes a clip itself.
+fn uploader_may_delete(url: &str) -> String {
+    format!(
+        r#"read -r line; echo "$line" >> "$(dirname "$0")/requests.jsonl"
+path=$(echo "$line" | sed 's/.*"path":"\([^"]*\)".*/\1/')
+mkdir -p "$(dirname "$HISTORY")"
+printf '{{"%s": {{"status": "ok", "provider": "custom", "url": "{url}", "raw_url": "{url}"}}}}' "$path" > "$HISTORY"
+echo '{{"ok":true,"message":"{url}","delete":true}}'"#
+    )
+}
+
+fn is_root() -> bool {
+    std::fs::metadata("/proc/self")
+        .map(|m| std::os::unix::fs::MetadataExt::uid(&m) == 0)
+        .unwrap_or(false)
+}
+
+/// The uploader says a confirmed clip may go and the app removes it the way
+/// the bin button does: the file and its audio manifest, the library entry,
+/// and the library is told to redraw.
+#[test]
+fn auto_delete_removes_the_clip_the_way_the_bin_does() {
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/g.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    let clip = r.clip("g.mp4");
+    let manifest = fthrust_core::audio_manifest::manifest_path_for(&clip);
+    std::fs::write(&manifest, b"{}").unwrap();
+    r.state.library.upsert(&clip, false);
+    r.state.library_dirty = false;
+    let key = clip.canonicalize().unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    assert!(!clip.exists(), "the clip is still there");
+    assert!(!manifest.exists(), "and so is its audio manifest");
+    assert!(r.state.library.record(&clip).is_none());
+    assert!(r.state.library_dirty, "the library was not told");
+    assert!(r.state.upload_history.is_uploaded(&key));
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+    // It is an upload that worked all the same.
+    assert_eq!(
+        r.svc.transient_status(1.0).unwrap().text,
+        "UPLOADED ORIGINAL"
+    );
+}
+
+/// The library does not delete a clip that an export or a share still reads,
+/// and neither does an upload's auto-delete: the clip is kept and the bar
+/// says so, whatever "Show capture error messages" is set to.
+#[test]
+fn auto_delete_keeps_a_clip_that_a_share_still_reads_and_says_so() {
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/k.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    r.state.error_bar.enabled = false;
+    let clip = r.clip("k.mp4");
+    r.state.library.upsert(&clip, false);
+    r.svc.enqueue(&mut r.state, clip.clone());
+    // The share starts while the upload runs: the rules apply when it ends.
+    r.state.active_shares.push(clip.clone());
+    r.settle();
+    assert!(clip.exists(), "deleted under a running share");
+    assert!(r.state.library.record(&clip).is_some());
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert_eq!(
+        e.detail,
+        "k.mp4 was uploaded, but not deleted: an export or share of it is queued or running. Delete it yourself when that has finished."
+    );
+    // It is an upload that worked all the same.
+    assert!(
+        r.state
+            .upload_history
+            .is_uploaded(&clip.canonicalize().unwrap())
+    );
+    assert_eq!(
+        r.svc.transient_status(1.0).unwrap().text,
+        "UPLOADED ORIGINAL"
+    );
+}
+
+/// A delete the user presses closes the editors that hold the clip, but an
+/// automatic one does not pull a clip out from under the user: an editor
+/// session on it, open or parked in the rail, keeps it, and the bar says so
+/// (the editor draws no bar, so the notice is there when it is closed).
+#[test]
+fn auto_delete_keeps_a_clip_that_an_editor_session_holds_and_says_so() {
+    use fthrust_ui::editor::sessions::Session;
+    use fthrust_ui::editor::{Editor, Lifecycle};
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/h.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    r.state.error_bar.enabled = false;
+    let parked = r.clip("parked.mp4");
+    let open = r.clip("open.mp4");
+    for clip in [&parked, &open] {
+        r.state.library.upsert(clip, false);
+    }
+    // One is a session of the rail, the other only the open editor.
+    r.state.editor_slots.push(Session {
+        path: parked.clone(),
+        state: None,
+    });
+    r.state.editor = Some(Editor::for_tests(&open, 10_000, Lifecycle::Paused));
+    r.svc.enqueue(&mut r.state, parked.clone());
+    r.svc.enqueue(&mut r.state, open.clone());
+    r.settle();
+    for clip in [&parked, &open] {
+        assert!(
+            clip.exists(),
+            "{} was deleted under an editor",
+            clip.display()
+        );
+        assert!(r.state.library.record(clip).is_some());
+    }
+    assert_eq!(r.state.editor_slots.len(), 1, "a session was closed");
+    assert!(r.state.editor.is_some(), "the open editor was closed");
+    let details: Vec<String> = r
+        .state
+        .error_bar
+        .entries()
+        .iter()
+        .map(|e| {
+            assert_eq!(e.title, "UPLOAD WARNING");
+            e.detail.clone()
+        })
+        .collect();
+    assert_eq!(
+        details,
+        vec![
+            "parked.mp4 was uploaded, but not deleted: it is open in the editor. Delete it yourself once you have closed it.",
+            "open.mp4 was uploaded, but not deleted: it is open in the editor. Delete it yourself once you have closed it.",
+        ]
+    );
+    // Nothing holds it any more: the next upload of such a clip deletes it.
+    r.state.editor_slots.clear();
+    r.state.editor = None;
+    let free = r.clip("free.mp4");
+    r.svc.enqueue(&mut r.state, free.clone());
+    r.settle();
+    assert!(!free.exists());
+}
+
+/// The setting counts when the upload ends: switched off meanwhile, the clip
+/// stays.
+#[test]
+fn auto_delete_switched_off_while_the_upload_ran_keeps_the_clip() {
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/o.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    let clip = r.clip("o.mp4");
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.state
+        .uploader_settings
+        .set("upload_auto_delete", json!(false));
+    r.settle();
+    assert!(clip.exists());
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+}
+
+/// Only what the app keeps in the clips folder is ever removed, whatever a
+/// reply says: imported libraries and files elsewhere stay.
+#[test]
+fn auto_delete_never_removes_what_is_not_in_the_clips_folder() {
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/i.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    let imports = r.dir.path().join("imports");
+    let elsewhere = r.dir.path().join("elsewhere");
+    for dir in [&imports, &elsewhere] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    r.state
+        .settings
+        .set("imported_clip_folders", json!([imports.to_string_lossy()]));
+    for dir in [&imports, &elsewhere] {
+        let clip = dir.join("i.mp4");
+        std::fs::write(&clip, b"x").unwrap();
+        r.svc.enqueue(&mut r.state, clip.clone());
+        r.settle();
+        assert!(clip.exists(), "{} was deleted", dir.display());
+    }
+    assert_eq!(r.requests().len(), 2, "both were uploaded");
+    assert!(r.error_titles().is_empty(), "{:?}", r.error_titles());
+}
+
+/// A clip the file system will not let go is kept, and the bar says why.
+#[test]
+fn a_clip_that_cannot_be_deleted_is_kept_and_the_bar_says_why() {
+    if is_root() {
+        return;
+    }
+    let mut r = rig(
+        &uploader_may_delete("https://cdn.example/f.mp4"),
+        json!({"upload_auto_delete": true}),
+    );
+    let clip = r.clip("f.mp4");
+    r.state.library.upsert(&clip, false);
+    let folder = clip.parent().unwrap().to_owned();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(clip.exists());
+    assert!(
+        r.state.library.record(&clip).is_some(),
+        "left the library with its file still there"
+    );
+    let e = r
+        .state
+        .error_bar
+        .current()
+        .expect("nothing was said")
+        .clone();
+    assert_eq!(e.title, "UPLOAD WARNING");
+    assert!(
+        e.detail.starts_with("Uploaded, but local delete failed: "),
+        "{}",
+        e.detail
+    );
+}
+
+/// What went out is the compressed copy, so that is what auto-delete
+/// removes: the original is never touched.
+#[test]
+fn auto_delete_removes_the_compressed_copy_and_keeps_the_original() {
+    let mut r = rig(
+        &uploader_may_delete("https://files.catbox.moe/c.mp4"),
+        json!({
+            "upload_provider": "catbox", "upload_auto_compress": true,
+            "upload_auto_delete": true
+        }),
+    );
+    let clip = r.clips.join("Desktop").join("big.mp4");
+    if support::write_test_clip(&clip, 3, true).is_none() {
+        eprintln!("no encoder; skipped");
+        return;
+    }
+    let size = std::fs::metadata(&clip).unwrap().len();
+    r.svc.set_limit_bytes_for_tests(size - 1);
+    r.svc.enqueue(&mut r.state, clip.clone());
+    r.settle();
+    let reqs = r.requests();
+    assert_eq!(reqs.len(), 1, "the copy is uploaded");
+    let sent = PathBuf::from(reqs[0]["path"].as_str().unwrap());
+    assert!(sent.starts_with(r.clips.join("Shared")), "{sent:?}");
+    assert!(!sent.exists(), "the copy was kept");
+    assert!(clip.exists(), "the original was deleted");
 }
 
 #[test]
@@ -435,6 +897,27 @@ fn queue_dedups_and_waits_for_readiness() {
     r.svc.enqueue(&mut r.state, partial);
     r.svc.enqueue(&mut r.state, image);
     assert!(!r.svc.busy());
+}
+
+/// A recording is written straight into its final name; an upload that
+/// deletes the file afterwards (or one that sends half of it) must wait.
+#[test]
+fn a_recording_in_progress_is_never_uploaded() {
+    let mut r = rig(&uploader_ok("https://cdn.example/rec.mp4"), json!({}));
+    let clip = r.clip("FTHR_recording_2027-01-15_10-00-00.mp4");
+    r.state.readiness.recording(&clip);
+    r.svc.enqueue(&mut r.state, clip.clone());
+    // Long enough for the uploader program to start and write its request.
+    for i in 0..50 {
+        r.svc.tick(&mut r.state, i as f64 * 0.02);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(r.requests().is_empty(), "waits while it is written");
+    assert!(clip.exists(), "and the file is untouched");
+    // The recording ends: it is an ordinary clip, and the upload goes ahead.
+    r.state.readiness.forget(&clip);
+    r.settle();
+    assert_eq!(r.requests().len(), 1, "uploaded once it is over");
 }
 
 #[test]

@@ -43,6 +43,7 @@ pub fn report_startup_issues(state: &mut AppState) {
         .iter()
         .chain(state.theme.startup_issues())
         .cloned()
+        .chain(state.hotkeys.startup_issue())
         .collect();
     for (i, issue) in issues.iter().enumerate() {
         tracing::error!("{issue}");

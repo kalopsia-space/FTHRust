@@ -8,11 +8,41 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT="$ROOT/docs/images"
-WORK=${DOCS_SHOTS_DIR:-/tmp/fthrust-docs}
 SEED=""
 [ "${1:-}" = "--seed" ] && SEED=$2
 
-rm -rf "$WORK"; mkdir -p "$WORK/app"
+# Two directories are emptied and used here, and both names end up in the published screenshots (the Hotkeys popup
+# shows the app's path, Settings the clips folder), so they are fixed: /tmp/fthrust-docs and
+# /tmp/fthrust-docs-bench. The environment can move them (DOCS_SHOTS_DIR, DOCS_SHOTS_BENCH; the unit tests do), but
+# a run that is meant to be published uses the defaults. Each goes through bench.sh's prepare_bench_dir, so a
+# directory that is absent, empty or marked as made by this script or the bench (.uidrive-bench) is cleared and
+# used, and a symlink, one owned by someone else, or one holding anything else is refused untouched. Whatever
+# was prepared is removed again when the script ends, with one exception: when the run failed after the bench
+# started, the bench directory stays (its logs/ and shots/ are what explains the failure) and its name is printed;
+# the next run clears it, since it carries the marker.
+# shellcheck source=bench.sh
+source "$HERE/bench.sh"
+prepared=()
+cleanup() {
+  local rc=$? d
+  for d in "${prepared[@]}"; do
+    [ -n "$d" ] || continue
+    if [ $rc -ne 0 ] && [ "$d" = "${DOCS_BENCH:-}" ] && [ -n "$(find "$d" -mindepth 1 ! -name "$MARKER" -print -quit)" ]; then
+      echo "docs-shots: the run failed (status $rc); $d keeps the bench's logs/ and shots/" >&2
+      continue
+    fi
+    rm -rf -- "$d"
+  done
+  return 0
+}
+trap cleanup EXIT
+BENCH_DIR=${DOCS_SHOTS_DIR:-/tmp/fthrust-docs} prepare_bench_dir
+WORK=$BENCH
+prepared+=("$WORK")
+BENCH_DIR=${DOCS_SHOTS_BENCH:-/tmp/fthrust-docs-bench} prepare_bench_dir
+DOCS_BENCH=$BENCH
+prepared+=("$DOCS_BENCH")
+mkdir -p "$WORK/app"
 if [ -z "$SEED" ]; then
   SEED="$WORK/seed"
   mkdir -p "$SEED/Desktop" "$SEED/Neon Drift" "$SEED/Screenshots"
@@ -38,11 +68,12 @@ fi
 cargo build -q -p fthrust-ui -p fthrust-engine --manifest-path "$ROOT/Cargo.toml"
 cp "$ROOT/target/debug/fthrust" "$ROOT/target/debug/fthrust-engine" "$WORK/app/"
 
-BENCH_DIR=/tmp/fthrust-docs-bench "$HERE/bench.sh" run "$HERE/scenarios/docs_shots.sh" \
+# The bench directory is short on purpose: the Wayland socket path must fit in 108 bytes.
+BENCH_DIR=$DOCS_BENCH "$HERE/bench.sh" run "$HERE/scenarios/docs_shots.sh" \
   --engine real --pipewire --app "$WORK/app/fthrust" --seed "$SEED"
 
 mkdir -p "$OUT"
-for f in /tmp/fthrust-docs-bench/shots/*.png; do
+for f in "$DOCS_BENCH"/shots/*.png; do
   name=$(basename "$f"); name=${name#[0-9][0-9][0-9]-}
   cp "$f" "$OUT/$name"
 done

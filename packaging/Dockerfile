@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl build-essential pkg-config clang libclang-dev \
         meson ninja-build libwayland-dev libxkbcommon-dev patchelf file jq \
-        xz-utils desktop-file-utils squashfs-tools git \
+        xz-utils desktop-file-utils squashfs-tools git subversion \
     && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl -sSf --proto '=https' --tlsv1.2 https://sh.rustup.rs \

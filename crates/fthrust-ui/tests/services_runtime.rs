@@ -101,8 +101,73 @@ fn secondary_instance_activates_primary() {
     let gone = d.path().join("gone");
     std::fs::create_dir_all(&gone).unwrap();
     let started = Instant::now();
-    assert!(!fthrust_ui::services::instance::request_activation(&gone));
+    assert_eq!(
+        fthrust_ui::services::instance::request_activation(&gone),
+        fthrust_ui::services::instance::Activation::NoInstance
+    );
     assert!(started.elapsed() < Duration::from_millis(400));
+}
+
+/// Final review of the audit fixes: an instance that is quitting keeps the
+/// lock until its shutdown is done; a launch meanwhile is told so and takes
+/// the lock once it goes, instead of reporting a window that never shows.
+#[test]
+fn a_launch_waits_for_an_instance_that_is_quitting() {
+    use fthrust_ui::services::instance::{Activation, become_primary_within, request_activation};
+    let d = tempfile::tempdir().unwrap();
+    let runtime = d.path().join("rt");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let lock = d.path().join("fthr.lock");
+    let ctx = egui::Context::default();
+    let primary = become_primary_within(&lock, &runtime, &ctx, Duration::ZERO).expect("primary");
+    assert_eq!(request_activation(&runtime), Activation::Shown);
+    assert!(primary.activation_requested());
+    primary.set_exiting();
+    assert_eq!(request_activation(&runtime), Activation::Exiting);
+    assert!(
+        !primary.activation_requested(),
+        "a quitting instance shows nothing"
+    );
+    // Too short a wait: an error, not a secondary that "activated" it.
+    assert!(become_primary_within(&lock, &runtime, &ctx, Duration::from_millis(200)).is_err());
+    // The lock goes while a launch waits: that launch becomes the instance.
+    let (lock2, runtime2, ctx2) = (lock.clone(), runtime.clone(), ctx.clone());
+    let waiting = std::thread::spawn(move || {
+        become_primary_within(&lock2, &runtime2, &ctx2, Duration::from_secs(10))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    drop(primary);
+    let next = waiting.join().unwrap().expect("the waiting launch starts");
+    assert!(next.is_primary());
+    assert_eq!(request_activation(&runtime), Activation::Shown);
+}
+
+/// A lock holder that never answers (its activation socket elsewhere, or
+/// none) is given up on after a short wait, not the two minutes a quitting
+/// instance gets.
+#[test]
+fn a_lock_holder_that_never_answers_is_given_up_on_quickly() {
+    use fthrust_core::single_instance::{InstanceLock, LockResult};
+    use fthrust_ui::services::instance::{NO_ANSWER_WAIT, become_primary_within};
+    let d = tempfile::tempdir().unwrap();
+    let runtime = d.path().join("rt");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let lock = d.path().join("fthr.lock");
+    let LockResult::Acquired(_held) = InstanceLock::acquire(&lock) else {
+        panic!("lock")
+    };
+    let ctx = egui::Context::default();
+    let started = Instant::now();
+    let r = become_primary_within(&lock, &runtime, &ctx, Duration::from_secs(60));
+    assert!(
+        r.is_err(),
+        "no secondary for an instance that never answered"
+    );
+    assert!(
+        started.elapsed() < NO_ANSWER_WAIT + Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]

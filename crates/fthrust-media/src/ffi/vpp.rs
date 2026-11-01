@@ -62,7 +62,12 @@ impl VaapiConverter {
         dst_h: u32,
     ) -> Result<Self> {
         check_sizes(src_w, src_h, dst_w, dst_h)?;
-        let pool = device.pool_on(src_w, src_h, ffi::AVPixelFormat::AV_PIX_FMT_BGR0)?;
+        let pool = device.pool_on(
+            src_w,
+            src_h,
+            ffi::AVPixelFormat::AV_PIX_FMT_BGR0,
+            super::hw::UPLOAD_SURFACES,
+        )?;
         let (dev, frames) = pool.new_refs()?;
         drop(BufferRef(dev));
         let (graph, src, sink) = build_graph(BufferRef(frames), src_w, src_h, dst_w, dst_h)?;

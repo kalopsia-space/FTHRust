@@ -6,7 +6,7 @@
 #                                  [--cache DIR] [--manifest-dir DIR]
 #
 # With no component flag every component is fetched. Results:
-#   $CACHE/ffmpeg/                       BtbN LGPL tree (lib/, include/, lib/pkgconfig/)
+#   $CACHE/ffmpeg/                       BtbN's FFmpeg build, "lgpl-shared" flavour (lib/, include/, lib/pkgconfig/)
 #   $CACHE/appimagetool-x86_64.AppImage  (mode 755)
 #   $CACHE/runtime-x86_64
 #   $CACHE/pipewire-<version>.tar.gz     source for build-pipewire-sdk.sh

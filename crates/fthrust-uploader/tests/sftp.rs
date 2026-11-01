@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use fthrust_core::FthrPaths;
 use fthrust_core::upload::history::History;
 use fthrust_core::upload::settings::UploaderSettings;
-use fthrust_uploader::{Env, handle, vault};
+use fthrust_uploader::{Env, Pulse, handle, vault};
 use serde_json::{Value, json};
 use support::sftp_server::{self as srv, TestServer};
 
@@ -58,7 +58,8 @@ impl Home {
         (r.ok, r.message)
     }
 
-    async fn upload(&self, env: &Env) -> (bool, String) {
+    /// The whole reply to an upload request for the clip.
+    async fn respond(&self, env: &Env) -> fthrust_uploader::Response {
         let clips = self.dir.path().join("clips");
         let req = json!({
             "action": "upload",
@@ -66,7 +67,11 @@ impl Home {
             "allowed_roots": [clips],
             "clips_root": clips,
         });
-        let r = handle(env, &req).await;
+        handle(env, &req).await
+    }
+
+    async fn upload(&self, env: &Env) -> (bool, String) {
+        let r = self.respond(env).await;
         (r.ok, r.message)
     }
 
@@ -414,7 +419,8 @@ async fn upload_part_rename_and_urls() {
 }
 
 /// Both SFTP links, the `sftp://` location and the public HTTPS one, are
-/// links the card can offer, so they confirm an upload.
+/// links the card can offer, so they confirm an upload: the clip may go (the
+/// app deletes it, not the uploader).
 #[tokio::test]
 async fn auto_delete_follows_a_confirmed_sftp_upload() {
     let server = srv::start(15).await;
@@ -429,15 +435,16 @@ async fn auto_delete_follows_a_confirmed_sftp_upload() {
         let env = h.env();
         h.save_password(&env, srv::PASSWORD).await;
         let clip = h.clip.canonicalize().unwrap();
-        let (ok, msg) = h.upload(&env).await;
-        assert!(ok, "{msg}");
+        let r = h.respond(&env).await;
+        assert!(r.ok, "{}", r.message);
         let want = if public {
             "https://videos.example/clips/fthr-"
         } else {
             "sftp://127.0.0.1:"
         };
-        assert!(msg.starts_with(want), "{msg}");
-        assert!(!clip.exists(), "public={public}: the clip stayed");
+        assert!(r.message.starts_with(want), "{}", r.message);
+        assert!(r.delete, "public={public}: the clip must stay");
+        assert!(clip.exists(), "public={public}: the uploader deleted it");
     }
 }
 
@@ -506,6 +513,37 @@ async fn timed_upload(
     let (ok, msg) = h.upload(&env).await;
     assert!(ok, "{msg}");
     started.elapsed()
+}
+
+/// A transfer that takes a while says now and then that it is still moving
+/// (the app stops an uploader that goes quiet, and nothing else).
+#[tokio::test]
+async fn a_slow_sftp_upload_reports_its_progress() {
+    let server = srv::start(40).await;
+    // 60 ms round trip: 24 MiB takes a couple of seconds.
+    let port = delayed_relay(server.port, std::time::Duration::from_millis(30)).await;
+    let h = home(
+        &server,
+        json!({"sftp_fingerprint": server.fingerprint(), "sftp_port": port.to_string()}),
+    );
+    std::fs::write(&h.clip, vec![7u8; 24 << 20]).unwrap();
+    let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut env = h.env();
+    let sink = said.clone();
+    env.progress = Pulse::new(std::time::Duration::from_millis(100), move |line| {
+        sink.lock().unwrap().push(line.to_owned());
+    });
+    h.save_password(&env, srv::PASSWORD).await;
+    let (ok, msg) = h.upload(&env).await;
+    assert!(ok, "{msg}");
+    let lines = said.lock().unwrap().clone();
+    assert!(lines.len() >= 2, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.starts_with("[Uploader] Sent ") && l.ends_with(" of 24.0 MB")),
+        "{lines:?}"
+    );
 }
 
 /// Measures the SFTP write window: `cargo t -p fthrust-uploader --test sftp

@@ -102,6 +102,40 @@ pub fn capture_preset(backend: EncoderPref, preset: u8) -> u8 {
     }
 }
 
+/// The options capture opens `codec_name` with at `preset` and a GOP of
+/// `gop_frames`, where they differ from [`preset_options`]: the preset's,
+/// with the settings that stop the encoder holding frames back (which a
+/// clip saved now would miss) and that give it a keyframe every GOP
+/// (clips start on one). They are tried at open, with the preset's alone
+/// as the fallback; `None` for encoders that need none.
+/// - SVT-AV1: its default random-access structure holds 60 to 76 frames,
+///   two seconds and more. Low delay holds none, and needs constant
+///   bitrate: SVT-AV1 refuses it with variable bitrate.
+/// - Kvazaar: its presets' B-frame pyramid (a GOP of 8 or 16) holds 7 or
+///   15 frames, and its automatic overlapped frames (`owf`) 2 more;
+///   `gop=0,owf=0` holds none. It ignores the codec's GOP and forced
+///   keyframes and puts one every 64 frames unless `period` says
+///   otherwise. All of it joins the preset in its one `kvazaar-params`,
+///   which a second would replace.
+pub fn capture_options(
+    codec_name: &str,
+    preset: u8,
+    gop_frames: u32,
+) -> Option<Vec<(&'static str, String)>> {
+    let mut options = preset_options(codec_name, preset)?;
+    if codec_name.contains("svtav1") {
+        options.push(("svtav1-params", "pred-struct=1:rc=2".to_owned()));
+    } else if codec_name.contains("kvazaar") {
+        let (_, params) = options
+            .iter_mut()
+            .find(|(key, _)| *key == "kvazaar-params")?;
+        params.push_str(&format!(",gop=0,owf=0,period={gop_frames}"));
+    } else {
+        return None;
+    }
+    Some(options)
+}
+
 /// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).
 pub fn is_hardware(codec_name: &str) -> bool {
     ["nvenc", "vaapi", "amf", "qsv"]
@@ -110,9 +144,11 @@ pub fn is_hardware(codec_name: &str) -> bool {
 }
 
 /// The `thread_count` an encoder opens with: `Some(0)`, FFmpeg's automatic
-/// count, for software encoders (most of their wrappers otherwise run the
-/// library on one thread), and `None` to leave hardware encoders as they
-/// are.
+/// count, for software encoders, and `None` to leave hardware encoders as
+/// they are. OpenH264, libaom and rav1e otherwise run on one thread, and
+/// x265 on one frame thread (zerolatency keeps it at one anyway); x264
+/// already defaults to automatic threads, and Kvazaar and SVT-AV1 ignore
+/// `thread_count` and choose their own.
 pub fn thread_count(codec_name: &str) -> Option<i32> {
     (!is_hardware(codec_name)).then_some(0)
 }

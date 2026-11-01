@@ -210,3 +210,42 @@ fn capture_follows_the_stored_preset_only_with_nvenc_chosen() {
     }
     assert_eq!(DEFAULT_PRESET, 4);
 }
+
+#[test]
+fn capture_settings_where_the_preset_alone_falls_short() {
+    use fthrust_media::encoder_policy::capture_options;
+    let own = |pairs: &[(&'static str, &str)]| {
+        pairs
+            .iter()
+            .map(|&(k, v)| (k, v.to_owned()))
+            .collect::<Vec<_>>()
+    };
+    // SVT-AV1: low delay, with the constant bitrate it needs for it.
+    assert_eq!(
+        capture_options("libsvtav1", 4, 60).unwrap(),
+        own(&[("preset", "6"), ("svtav1-params", "pred-struct=1:rc=2")])
+    );
+    // Kvazaar: no B-frame pyramid, no overlapped frames and the GOP's intra
+    // period, in the preset's own kvazaar-params (a second one would
+    // replace it).
+    assert_eq!(
+        capture_options("libkvazaar", 4, 60).unwrap(),
+        own(&[("kvazaar-params", "preset=fast,gop=0,owf=0,period=60")])
+    );
+    assert_eq!(
+        capture_options("libkvazaar", 7, 120).unwrap(),
+        own(&[("kvazaar-params", "preset=veryslow,gop=0,owf=0,period=120")])
+    );
+    for name in [
+        "libopenh264",
+        "libx264",
+        "libx265",
+        "libaom-av1",
+        "librav1e",
+        "h264_vaapi",
+        "av1_nvenc",
+        "unknown",
+    ] {
+        assert!(capture_options(name, 4, 60).is_none(), "{name}");
+    }
+}

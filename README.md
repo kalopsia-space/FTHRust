@@ -115,10 +115,10 @@ Uploading lives in a third program, `fthrust-uploader`, which the app runs once 
 
 ## Status
 
-FTHRust Clips is an **alpha** (`2.0.0-alpha.2`). The core loop of capture, save, edit, export and upload is complete and covered by about 1000 tests plus scripted runs of the real app. Some features are still partly wired; [Capturing](docs/capturing.md#whats-not-there-yet) lists them honestly. Hyprland on x86_64 is the tested setup. Other Wayland desktops should work, with the gaps described in [Installing](docs/install.md#desktop-support).
+FTHRust Clips is an **alpha** (`2.0.0-alpha.2`). The core loop of capture, save, edit, export and upload is complete and covered by more than a thousand tests plus scripted runs of the real app. Some features are still partly wired; [Capturing](docs/capturing.md#whats-not-there-yet) lists them honestly. Hyprland on x86_64 is the tested setup. Other Wayland desktops should work, with the gaps described in [Installing](docs/install.md#desktop-support).
 
 Found a bug? Export a diagnostic report (**Settings → General → Troubleshooting**) and [open an issue](https://github.com/kalopsia-space/FTHRust/issues).
 
 ## License
 
-[GPL-3.0-only](LICENSE). The AppImage bundles an LGPL build of FFmpeg; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled component and its licence. Oswald is under the SIL Open Font License.
+[GPL-3.0-only](LICENSE). The AppImage bundles BtbN's shared build of FFmpeg, configured for the LGPL; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled component and its licence, including any GPL code that build compiles into its libraries. Oswald is under the SIL Open Font License.

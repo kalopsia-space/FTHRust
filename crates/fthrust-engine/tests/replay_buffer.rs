@@ -16,6 +16,7 @@ fn config(location: BufferLocation) -> EngineConfig {
         },
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 

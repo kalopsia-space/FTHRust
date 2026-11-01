@@ -7,11 +7,11 @@ use std::sync::atomic::AtomicBool;
 use fthrust_core::FthrPaths;
 use fthrust_core::capture_config::CaptureConfig;
 use fthrust_ipc::BackendKind;
-use fthrust_portal::capture::PortalCapture;
+use fthrust_portal::capture::{Dialog, PortalCapture};
 use fthrust_portal::screencast::{PortalFailure, Timeouts};
 use fthrust_wayland::frame::FrameView;
 
-use crate::backend::{BackendFailure, CaptureBackend, CaptureError, FailureKind};
+use crate::backend::{BackendFailure, CaptureBackend, CaptureError, FailureKind, OpenReason};
 
 /// Dropping it stops the stream and closes the portal session (the
 /// screen-sharing indicator goes out).
@@ -41,24 +41,37 @@ fn failure(e: PortalFailure) -> BackendFailure {
             kind: FailureKind::Error,
             reason: "the screen picker was dismissed".into(),
             retry_pointless: true,
+            needs_dialog: false,
+        },
+        // Only the user can bring the dialog back (by restarting capture).
+        e @ PortalFailure::NeedsDialog => BackendFailure {
+            kind: FailureKind::Error,
+            reason: e.to_string(),
+            retry_pointless: true,
+            needs_dialog: true,
         },
         PortalFailure::Cancelled => BackendFailure {
             kind: FailureKind::Cancelled,
             reason: "capture cancelled".into(),
             retry_pointless: false,
+            needs_dialog: false,
         },
         e => BackendFailure {
             kind: FailureKind::Error,
             reason: e.to_string(),
             retry_pointless: false,
+            needs_dialog: false,
         },
     }
 }
 
-/// Opens a portal session (the user's dialog) and its stream.
+/// Opens a portal session and its stream: with the user's dialog when the
+/// user started capture, restore-only for an automatic open (see
+/// [`OpenReason`]).
 pub fn open(
     paths: Option<&FthrPaths>,
     cfg: &CaptureConfig,
+    reason: OpenReason,
     cancel: Arc<AtomicBool>,
 ) -> Result<Box<dyn CaptureBackend>, BackendFailure> {
     let paths = match paths {
@@ -67,9 +80,14 @@ pub fn open(
             kind: FailureKind::Error,
             reason: e.to_string(),
             retry_pointless: false,
+            needs_dialog: false,
         })?,
     };
-    let capture =
-        PortalCapture::open(&paths, cfg.fps, cancel, Timeouts::default()).map_err(failure)?;
+    let dialog = match reason {
+        OpenReason::Start => Dialog::Allowed,
+        OpenReason::Recovery => Dialog::Forbidden,
+    };
+    let capture = PortalCapture::open(&paths, cfg.fps, cancel, Timeouts::default(), dialog)
+        .map_err(failure)?;
     Ok(Box::new(PortalBackend(capture)))
 }

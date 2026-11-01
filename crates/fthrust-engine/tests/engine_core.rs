@@ -9,8 +9,8 @@ use fthrust_core::capture_config::{CaptureConfig, Codec, EncoderPref, Scaling};
 use fthrust_core::capture_health::flags;
 use fthrust_engine::audio::SyntheticAudio;
 use fthrust_engine::backend::{
-    CaptureError, FailureKind, KindScript, RealFactory, SyntheticFactory, SyntheticScript,
-    solid_grey,
+    CaptureError, FailureKind, KindScript, OpenReason, RealFactory, SyntheticFactory,
+    SyntheticScript, solid_grey,
 };
 use fthrust_engine::engine::{CaptureEngine, EngineDeps, EngineNotice};
 use fthrust_ipc::{BackendKind, EngineConfig};
@@ -39,6 +39,7 @@ fn config(f: impl FnOnce(&mut CaptureConfig)) -> EngineConfig {
         capture,
         max_buffer_mb: 0,
         backend_override: None,
+        automatic_start: false,
     }
 }
 
@@ -602,6 +603,155 @@ fn a_black_screen_never_reopens_the_portal() {
     assert!(sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
+/// A synthetic engine over `kinds` (in that candidate order) whose
+/// backoffs are recorded instead of slept.
+fn engine_over(script: SyntheticScript, candidates: Vec<BackendKind>) -> Harness {
+    engine_with(config(|_| {}), script, candidates)
+}
+
+fn engine_with(
+    cfg: EngineConfig,
+    script: SyntheticScript,
+    candidates: Vec<BackendKind>,
+) -> Harness {
+    let script = Arc::new(Mutex::new(script));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = sleeps.clone();
+    let deps = EngineDeps {
+        backends: Arc::new(SyntheticFactory {
+            script: script.clone(),
+            candidates,
+        }),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(move |d: Duration, running: &dyn Fn() -> bool| {
+            recorded.lock().unwrap().push(d.as_millis() as u64);
+            running()
+        }),
+    };
+    Harness {
+        engine: CaptureEngine::new(cfg, deps),
+        script,
+        sleeps,
+    }
+}
+
+#[test]
+fn a_portal_session_the_desktop_closed_is_not_reopened() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The desktop's "Stop sharing" ends capture like a dismissed picker:
+    // no recovery, no new session ~250 ms later.
+    let mut script = SyntheticScript::new(320, 180);
+    script.kinds.insert(
+        BackendKind::PortalScreenCast,
+        KindScript {
+            capture_error_after: Some((
+                10,
+                CaptureError::Closed("screen sharing was stopped from the desktop".into()),
+            )),
+            ..KindScript::default()
+        },
+    );
+    let mut h = engine_over(script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.health_flags & flags::BACKEND_FAILED != 0
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let opens = h.script.lock().unwrap().opens;
+    h.engine.shutdown();
+    assert!(s.capture_failure_detail.contains("desktop"), "{s:?}");
+    assert_eq!(opens, 1, "the session was opened again");
+    assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+#[test]
+fn only_the_first_open_may_show_a_dialog() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The portal dies after 10 frames, then reopens: the open the user
+    // started may show the portal's dialog, the recovery may not.
+    let mut script = SyntheticScript::new(320, 180);
+    script.kinds.insert(
+        BackendKind::PortalScreenCast,
+        KindScript {
+            capture_error_after: Some((
+                10,
+                CaptureError::Failed("stream resolution changed".into()),
+            )),
+            ..KindScript::default()
+        },
+    );
+    let mut h = engine_over(script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.capture_generation >= 2
+    });
+    h.engine.shutdown();
+    let reasons = h.script.lock().unwrap().open_reasons.clone();
+    assert_eq!(
+        reasons[..2],
+        [
+            (BackendKind::PortalScreenCast, OpenReason::Start),
+            (BackendKind::PortalScreenCast, OpenReason::Recovery),
+        ],
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn an_engine_the_app_restarted_on_its_own_never_opens_with_a_dialog() {
+    if !have_software_h264() {
+        return eprintln!("skipping: no software H.264 encoder");
+    }
+    // The app restarts a crashed or hung engine without the user asking:
+    // that engine's first open is already restore-only.
+    let mut script = SyntheticScript::new(320, 180);
+    script
+        .kinds
+        .insert(BackendKind::PortalScreenCast, KindScript::default());
+    let mut cfg = config(|_| {});
+    cfg.automatic_start = true;
+    let mut h = engine_with(cfg, script, vec![BackendKind::PortalScreenCast]);
+    h.engine.start().unwrap();
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= 5
+    });
+    h.engine.shutdown();
+    let reasons = h.script.lock().unwrap().open_reasons.clone();
+    assert_eq!(
+        reasons,
+        [(BackendKind::PortalScreenCast, OpenReason::Recovery)],
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn an_automatic_start_the_portal_cannot_restore_is_coded() {
+    // The app restarted the engine on its own, and the portal has no saved
+    // choice: going on would mean its dialog. Capture stops with a code of
+    // its own, not as if the user had dismissed the picker. (No portal is
+    // contacted: without a token the restore-only open fails at once.)
+    let home = tempfile::tempdir().unwrap();
+    let deps = EngineDeps {
+        backends: Arc::new(
+            RealFactory::assume_wayland(true).with_paths(fthrust_core::FthrPaths::new(home.path())),
+        ),
+        audio: Arc::new(SyntheticAudio::new()),
+        backoff: Arc::new(|_, running: &dyn Fn() -> bool| running()),
+    };
+    let mut cfg = config(|_| {});
+    cfg.backend_override = Some(BackendKind::PortalScreenCast);
+    cfg.automatic_start = true;
+    let mut engine = CaptureEngine::new(cfg, deps);
+    let err = engine.start().unwrap_err();
+    engine.shutdown();
+    assert_eq!(err.code, "CAPTURE_NOT_RESTORED", "{err:?}");
+    assert!(err.detail.contains("dialog"), "{err:?}");
+}
+
 #[test]
 fn startup_without_wayland_is_coded() {
     let deps = EngineDeps {
@@ -1020,6 +1170,121 @@ fn zero_copy_survives_a_static_screen_past_the_first_frame_deadline() {
     assert_eq!(s.capture_generation, 1, "{s:?}");
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1);
     assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
+}
+
+/// Starts `script` (synthetic ext with dmabuf) and waits for the black
+/// zero-copy run to restart capture; `None` when this driver's new VA
+/// surfaces are not black, so the run never comes.
+fn through_a_black_zero_copy_restart(script: SyntheticScript) -> Option<Harness> {
+    let mut h = harness(vaapi_config(), script);
+    h.engine.start().unwrap();
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.content_sample_sequence >= 2
+    });
+    if s.content_suspicious_streak == 0 {
+        h.engine.shutdown();
+        eprintln!("skipping: this driver's new surfaces are not black");
+        return None;
+    }
+    assert!(h.engine.zero_copy_in_use(), "zero copy started");
+    wait_for(&h.engine, Duration::from_secs(30), |s| {
+        s.capture_generation == 2
+    });
+    Some(h)
+}
+
+#[test]
+fn a_zero_copy_feed_black_again_after_a_fine_shm_picture_is_refused() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The synthetic compositor completes dmabuf captures without drawing
+    // into the images, so the watchdog reads the surfaces as the driver
+    // allocated them; its shm frames show a picture. The content restart
+    // tries shared memory, whose first sample is fine; zero copy then gets
+    // a second look, its own first sample is black again, and it is
+    // refused: off for the rest of this capture start, through later
+    // generations too (the third comes from a scripted capture error 450
+    // frames into the second; the first restarts on its dark run at 360,
+    // twelve samples of 30 frames).
+    let mut script = ext_dmabuf(320, 180, c);
+    script
+        .kinds
+        .get_mut(&BackendKind::ExtImageCopy)
+        .unwrap()
+        .capture_error_after = Some((450, CaptureError::Failed("scripted".into())));
+    let Some(mut h) = through_a_black_zero_copy_restart(script) else {
+        return;
+    };
+    // A sample of the new generation's picture clears the flag.
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.health_flags & flags::CONTENT_SUSPECT == 0
+    });
+    assert_eq!(s.capture_generation, 2, "{s:?}");
+    // The second look (one more use_dmabuf), then shared memory for good.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.script.lock().unwrap().dmabuf_uses < 2 || h.engine.zero_copy_in_use() {
+        assert!(
+            Instant::now() < deadline,
+            "zero copy: in use {}, {} use_dmabuf",
+            h.engine.zero_copy_in_use(),
+            h.script.lock().unwrap().dmabuf_uses
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(h.engine.status().capture_generation, 2, "no restart for it");
+    let s = wait_for(&h.engine, Duration::from_secs(30), |s| {
+        s.capture_generation == 3
+    });
+    let frames = s.frames_captured;
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= frames + 60
+    });
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(!zero_copy, "a later generation went back into zero copy");
+    assert_eq!(h.script.lock().unwrap().dmabuf_uses, 2, "dmabuf again");
+}
+
+#[test]
+fn a_dark_scene_dark_through_shm_too_goes_back_to_zero_copy() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // A black loading screen: the shm frames are black too. The content
+    // restart tries shared memory, whose first sample is still dark: the
+    // darkness is real, and zero copy comes back in the same generation
+    // instead of copying every frame until the picture changes.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.black = true;
+    let Some(mut h) = through_a_black_zero_copy_restart(script) else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !h.engine.zero_copy_in_use() {
+        assert!(Instant::now() < deadline, "zero copy did not come back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Two more samples: no second restart while the picture stays dark.
+    let n = h.engine.status().content_sample_sequence;
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.content_sample_sequence >= n + 2
+    });
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(zero_copy, "{s:?}");
+    assert_eq!(s.capture_generation, 2, "{s:?}");
+    assert_ne!(
+        s.health_flags & flags::CONTENT_SUSPECT,
+        0,
+        "still dark: {s:?}"
+    );
+    assert_eq!(
+        h.script.lock().unwrap().dmabuf_uses,
+        2,
+        "zero copy once more"
+    );
+    assert_eq!(*h.sleeps.lock().unwrap(), [250]);
 }
 
 #[test]

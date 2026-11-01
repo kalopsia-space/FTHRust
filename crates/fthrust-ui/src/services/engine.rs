@@ -47,9 +47,15 @@ pub const AUTO_RESTART_WINDOW_S: f64 = 600.0;
 pub const HANG_RESTART_S: f64 = 15.0;
 /// How long a graceful stop waits for the engine to exit before SIGTERM.
 pub const KILL_GRACE_S: f64 = 2.0;
-/// The same with a clip save in flight: the engine finishes the save first
-/// (it waits up to 60 s for it), so it gets that long plus a margin.
+/// The same with a clip save in flight: the engine finishes the save before
+/// it exits (its own wait for the save is 60 s, after it has stopped
+/// capturing), so it gets about that long plus a margin. The UI fails a save
+/// that hasn't answered in 60 s anyway.
 pub const SAVE_EXIT_GRACE_S: f64 = 65.0;
+/// The same with a manual recording still finishing: the engine takes up to
+/// 3 s to get its last frames, then finishes the file (its trailer and the
+/// fsync) in the same 60 s wait as a save.
+pub const RECORDING_EXIT_GRACE_S: f64 = SAVE_EXIT_GRACE_S;
 
 /// What drives the supervisor.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +78,12 @@ pub enum Input {
         /// An explicit restart (shortcut, error bar) shows `RESTARTING
         /// ENGINE`; a settings apply shows `APPLYING SETTINGS`.
         explicit: bool,
+        /// The app restarts the engine on its own (game detection switching
+        /// to or from a game, the clips profile coming back after a
+        /// recording): the new engine never brings up the portal's dialog.
+        /// Off for every restart the user asked for (a settings apply,
+        /// RESTART ENGINE and the other error-bar restarts, Record).
+        automatic: bool,
     },
     /// Focus pause.
     Pause,
@@ -163,6 +175,37 @@ enum Phase {
     Stopping,
 }
 
+/// A restart waiting its turn: behind a save, or behind the restart under
+/// way.
+#[derive(Clone, Debug)]
+struct WaitingRestart {
+    config: EngineConfig,
+    allow_recording_prepare: bool,
+    explicit: bool,
+    automatic: bool,
+}
+
+impl WaitingRestart {
+    /// Takes the place of `earlier`: the newest settings win, an explicit
+    /// ask stays explicit, and an ask of the user's stays the user's.
+    fn replacing(self, earlier: Option<&WaitingRestart>) -> WaitingRestart {
+        WaitingRestart {
+            explicit: self.explicit || earlier.is_some_and(|e| e.explicit),
+            automatic: self.automatic && earlier.is_none_or(|e| e.automatic),
+            ..self
+        }
+    }
+
+    fn into_input(self) -> Input {
+        Input::Restart {
+            config: self.config,
+            allow_recording_prepare: self.allow_recording_prepare,
+            explicit: self.explicit,
+            automatic: self.automatic,
+        }
+    }
+}
+
 /// The engine supervisor.
 pub struct Supervisor {
     generation: u64,
@@ -178,11 +221,18 @@ pub struct Supervisor {
     restart_pending: bool,
     restart_requested: bool,
     restart_at: Option<f64>,
+    /// The armed `restart_at` is one the app makes on its own (after a
+    /// crash or a hang, or an automatic `Input::Restart`), not one the user
+    /// asked for: the engine it starts is told so, and never brings up the
+    /// portal's dialog.
+    restart_is_automatic: bool,
+    /// The latest start was the app's own; its `Configure` says so.
+    start_is_automatic: bool,
     defer_restart_until: Option<f64>,
-    deferred_restart: Option<(EngineConfig, bool, bool)>,
+    deferred_restart: Option<WaitingRestart>,
     /// A restart asked for after the running one already configured its
     /// process; it runs once that apply settles.
-    queued_restart: Option<(EngineConfig, bool, bool)>,
+    queued_restart: Option<WaitingRestart>,
     /// When the engine was last restarted on its own (crash or hang).
     auto_restarts: Vec<f64>,
     /// The app is quitting: nothing starts the engine again.
@@ -226,6 +276,8 @@ impl Supervisor {
             restart_pending: false,
             restart_requested: false,
             restart_at: None,
+            restart_is_automatic: false,
+            start_is_automatic: false,
             defer_restart_until: None,
             deferred_restart: None,
             queued_restart: None,
@@ -256,6 +308,18 @@ impl Supervisor {
     /// Whether a clip save is in flight.
     pub fn save_busy(&self) -> bool {
         self.save_busy
+    }
+
+    /// How long a stop now gives the engine before it is signalled: a save
+    /// in flight or a recording still finishing gets its time.
+    pub fn stop_grace(&self) -> f64 {
+        if self.save_busy {
+            SAVE_EXIT_GRACE_S
+        } else if self.recording {
+            RECORDING_EXIT_GRACE_S
+        } else {
+            KILL_GRACE_S
+        }
     }
 
     /// The recording service reports whether a recording is not idle.
@@ -369,10 +433,20 @@ impl Supervisor {
         }));
     }
 
-    fn begin_start(&mut self, config: EngineConfig, out: &mut Vec<Effect>, now: f64) {
+    /// Starts an engine; `automatic` when the app does it on its own (see
+    /// `restart_is_automatic`), never for a start the user asked for. The
+    /// `Configure` of this start carries it, whatever `config` says.
+    fn begin_start(
+        &mut self,
+        config: EngineConfig,
+        automatic: bool,
+        out: &mut Vec<Effect>,
+        now: f64,
+    ) {
         if self.final_stop {
             return;
         }
+        self.start_is_automatic = automatic;
         self.generation += 1;
         self.process_generation = Some(self.generation);
         self.exit_code = None;
@@ -396,6 +470,7 @@ impl Supervisor {
     fn no_more_starts(&mut self, out: &mut Vec<Effect>) {
         self.final_stop = true;
         self.restart_at = None;
+        self.restart_is_automatic = false;
         self.defer_restart_until = None;
         self.deferred_restart = None;
         self.queued_restart = None;
@@ -460,6 +535,7 @@ impl Supervisor {
         }
         self.auto_restarts.push(now);
         self.restart_at = Some(now + AUTO_RESTART_DELAY_S);
+        self.restart_is_automatic = true;
         out.push(Effect::StartAfter(AUTO_RESTART_DELAY_S));
     }
 
@@ -503,7 +579,7 @@ impl Supervisor {
         match input {
             Input::Start(config) => {
                 if matches!(self.phase, Phase::Stopped) {
-                    self.begin_start(config, &mut out, now);
+                    self.begin_start(config, false, &mut out, now);
                 }
             }
             Input::Quitting => self.no_more_starts(&mut out),
@@ -512,12 +588,9 @@ impl Supervisor {
                 // restart used to spawn a new engine after the stop).
                 self.no_more_starts(&mut out);
                 if !matches!(self.phase, Phase::Stopped) {
-                    // Quitting mid-save: let the engine finish the clip.
-                    let grace_s = if self.save_busy {
-                        SAVE_EXIT_GRACE_S
-                    } else {
-                        KILL_GRACE_S
-                    };
+                    // Quitting mid-save or mid-recording: let the engine
+                    // finish the file.
+                    let grace_s = self.stop_grace();
                     self.begin_stop(&mut out, true, grace_s);
                 }
             }
@@ -525,6 +598,7 @@ impl Supervisor {
                 config,
                 allow_recording_prepare,
                 explicit,
+                automatic,
             } => {
                 if self.final_stop {
                     return out;
@@ -546,14 +620,19 @@ impl Supervisor {
                     self.restart_requested = true;
                 }
                 self.applying = true;
+                let waiting = WaitingRestart {
+                    config,
+                    allow_recording_prepare,
+                    explicit,
+                    automatic,
+                };
                 if self.save_busy {
                     self.status(&mut out, self.pending_text(), StatusStyle::Idle);
-                    // The newest settings win; an explicit ask stays explicit.
-                    let explicit = explicit || self.deferred_restart.as_ref().is_some_and(|d| d.2);
                     if self.deferred_restart.is_none() {
                         self.defer_restart_until = Some(now + RESTART_DEFER_S);
                     }
-                    self.deferred_restart = Some((config, allow_recording_prepare, explicit));
+                    let waiting = waiting.replacing(self.deferred_restart.as_ref());
+                    self.deferred_restart = Some(waiting);
                     return out;
                 }
                 if self.restart_pending {
@@ -562,22 +641,28 @@ impl Supervisor {
                     // after that, they need one more restart once this one
                     // settles (both used to be dropped).
                     if self.pending_launch.is_some() {
-                        let explicit =
-                            explicit || self.queued_restart.as_ref().is_some_and(|q| q.2);
-                        self.queued_restart = Some((config, allow_recording_prepare, explicit));
+                        let waiting = waiting.replacing(self.queued_restart.as_ref());
+                        self.queued_restart = Some(waiting);
                     } else {
                         // The tracker must hold what Configure will send, or
                         // the old settings are reported as active.
-                        self.tracker.request(config.capture.clone());
+                        self.tracker.request(waiting.config.capture.clone());
                         let _ = self.tracker.begin_apply();
-                        self.config = Some(config);
+                        self.config = Some(waiting.config);
+                        // Started on its own only if both asks were the
+                        // app's own (the armed restart, or the start whose
+                        // Configure is still to be sent).
+                        self.restart_is_automatic &= waiting.automatic;
+                        self.start_is_automatic &= waiting.automatic;
                     }
                     return out;
                 }
                 self.restart_pending = true;
                 self.apply_deadline = Some(now + APPLY_TIMEOUT_S);
                 self.status(&mut out, self.pending_text(), StatusStyle::Idle);
-                self.config = Some(config);
+                self.config = Some(waiting.config);
+                // Replaces a restart still armed after a crash or hang.
+                self.restart_is_automatic = waiting.automatic;
                 match self.phase {
                     Phase::Stopped => {
                         self.restart_at = Some(now + RESTART_GAP_S);
@@ -654,7 +739,8 @@ impl Supervisor {
                     self.phase = Phase::Connected;
                     self.last_event_at = now;
                     self.disconnected_reported = false;
-                    if let Some(config) = self.config.clone() {
+                    if let Some(mut config) = self.config.clone() {
+                        config.automatic_start = self.start_is_automatic;
                         self.pending_launch = Some((config.clone(), self.generation));
                         out.push(Effect::Send(Command::Configure(config)));
                     }
@@ -684,16 +770,35 @@ impl Supervisor {
                 let explicit = code != "ENGINE_START_FAILED";
                 self.tracker.fail(&detail);
                 self.finish_apply(&mut out);
-                let (title, public) = if explicit {
-                    ("CAPTURE FAILED", "Error 001")
+                let (title, public, text, status) = if code == "CAPTURE_NOT_RESTORED" {
+                    // The app restarted capture on its own, and the portal
+                    // could only have gone on with its dialog.
+                    (
+                        "SCREEN SHARING NOT RESTORED",
+                        "Error 001",
+                        NOT_RESTORED_DETAIL.to_owned(),
+                        "CAPTURE STOPPED",
+                    )
+                } else if explicit {
+                    (
+                        "CAPTURE FAILED",
+                        "Error 001",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 } else {
-                    ("ENGINE NOT RESPONDING", "Error 004")
+                    (
+                        "ENGINE NOT RESPONDING",
+                        "Error 004",
+                        format!("{code}: {detail}"),
+                        "CAPTURE FAILED",
+                    )
                 };
-                self.status(&mut out, "CAPTURE FAILED", StatusStyle::Warning);
+                self.status(&mut out, status, StatusStyle::Warning);
                 self.error(
                     &mut out,
                     title,
-                    format!("{code}: {detail}"),
+                    text,
                     Level::Error,
                     vec![("RESTART ENGINE", "restart")],
                     Some("engine-launch"),
@@ -834,6 +939,12 @@ impl Supervisor {
             }
             Input::Tick => {}
         }
+        // A quit signal is seen here at once, before the shutdown sends
+        // `Quitting`; a logout ends the engine too, and its automatic
+        // restart must not start a new one.
+        if !self.final_stop && super::quitting() {
+            self.no_more_starts(&mut out);
+        }
         // Timers.
         if let Some(at) = self.restart_at
             && now >= at
@@ -841,7 +952,8 @@ impl Supervisor {
             && let Some(config) = self.config.clone()
         {
             self.restart_at = None;
-            self.begin_start(config, &mut out, now);
+            let automatic = std::mem::take(&mut self.restart_is_automatic);
+            self.begin_start(config, automatic, &mut out, now);
         }
         if let Some(until) = self.defer_restart_until
             && now >= until
@@ -849,29 +961,15 @@ impl Supervisor {
             self.defer_restart_until = None;
             if self.save_busy {
                 self.defer_restart_until = Some(now + RESTART_DEFER_S);
-            } else if let Some((config, allow, explicit)) = self.deferred_restart.take() {
-                let mut more = self.handle(
-                    Input::Restart {
-                        config,
-                        allow_recording_prepare: allow,
-                        explicit,
-                    },
-                    now,
-                );
+            } else if let Some(waiting) = self.deferred_restart.take() {
+                let mut more = self.handle(waiting.into_input(), now);
                 out.append(&mut more);
             }
         }
         if !self.restart_pending
-            && let Some((config, allow, explicit)) = self.queued_restart.take()
+            && let Some(waiting) = self.queued_restart.take()
         {
-            let mut more = self.handle(
-                Input::Restart {
-                    config,
-                    allow_recording_prepare: allow,
-                    explicit,
-                },
-                now,
-            );
+            let mut more = self.handle(waiting.into_input(), now);
             out.append(&mut more);
         }
         if let Phase::Connecting { since } = self.phase
@@ -922,8 +1020,10 @@ impl Supervisor {
             self.status(&mut out, "DISCONNECTED", StatusStyle::Warning);
             self.advance_incidents(&mut out, false, 0, HealthState::Stopped, now);
         }
+        // Not while quitting: the stop is under way and has its own bounds.
         if self.is_connected()
             && self.silence_reported
+            && !self.final_stop
             && now - self.last_event_at >= HANG_RESTART_S
         {
             tracing::warn!("engine silent for {HANG_RESTART_S} s; stopping it");
@@ -933,12 +1033,15 @@ impl Supervisor {
                 "The capture engine stopped answering and was stopped. Clips cannot be saved until it is restarted."
             };
             self.engine_gone(&mut out, detail.into(), now);
-            // engine_gone marked it stopped; the process is still there.
+            // engine_gone marked it stopped; the process is still there. With
+            // a save in flight (or a recording) it gets that file's grace
+            // first: an engine that is busy finishing a clip is not cut off.
+            let grace_s = self.stop_grace();
             self.phase = Phase::Stopping;
             self.generation += 1;
             out.push(Effect::Kill {
-                graceful: false,
-                grace_s: KILL_GRACE_S,
+                graceful: grace_s > KILL_GRACE_S,
+                grace_s,
             });
         }
         out
@@ -969,6 +1072,9 @@ impl Supervisor {
         }
     }
 }
+
+/// The error bar's text for `CAPTURE_NOT_RESTORED`.
+pub const NOT_RESTORED_DETAIL: &str = "FTHRust restarted capture on its own, and your desktop would have to ask again which screen to share. FTHRust doesn't bring that dialog up without you: press RESTART ENGINE to choose a screen.";
 
 fn startup_warning_title(code: &str) -> String {
     match code {
@@ -1004,6 +1110,7 @@ pub fn engine_config(state: &AppState) -> Result<EngineConfig, String> {
         capture,
         max_buffer_mb,
         backend_override,
+        automatic_start: false,
     })
 }
 
@@ -1147,19 +1254,14 @@ impl EngineDriver {
     /// it is done, so a save in flight is finished rather than cut off by
     /// the runtime shutting down (which dropped the child and SIGKILLed it).
     pub fn shutdown(self) {
-        let save_busy = self
+        let grace = self
             .supervisor
             .lock()
-            .map(|s| s.save_busy())
-            .unwrap_or(false);
+            .map(|s| s.stop_grace())
+            .unwrap_or(KILL_GRACE_S);
         let _ = self.inputs.send(Input::Stop);
         // The kill task's own bound: the graceful wait it was given, then
         // 1 s after SIGTERM and 0.5 s after SIGKILL, plus some slack.
-        let grace = if save_busy {
-            SAVE_EXIT_GRACE_S
-        } else {
-            KILL_GRACE_S
-        };
         let deadline = Instant::now() + Duration::from_secs_f64(grace + 3.0);
         // The supervisor picks the Stop up within one loop turn; give it
         // that long before trusting "no process" to mean "already gone".
@@ -1344,10 +1446,15 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
                                             // on screen follows them.
                                             p @ IpcEvent::SaveProgress { .. } => {
                                                 outbox.send_quiet(Event::Engine(p));
+                                                // Any event shows the engine is
+                                                // alive (a shutting-down engine
+                                                // sends only save events).
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                             other => {
                                                 outbox.send(Event::Engine(other));
+                                                let _ = forward_inputs.send(Input::Heartbeat);
                                                 continue;
                                             }
                                         };
@@ -1381,16 +1488,18 @@ fn connect_engine(ctx: &Arc<DriverCtx>) {
 }
 
 /// How long an engine left over from an earlier session gets to let go of
-/// the socket: the engine's own wait for a save in flight, plus a margin.
+/// the socket or exit. An engine on its way out stops capturing and drops its
+/// socket before it waits for a save in flight, so this mostly covers an old
+/// engine that still keeps its socket (an older build, or one that hangs).
 pub const STALE_ENGINE_EXIT: Duration = Duration::from_secs(65);
 
 /// An engine left over from an earlier session (the UI died mid-save, say)
 /// may still own the socket. The UI used to unlink the socket and start a
 /// second engine beside it, both capturing. Now it asks the old one to
 /// stop if it still serves clients, then waits until the socket refuses
-/// connections or the process is gone (an engine finishing a save no
-/// longer accepts clients, so it gets the time its save needs), and only
-/// then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
+/// connections or the process is gone (an engine shutting down drops its
+/// socket first and finishes a save in flight after that, without
+/// capturing), and only then SIGTERMs and SIGKILLs it. The owner's pid comes from the socket's
 /// peer credentials, which a connection still waiting in the backlog has
 /// too. A socket file nobody listens on is left for the new engine, which
 /// replaces it.

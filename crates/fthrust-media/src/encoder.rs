@@ -53,6 +53,10 @@ pub struct RateCap {
 /// How an encoder opens, besides its [`EncoderConfig`].
 #[derive(Clone, Copy, Debug, Default)]
 struct Opening {
+    /// Capture: the encoder gets the settings
+    /// [`crate::encoder_policy::capture_options`] lists (no frames held
+    /// back, a keyframe every GOP) where its library takes them.
+    capture: bool,
     /// Keyframe interval in frames (`None`: two seconds).
     gop: Option<u32>,
     /// Convert on the CPU even where the GPU could.
@@ -155,9 +159,15 @@ pub fn encoder_exists(name: &str) -> bool {
 }
 
 impl Encoder {
-    /// Opens the first candidate encoder that initialises. VA-API
-    /// candidates are tried on every render node from
-    /// [`crate::vaapi::candidate_devices`] until one encodes.
+    /// Opens the first candidate encoder that initialises, for capture.
+    /// VA-API candidates are tried on every render node from
+    /// [`crate::vaapi::candidate_devices`] until one encodes. A capture
+    /// encoder must not hold frames back and must put a keyframe every GOP,
+    /// so it gets the settings [`crate::encoder_policy::capture_options`]
+    /// lists where its library takes them (SVT-AV1's low delay; Kvazaar
+    /// without its B-frame pyramid and overlapped frames, and with the
+    /// GOP's intra period), and its preset's alone where not.
+    /// Exports, which flush at the end, use [`Encoder::open_with_gop`].
     pub fn open(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
         Self::open_with_devices(cfg, &candidate_devices())
@@ -185,7 +195,11 @@ impl Encoder {
 
     /// [`Encoder::open`] with an explicit list of VA-API render nodes.
     pub fn open_with_devices(cfg: &EncoderConfig, devices: &[String]) -> Result<Self> {
-        Self::open_inner(cfg, devices, Opening::default())
+        let opening = Opening {
+            capture: true,
+            ..Opening::default()
+        };
+        Self::open_inner(cfg, devices, opening)
     }
 
     /// [`Encoder::open`] with the CPU colour conversion forced (tests and
@@ -307,6 +321,7 @@ impl Encoder {
         logged: &mut bool,
     ) -> Result<RawEncoder> {
         let Opening {
+            capture,
             gop,
             force_cpu,
             inject,
@@ -333,9 +348,26 @@ impl Encoder {
             } else {
                 ffi::AVPixelFormat::AV_PIX_FMT_YUV420P
             },
+            strict_options: false,
         };
         if !is_vaapi {
-            return RawEncoder::open(name, &params, None);
+            let preferred = if capture {
+                // The GOP the codec context and the forced keyframes use.
+                let gop_frames = gop.unwrap_or(cfg.fps * 2).max(1);
+                crate::encoder_policy::capture_options(name, cfg.preset, gop_frames)
+            } else {
+                None
+            };
+            let wanted = preferred.is_some();
+            let (raw, taken) = RawEncoder::open_preferring(name, &params, preferred)?;
+            if wanted && !taken {
+                tracing::warn!(
+                    encoder = name,
+                    "the encoder refused its capture settings: it may hold frames back, \
+                     so a clip ends that much before the moment it was saved"
+                );
+            }
+            return Ok(raw);
         }
         // The node where a device opens is not necessarily the node whose
         // driver has this encoder (NVIDIA on renderD128, AMD on renderD129):
@@ -513,8 +545,9 @@ impl Encoder {
     }
 
     /// Whether the encoder's own NV12 upload pool and the GPU converter's
-    /// BGRX upload pool have been created (tests): neither is while
-    /// capture writes into dmabuf surfaces.
+    /// BGRX upload pool exist (tests). Neither does while capture writes
+    /// into dmabuf surfaces: shared-memory frames encoded before the first
+    /// surface frame create the converter's, and that frame drops it.
     #[doc(hidden)]
     pub fn upload_pools_created(&self) -> (bool, bool) {
         self.raw.upload_pools_created()
@@ -615,7 +648,12 @@ impl Encoder {
         }
         self.last_frame_valid = false;
         self.repeat_frame.unref();
-        if self.raw.converter_source_size() != Some(surfaces.size()) {
+        // A converter built for uploads (shared-memory frames encoded
+        // before the first surface frame, as zero copy's warm-up does)
+        // goes too, with its upload pool, rather than staying for the run.
+        if self.raw.converter_source_size() != Some(surfaces.size())
+            || self.raw.converter_takes_uploads()
+        {
             self.raw.bind_converter_to(surfaces.surface(index))?;
             self.gpu_proven = false;
         }

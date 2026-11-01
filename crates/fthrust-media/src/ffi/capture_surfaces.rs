@@ -88,7 +88,8 @@ impl CaptureSurfaces {
                 "dmabuf targets: count must be 1 to {POOL_SURFACES}, got {count}"
             )));
         }
-        let pool = device.pool_on(width, height, ffi::AVPixelFormat::AV_PIX_FMT_BGR0)?;
+        // Exactly the surfaces exported: nothing else draws from this pool.
+        let pool = device.pool_on(width, height, ffi::AVPixelFormat::AV_PIX_FMT_BGR0, count)?;
         let mut surfaces = Vec::with_capacity(count);
         let mut images = Vec::with_capacity(count);
         for _ in 0..count {
@@ -184,7 +185,17 @@ impl CaptureSurfaces {
         // A direct mapping (vaDeriveImage) costs no copy, and reading 144
         // pixels from it is cheap; FFmpeg's default read mapping copies the
         // whole surface first. Drivers that cannot derive get that one.
-        let mapped = map_for_read(surface, true).or_else(|_| map_for_read(surface, false))?;
+        let mapped = match map_for_read(surface, true) {
+            Ok(mapped) => {
+                log_sample_path_once(true);
+                mapped
+            }
+            Err(_) => {
+                let mapped = map_for_read(surface, false)?;
+                log_sample_path_once(false);
+                mapped
+            }
+        };
         let (w, h) = (self.width as usize, self.height as usize);
         // SAFETY: the mapping is alive until `mapped` drops after this block;
         // its plane is checked to hold h rows of linesize >= w * 4 bytes, and
@@ -248,6 +259,26 @@ impl CaptureSurfaces {
             );
         }
         Ok(row)
+    }
+}
+
+/// Says once per process, per path, how the content watchdog reads the
+/// capture surfaces: the copying path reads back the whole surface.
+fn log_sample_path_once(direct: bool) {
+    static DIRECT: std::sync::Once = std::sync::Once::new();
+    static COPY: std::sync::Once = std::sync::Once::new();
+    if direct {
+        DIRECT.call_once(|| {
+            tracing::info!(
+                "the content watchdog reads its 144 pixels from a direct surface mapping"
+            );
+        });
+    } else {
+        COPY.call_once(|| {
+            tracing::info!(
+                "the driver cannot map capture surfaces directly; the content watchdog copies the whole surface once a second"
+            );
+        });
     }
 }
 
@@ -402,6 +433,19 @@ mod tests {
                 sample_bgra_grid(&grid, columns, rows, columns * 4, columns, rows).unwrap();
             assert_eq!(whole, sparse, "{w}x{h}");
         }
+    }
+
+    #[test]
+    fn the_pool_holds_only_the_exported_surfaces() {
+        if !super::super::hw::vaapi_available() {
+            return eprintln!("skipping: no VA-API device");
+        }
+        let device = VaapiFrames::create(64, 64).unwrap();
+        let surfaces = CaptureSurfaces::new(&device, 320, 180, 2).unwrap();
+        // Both surfaces are exported: the pool has no third to hand out,
+        // so it costs no video memory beyond them.
+        let mut extra = OwnedFrame::empty().unwrap();
+        assert!(surfaces.pool.get_surface(&mut extra).is_err());
     }
 
     #[test]

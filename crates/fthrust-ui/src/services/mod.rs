@@ -180,8 +180,13 @@ pub enum Request {
         /// Import roots.
         imported: Vec<PathBuf>,
     },
-    /// Restart the capture engine.
+    /// Restart the capture engine (a settings apply, the shortcut).
     RestartEngine,
+    /// Restart the capture engine on the app's own initiative: game
+    /// detection switching to or from a game, the clips profile coming back
+    /// after a recording. The new engine never brings up the portal's
+    /// dialog.
+    AutoRestartEngine,
     /// An error-bar action id.
     ErrorAction(String),
     /// Refresh the running-window list.
@@ -339,6 +344,8 @@ pub struct Services {
     health: Option<HealthSnapshot>,
     engine_status: Option<StatusText>,
     recording_transition: bool,
+    /// The recording file the library was told is not a clip yet.
+    recording_clip: Option<(PathBuf, recording::FilePhase)>,
     save_transient_ended: bool,
 }
 
@@ -414,6 +421,7 @@ impl Services {
             health: None,
             engine_status: None,
             recording_transition: false,
+            recording_clip: None,
             save_transient_ended: false,
         };
         services.attach_scan(scan);
@@ -587,7 +595,7 @@ impl Services {
         for a in actions {
             match a {
                 game::GameAction::Card(c) => self.show_card(state, c),
-                game::GameAction::Restart => self.dispatch(Request::RestartEngine, state),
+                game::GameAction::Restart => self.dispatch(Request::AutoRestartEngine, state),
             }
         }
     }
@@ -679,6 +687,19 @@ impl Services {
         self.scan = Some(scan);
     }
 
+    /// Attaches a running scan service to a runtime made for tests.
+    pub fn attach_scan_for_tests(&mut self, scan: ScanService) {
+        self.attach_scan(scan);
+    }
+
+    /// The files the scan service ignores the writes to (tests).
+    pub fn muted_writes_for_tests(&self) -> Vec<PathBuf> {
+        self.scan
+            .as_ref()
+            .map(ScanService::muted_writes)
+            .unwrap_or_default()
+    }
+
     /// A runtime without background threads; requests are recorded.
     pub fn start_for_tests(ctx: &egui::Context) -> Services {
         let (tx, rx) = channel();
@@ -729,6 +750,7 @@ impl Services {
             health: None,
             engine_status: None,
             recording_transition: false,
+            recording_clip: None,
             save_transient_ended: false,
         }
     }
@@ -812,26 +834,18 @@ impl Services {
                         if let Ok(mut sv) = d.supervisor().lock() {
                             sv.set_recording_preparing(true);
                         }
+                        // The user pressed Record: their restart.
                         d.request(engine::Input::Restart {
                             config,
                             allow_recording_prepare: true,
                             explicit: false,
+                            automatic: false,
                         });
                     }
                 }
                 recording::RecAction::RestoreClipProfile => {
-                    if self.test_requests.is_some() {
-                        self.dispatch(Request::RestartEngine, state);
-                    } else if let Some(d) = &self.engine {
-                        match engine::engine_config(state) {
-                            Ok(config) => d.request(engine::Input::Restart {
-                                config,
-                                allow_recording_prepare: false,
-                                explicit: false,
-                            }),
-                            Err(e) => self.report_config_error(&e),
-                        }
-                    }
+                    // The app goes back to the clips profile on its own.
+                    self.dispatch(Request::AutoRestartEngine, state);
                 }
                 recording::RecAction::RefreshLibrary => state.scan_clips_requested = true,
             }
@@ -870,6 +884,46 @@ impl Services {
         {
             sv.set_recording(self.recording.busy());
             sv.set_recording_preparing(self.recording.state() == recording::RecordState::Preparing);
+        }
+        self.sync_recording_clip(state);
+    }
+
+    /// Keeps what the library thinks of the recording's file in step with the
+    /// recording. The engine writes it straight into its final name, so left
+    /// alone the library would list it as a finished clip that can be opened,
+    /// renamed, deleted and uploaded, and rescan the whole tree for every
+    /// fragment. It is held back from the moment its name is chosen until the
+    /// recording is over, however it ends (a failed one keeps its fragments).
+    fn sync_recording_clip(&mut self, state: &mut AppState) {
+        let now = self
+            .recording
+            .file_in_progress()
+            .map(|(path, phase)| (path.to_path_buf(), phase));
+        if now == self.recording_clip {
+            return;
+        }
+        let before = std::mem::replace(&mut self.recording_clip, now.clone());
+        if let Some((old, _)) = before
+            && now.as_ref().is_none_or(|(path, _)| *path != old)
+        {
+            // Over: an ordinary clip now. The writes in between were not seen,
+            // so its size and thumbnail are read afresh.
+            state.readiness.forget(&old);
+            if let Some(scan) = &self.scan {
+                scan.unmute_writes(&old);
+            }
+            state.scan_clips_requested = true;
+        }
+        if let Some((path, phase)) = now {
+            match phase {
+                recording::FilePhase::Writing => state.readiness.recording(&path),
+                recording::FilePhase::Finishing => {
+                    state.readiness.engine_committed(&path, true);
+                }
+            }
+            if let Some(scan) = &self.scan {
+                scan.mute_writes(&path);
+            }
         }
     }
 
@@ -1105,6 +1159,12 @@ impl Services {
         let outbox = self.outbox.clone();
         instance.set_waker(std::sync::Arc::new(move || outbox.wake()));
         self.instance = Some(instance);
+    }
+
+    /// Hands the instance lock over, so the app can let it go after the
+    /// last write of its shutdown.
+    pub fn take_instance(&mut self) -> Option<instance::Instance> {
+        self.instance.take()
     }
 
     /// The outbox (for services started later).
@@ -1394,13 +1454,14 @@ impl Services {
                     p.preview(&state.settings, &state.theme, &key);
                 }
             }
-            Request::RestartEngine => {
+            request @ (Request::RestartEngine | Request::AutoRestartEngine) => {
                 if let Some(d) = &self.engine {
                     match engine::engine_config(state) {
                         Ok(config) => d.request(engine::Input::Restart {
                             config,
                             allow_recording_prepare: false,
                             explicit: false,
+                            automatic: request == Request::AutoRestartEngine,
                         }),
                         Err(e) => self.report_config_error(&e),
                     }
@@ -1416,6 +1477,7 @@ impl Services {
                                 config,
                                 allow_recording_prepare: false,
                                 explicit: true,
+                                automatic: false,
                             }),
                             Err(e) => self.report_config_error(&e),
                         }
@@ -1652,7 +1714,18 @@ impl Services {
             return;
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while self.recording.busy() && std::time::Instant::now() < deadline {
+        loop {
+            match self.recording.state() {
+                // It started meanwhile.
+                recording::RecordState::Recording => self.toggle_recording(state),
+                recording::RecordState::Starting | recording::RecordState::Stopping => {}
+                // Idle, or waiting for a capture restart that quitting
+                // cancelled: nothing to wait for.
+                _ => break,
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
             match self
                 .events
                 .recv_timeout(std::time::Duration::from_millis(50))
@@ -1669,6 +1742,19 @@ impl Services {
             let now = self.now();
             let actions = self.recording.on_tick(now);
             self.run_rec_actions(state, actions);
+        }
+        // A recording still finishing gets its time when the engine stops
+        // (the stop used to SIGTERM after 2 s, which cut its end off).
+        let finishing = matches!(
+            self.recording.state(),
+            recording::RecordState::Starting
+                | recording::RecordState::Recording
+                | recording::RecordState::Stopping
+        );
+        if let Some(d) = &self.engine
+            && let Ok(mut sv) = d.supervisor().lock()
+        {
+            sv.set_recording(finishing);
         }
     }
 
@@ -1697,10 +1783,11 @@ impl Services {
         if let Some(scan) = self.scan.take() {
             scan.stop();
         }
-        self.instance.take();
         if let Some(rt) = self.runtime.take() {
             rt.shutdown_timeout(std::time::Duration::from_secs(3));
         }
+        // Last: a new launch waits for the lock.
+        self.instance.take();
     }
 }
 

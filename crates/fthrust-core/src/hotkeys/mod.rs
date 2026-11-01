@@ -342,11 +342,24 @@ pub fn to_portal_trigger(combo: &str) -> String {
 /// Keyboard and controller bindings for every global action.
 ///
 /// Maps are keyed by action id; an empty string means unbound.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct HotkeyBindings {
     map: BTreeMap<String, String>,
     controller: BTreeMap<String, String>,
+    /// Why `hotkeys.json` could not be read at load: these are then the
+    /// defaults, not the user's bindings, and [`Self::save`] leaves the file
+    /// alone (as `settings.json` and `theme.json` are left).
+    unreadable: Option<String>,
 }
+
+/// Bindings are equal when they bind the same keys.
+impl PartialEq for HotkeyBindings {
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map && self.controller == other.controller
+    }
+}
+
+impl Eq for HotkeyBindings {}
 
 impl HotkeyBindings {
     /// Factory defaults: clip F9, screenshot F12, game detection F8/F7.
@@ -366,7 +379,11 @@ impl HotkeyBindings {
             .iter()
             .map(|k| (k.to_string(), String::new()))
             .collect();
-        Self { map, controller }
+        Self {
+            map,
+            controller,
+            unreadable: None,
+        }
     }
 
     /// Keyboard combo bound to `id`, if the action exists.
@@ -415,6 +432,9 @@ impl HotkeyBindings {
             Ok(_) | Err(CoreError::Json { .. }) => return Ok((b, false)),
             Err(e) => {
                 tracing::warn!("could not read hotkeys.json: {e}; using defaults");
+                // A save would replace the user's bindings with the defaults
+                // (the UI saves on its own when the portal reports triggers).
+                b.unreadable = Some(e.to_string());
                 return Ok((b, false));
             }
         };
@@ -478,10 +498,31 @@ impl HotkeyBindings {
         Ok((b, migrated))
     }
 
+    /// What to tell the user at startup: `hotkeys.json` could not be read,
+    /// so the defaults are used and changes are not saved this session.
+    pub fn startup_issue(&self) -> Option<String> {
+        self.unreadable.as_ref().map(|e| {
+            format!(
+                "hotkeys.json could not be read ({e}). The default hotkeys are used and the file is left as it is, so hotkey changes are not saved this session."
+            )
+        })
+    }
+
     /// Writes `hotkeys.json` atomically: nested `{keyboard, controller}`
     /// per action when any controller binding is set, otherwise flat.
+    ///
+    /// Fails with [`CoreError::Protected`] when the file could not be read at
+    /// load.
     pub fn save(&self, paths: &FthrPaths) -> Result<()> {
         let file = paths.hotkeys_file();
+        if let Some(e) = &self.unreadable {
+            return Err(CoreError::Protected {
+                path: file,
+                reason: format!(
+                    "it could not be read at startup ({e}); the default hotkeys are used for this session"
+                ),
+            });
+        }
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
