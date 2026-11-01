@@ -59,7 +59,7 @@ resvg = { version = "0.45", default-features = false }
 egui-wgpu = { version = "0.37", features = ["wayland", "winit"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links", "wayland"] }
 winit = { version = "0.30", default-features = false, features = ["wayland", "rwh_06"] }
-pollster = "0.4"
+pollster = "1.0"
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
 
 # CI linkers ran out of space/memory on full debug info for the large test
