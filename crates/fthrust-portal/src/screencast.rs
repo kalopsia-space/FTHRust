@@ -91,6 +91,26 @@ async fn cancelled(cancel: &AtomicBool) {
     }
 }
 
+/// Flips `closed` once the portal's `Closed` signal arrives, or once the
+/// signal's stream ends (the session is gone). When the signal cannot be
+/// subscribed to at all, `closed` stays false: that is not the desktop
+/// ending the share, and a closed session forgets the saved choice.
+async fn flag_when_closed<S, E>(signal: Result<S, E>, closed: watch::Sender<bool>)
+where
+    S: futures_util::Stream + Unpin,
+    E: std::fmt::Display,
+{
+    match signal {
+        Ok(mut signal) => {
+            let _ = signal.next().await;
+            let _ = closed.send(true);
+        }
+        Err(e) => tracing::warn!(
+            "cannot watch the portal session, so a share stopped from the desktop goes unnoticed: {e}"
+        ),
+    }
+}
+
 async fn bounded<T>(
     step: &'static str,
     timeout: Duration,
@@ -271,13 +291,7 @@ impl ScreenCastSession {
         let (closed_tx, closed_rx) = watch::channel(false);
         self.closed = closed_rx;
         self.watcher = Some(tokio::spawn(async move {
-            match session.receive_closed().await {
-                Ok(mut signal) => {
-                    let _ = signal.next().await;
-                }
-                Err(e) => tracing::warn!("cannot watch the portal session: {e}"),
-            }
-            let _ = closed_tx.send(true);
+            flag_when_closed(session.receive_closed().await, closed_tx).await;
         }));
         Ok(())
     }
@@ -344,5 +358,34 @@ impl ScreenCastSession {
 impl Drop for ScreenCastSession {
     fn drop(&mut self) {
         self.close_blocking();
+    }
+}
+
+#[cfg(test)]
+mod watcher_tests {
+    use super::*;
+
+    fn closed_after<S: futures_util::Stream + Unpin>(signal: Result<S, &str>) -> bool {
+        let (tx, rx) = watch::channel(false);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(flag_when_closed(signal, tx));
+        *rx.borrow()
+    }
+
+    #[test]
+    fn only_the_closed_signal_or_its_end_marks_the_session_closed() {
+        assert!(closed_after(Ok(futures_util::stream::iter([()]))), "signal");
+        assert!(
+            closed_after(Ok(futures_util::stream::empty::<()>())),
+            "stream ended"
+        );
+        assert!(
+            !closed_after(Err::<futures_util::stream::Empty<()>, _>(
+                "no such interface"
+            )),
+            "a failed subscription counted as Stop sharing"
+        );
     }
 }
