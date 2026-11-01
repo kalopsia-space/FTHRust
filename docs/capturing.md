@@ -58,6 +58,7 @@ You'll get a capture card instead of a clip if:
 - A recording gets the same audio tracks as a clip: **Default Mix**, and **Microphone** when you've chosen an input device. The audio stays in sync however long you record, and stopping keeps everything up to the moment you pressed stop.
 - A recording needs 512 MB free to start, and stops itself cleanly if free space drops below 256 MB.
 - If the recording quality differs from the replay quality, capture restarts once at the recording settings, and again when you stop. The replay buffer starts empty after each restart.
+- A recording starts on a keyframe, which every encoder makes at once when you press **Record**, except Kvazaar (the **Software** encoder for HEVC, where FFmpeg has it): it can't make one on demand, so a recording with Kvazaar starts at its next keyframe, at most two seconds later.
 
 ## Screenshots
 
@@ -179,7 +180,7 @@ On first start, FTHRust tests every encoder your system might have with a real o
 | **NVIDIA NVENC** | NVIDIA GPUs. Supports the speed/quality preset (P1 Fastest … P4 Balanced … P7 Best Quality). |
 | **VA-API (AMD / Intel)** | AMD and Intel GPUs through Mesa or Intel's media driver. |
 | **Intel Quick Sync** | Intel GPUs. |
-| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, or x264, x265, libaom or rav1e where your FFmpeg lacks those. Kvazaar and SVT-AV1 choose their own number of threads; the others run on as many as FFmpeg's automatic count gives them. SVT-AV1 records in its low-delay mode at a constant bitrate, so a clip ends at the moment you save it; an SVT-AV1 that refuses that mode records as before, about two seconds behind. Kvazaar likewise records without its B-frame pyramid and overlapped frames, which would hold back about a third of a second. |
+| **Software** | No GPU encoder at all. Uses OpenH264, Kvazaar (HEVC) or SVT-AV1 on your CPU, or x264, x265, libaom or rav1e where your FFmpeg lacks those. Kvazaar and SVT-AV1 choose their own number of threads; the others run on as many as FFmpeg's automatic count gives them. SVT-AV1 records in its low-delay mode at a constant bitrate, so a clip ends at the moment you save it; an SVT-AV1 that refuses that mode records as before, about two seconds behind. Kvazaar likewise records without its B-frame pyramid and overlapped frames, which would hold back about a third of a second, and with a keyframe every two seconds like the other encoders. |
 
 The preset only applies with **NVIDIA NVENC** chosen, where it is shown. Every other choice, **Automatic** included, runs its encoder at the default preset (P4 Balanced).
 

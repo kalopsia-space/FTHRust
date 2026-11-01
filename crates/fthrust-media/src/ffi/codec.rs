@@ -596,7 +596,7 @@ mod tests {
         // An option the wrapper doesn't have.
         assert!(!open(vec![("no-such-option", "1".into())]).unwrap().1);
         // The capture settings themselves are taken.
-        let low_delay = crate::encoder_policy::low_delay_options("libsvtav1", 4).unwrap();
+        let low_delay = crate::encoder_policy::capture_options("libsvtav1", 4, 60).unwrap();
         assert!(open(low_delay).unwrap().1);
     }
 
