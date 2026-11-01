@@ -147,15 +147,33 @@ pub fn uploader_exe() -> Option<PathBuf> {
 /// has written nothing, on stdout or stderr, for `timeout`.
 pub fn run_request(exe: &Path, request: &Value, timeout: Duration, slot: &ChildSlot) -> Reply {
     use std::os::unix::process::CommandExt;
-    let mut child = match Command::new(exe)
-        .process_group(0)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let spawn = || {
+        Command::new(exe)
+            .process_group(0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    // "Text file busy": a program that was just written can't be started
+    // while another thread's freshly forked child still holds it open for
+    // writing (until that child execs). It clears within milliseconds.
+    let mut spawned = spawn();
+    for _ in 0..10 {
+        match &spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+                spawned = spawn();
+            }
+            _ => break,
+        }
+    }
+    let mut child = match spawned {
         Ok(c) => c,
-        Err(_) => return Reply::fail(MISSING),
+        Err(e) => {
+            tracing::warn!(exe = %exe.display(), error = %e, "uploader could not be started");
+            return Reply::fail(MISSING);
+        }
     };
     slot.set(Some(child.id()));
     if let Some(mut stdin) = child.stdin.take() {
