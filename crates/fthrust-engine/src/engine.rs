@@ -672,6 +672,23 @@ pub fn encode_size(native: (u32, u32), target: (u32, u32), scaling: Scaling) -> 
     (w.max(2), h.max(2))
 }
 
+/// Zero copy after the content watchdog restarted capture over a black
+/// zero-copy picture, for the rest of one capture start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZeroCopyTrust {
+    /// Used wherever it applies.
+    Trusted,
+    /// The next generation starts on shared memory, and its first sample
+    /// decides: still dark, the darkness is real and zero copy comes back
+    /// in place; a picture, and zero copy is `Refused`.
+    OnTrial,
+    /// Shared memory showed a picture where zero copy's was black: the
+    /// zero-copy feed is what is broken (a compositor that completes
+    /// captures into the surfaces without drawing). Off until capture is
+    /// started again.
+    Refused,
+}
+
 enum GenerationEnd {
     Stop,
     BackendFailed {
@@ -739,10 +756,8 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
     } else {
         OpenReason::Start
     };
-    // The watchdog restarted capture over a black zero-copy feed: the next
-    // generation captures through shm, since a compositor that completes
-    // captures into the surfaces without drawing would bring it back as is.
-    let mut shm_after_black_zero_copy = false;
+    // A black-screen restart taken in zero copy puts zero copy on trial.
+    let mut zero_copy_trust = ZeroCopyTrust::Trusted;
 
     'generations: while inner.running.load(Ordering::Relaxed) {
         // Backend selection along `order`.
@@ -937,13 +952,13 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
 
         // Zero copy: the compositor renders into the encoder's surfaces.
         let buffer = backend.buffer_size().unwrap_or(native);
-        let mut zero_copy_active = if std::mem::take(&mut shm_after_black_zero_copy) {
-            tracing::warn!(
-                "the picture stayed black through zero copy; capturing through shared memory"
-            );
-            false
-        } else {
-            match start_zero_copy(backend.as_mut(), enc, buffer) {
+        let mut zero_copy_active = match zero_copy_trust {
+            ZeroCopyTrust::OnTrial => {
+                tracing::warn!("the picture stayed black through zero copy; trying shared memory");
+                false
+            }
+            ZeroCopyTrust::Refused => false,
+            ZeroCopyTrust::Trusted => match start_zero_copy(backend.as_mut(), enc, buffer) {
                 Ok(()) => {
                     tracing::info!("zero-copy capture in use");
                     true
@@ -952,7 +967,7 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                     log_zero_copy_off(&mut zero_copy_logged, &reason);
                     false
                 }
-            }
+            },
         };
         let mut surface_proven = false;
         let mut realloc_tried = false;
@@ -1261,6 +1276,36 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
             }
             if let Some(m) = sampled {
                 publish_content(&inner, m);
+                if zero_copy_trust == ZeroCopyTrust::OnTrial {
+                    // The first sample since the black-screen restart that
+                    // left zero copy decides.
+                    if m.streak > 0 {
+                        // Dark through shared memory too: the darkness is
+                        // real. Back to zero copy in place, as after new
+                        // buffer constraints.
+                        zero_copy_trust = ZeroCopyTrust::Trusted;
+                        let size = backend
+                            .buffer_size()
+                            .unwrap_or_else(|| backend.native_size());
+                        match start_zero_copy(backend.as_mut(), enc, size) {
+                            Ok(()) => {
+                                tracing::info!(
+                                    "the picture is dark through shared memory too; zero-copy capture in use again"
+                                );
+                                zero_copy_active = true;
+                                surface_proven = false;
+                                realloc_tried = false;
+                                last_fresh_encoded = false;
+                            }
+                            Err(reason) => log_zero_copy_off(&mut zero_copy_logged, &reason),
+                        }
+                    } else {
+                        zero_copy_trust = ZeroCopyTrust::Refused;
+                        tracing::warn!(
+                            "the picture is fine through shared memory but was black through zero copy; zero copy stays off until capture is started again"
+                        );
+                    }
+                }
                 // On the portal a restart is a new ScreenCast session, whose
                 // picker could come up over the game (and dismissing it ends
                 // capture): there the content is only flagged.
@@ -1270,7 +1315,9 @@ fn run_capture_inner(inner: Arc<Inner>, config: EngineConfig) {
                         zero_copy = zero_copy_active,
                         "{CONTENT_RECOVERY_REASON}; restarting capture"
                     );
-                    shm_after_black_zero_copy = zero_copy_active;
+                    if zero_copy_active {
+                        zero_copy_trust = ZeroCopyTrust::OnTrial;
+                    }
                     break GenerationEnd::BackendFailed {
                         transient: false,
                         reason: CONTENT_RECOVERY_REASON.into(),

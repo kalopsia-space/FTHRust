@@ -1172,37 +1172,109 @@ fn zero_copy_survives_a_static_screen_past_the_first_frame_deadline() {
     assert!(h.sleeps.lock().unwrap().is_empty(), "no recovery");
 }
 
-#[test]
-fn a_black_zero_copy_feed_is_restarted_through_shm() {
-    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
-        return eprintln!("skipping: no VA-API device");
-    };
-    // The synthetic compositor completes dmabuf captures without drawing
-    // into the images, so the watchdog reads the surfaces as the driver
-    // allocated them; its shm frames show a picture. The content restart
-    // must not go straight back into zero copy.
-    let mut h = harness(vaapi_config(), ext_dmabuf(320, 180, c));
+/// Starts `script` (synthetic ext with dmabuf) and waits for the black
+/// zero-copy run to restart capture; `None` when this driver's new VA
+/// surfaces are not black, so the run never comes.
+fn through_a_black_zero_copy_restart(script: SyntheticScript) -> Option<Harness> {
+    let mut h = harness(vaapi_config(), script);
     h.engine.start().unwrap();
     let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
         s.content_sample_sequence >= 2
     });
     if s.content_suspicious_streak == 0 {
         h.engine.shutdown();
-        return eprintln!("skipping: this driver's new surfaces are not black");
+        eprintln!("skipping: this driver's new surfaces are not black");
+        return None;
     }
     assert!(h.engine.zero_copy_in_use(), "zero copy started");
     wait_for(&h.engine, Duration::from_secs(30), |s| {
         s.capture_generation == 2
     });
+    Some(h)
+}
+
+#[test]
+fn a_black_zero_copy_feed_that_shm_shows_fine_stays_on_shm() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // The synthetic compositor completes dmabuf captures without drawing
+    // into the images, so the watchdog reads the surfaces as the driver
+    // allocated them; its shm frames show a picture. The content restart
+    // tries shared memory, whose first sample is fine: the zero-copy feed
+    // was the problem, and zero copy stays off for this capture start,
+    // through later generations too (the third comes from a scripted
+    // capture error 450 frames into the second; the first restarts on its
+    // dark run at 360, twelve samples of 30 frames).
+    let mut script = ext_dmabuf(320, 180, c);
+    script
+        .kinds
+        .get_mut(&BackendKind::ExtImageCopy)
+        .unwrap()
+        .capture_error_after = Some((450, CaptureError::Failed("scripted".into())));
+    let Some(mut h) = through_a_black_zero_copy_restart(script) else {
+        return;
+    };
     // A sample of the new generation's picture clears the flag.
     let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
         s.health_flags & flags::CONTENT_SUSPECT == 0
     });
+    assert_eq!(s.capture_generation, 2, "{s:?}");
+    assert!(
+        !h.engine.zero_copy_in_use(),
+        "the restart went back into zero copy"
+    );
+    let s = wait_for(&h.engine, Duration::from_secs(30), |s| {
+        s.capture_generation == 3
+    });
+    let frames = s.frames_captured;
+    wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.frames_captured >= frames + 60
+    });
     let zero_copy = h.engine.zero_copy_in_use();
     h.engine.shutdown();
-    assert!(!zero_copy, "the restart went back into zero copy");
-    assert_eq!(s.capture_generation, 2, "{s:?}");
+    assert!(!zero_copy, "a later generation went back into zero copy");
     assert_eq!(h.script.lock().unwrap().dmabuf_uses, 1, "dmabuf again");
+}
+
+#[test]
+fn a_dark_scene_dark_through_shm_too_goes_back_to_zero_copy() {
+    let Some(c) = vaapi_dmabuf_constraints(320, 180) else {
+        return eprintln!("skipping: no VA-API device");
+    };
+    // A black loading screen: the shm frames are black too. The content
+    // restart tries shared memory, whose first sample is still dark: the
+    // darkness is real, and zero copy comes back in the same generation
+    // instead of copying every frame until the picture changes.
+    let mut script = ext_dmabuf(320, 180, c);
+    script.black = true;
+    let Some(mut h) = through_a_black_zero_copy_restart(script) else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !h.engine.zero_copy_in_use() {
+        assert!(Instant::now() < deadline, "zero copy did not come back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Two more samples: no second restart while the picture stays dark.
+    let n = h.engine.status().content_sample_sequence;
+    let s = wait_for(&h.engine, Duration::from_secs(10), |s| {
+        s.content_sample_sequence >= n + 2
+    });
+    let zero_copy = h.engine.zero_copy_in_use();
+    h.engine.shutdown();
+    assert!(zero_copy, "{s:?}");
+    assert_eq!(s.capture_generation, 2, "{s:?}");
+    assert_ne!(
+        s.health_flags & flags::CONTENT_SUSPECT,
+        0,
+        "still dark: {s:?}"
+    );
+    assert_eq!(
+        h.script.lock().unwrap().dmabuf_uses,
+        2,
+        "zero copy once more"
+    );
     assert_eq!(*h.sleeps.lock().unwrap(), [250]);
 }
 
