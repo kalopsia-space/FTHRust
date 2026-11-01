@@ -102,18 +102,31 @@ pub fn capture_preset(backend: EncoderPref, preset: u8) -> u8 {
     }
 }
 
-/// Settings that stop a capture encoder from holding frames back, tried at
-/// open with the encoder's defaults as the fallback; none for encoders
-/// that hold none back. SVT-AV1's default random-access structure holds
-/// about 60 to 76 frames (two seconds and more), which a clip saved now
-/// would miss. Its low-delay structure holds none, and needs constant
-/// bitrate: SVT-AV1 refuses it with variable bitrate.
-pub fn low_delay_options(codec_name: &str) -> &'static [(&'static str, &'static str)] {
+/// The options capture opens `codec_name` with at `preset`, where they
+/// differ from [`preset_options`]: the preset's, with the settings that
+/// stop the encoder holding frames back, which a clip saved now would
+/// miss. They are tried at open, with the preset's alone as the fallback;
+/// `None` for encoders that hold no frames back with those.
+/// - SVT-AV1: its default random-access structure holds 60 to 76 frames,
+///   two seconds and more. Low delay holds none, and needs constant
+///   bitrate: SVT-AV1 refuses it with variable bitrate.
+/// - Kvazaar: its presets' B-frame pyramid (a GOP of 8 or 16) holds 7 or
+///   15 frames, and its automatic overlapped frames (`owf`) 2 more;
+///   `gop=0,owf=0` holds none. They join the preset in its one
+///   `kvazaar-params`, which a second would replace.
+pub fn low_delay_options(codec_name: &str, preset: u8) -> Option<Vec<(&'static str, String)>> {
+    let mut options = preset_options(codec_name, preset)?;
     if codec_name.contains("svtav1") {
-        &[("svtav1-params", "pred-struct=1:rc=2")]
+        options.push(("svtav1-params", "pred-struct=1:rc=2".to_owned()));
+    } else if codec_name.contains("kvazaar") {
+        let (_, params) = options
+            .iter_mut()
+            .find(|(key, _)| *key == "kvazaar-params")?;
+        params.push_str(",gop=0,owf=0");
     } else {
-        &[]
+        return None;
     }
+    Some(options)
 }
 
 /// Whether `codec_name` is a hardware encoder (NVENC, VA-API, AMF or QSV).

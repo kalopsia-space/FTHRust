@@ -164,7 +164,8 @@ impl Encoder {
     /// [`crate::vaapi::candidate_devices`] until one encodes. A capture
     /// encoder must not hold frames back, so it gets the settings
     /// [`crate::encoder_policy::low_delay_options`] lists where its library
-    /// takes them (SVT-AV1's low delay), and its defaults where not.
+    /// takes them (SVT-AV1's low delay, Kvazaar without its B-frame pyramid
+    /// and overlapped frames), and its preset's alone where not.
     /// Exports, which flush at the end, use [`Encoder::open_with_gop`].
     pub fn open(cfg: &EncoderConfig) -> Result<Self> {
         crate::init()?;
@@ -350,12 +351,13 @@ impl Encoder {
         };
         if !is_vaapi {
             let preferred = if low_delay {
-                crate::encoder_policy::low_delay_options(name)
+                crate::encoder_policy::low_delay_options(name, cfg.preset)
             } else {
-                &[]
+                None
             };
+            let wanted = preferred.is_some();
             let (raw, taken) = RawEncoder::open_preferring(name, &params, preferred)?;
-            if !preferred.is_empty() && !taken {
+            if wanted && !taken {
                 tracing::warn!(
                     encoder = name,
                     "the encoder refused its low-delay settings: it holds frames back, \

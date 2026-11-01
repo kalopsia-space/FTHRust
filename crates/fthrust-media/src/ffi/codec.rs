@@ -270,25 +270,26 @@ impl RawEncoder {
         }
     }
 
-    /// Opens a software encoder with the `preferred` options added, checked
-    /// strictly, and without them if that fails, so a setting the linked
-    /// library refuses or doesn't know costs only what it would have gained.
-    /// The flag says whether the preferred options were taken.
+    /// Opens a software encoder with the `preferred` options in place of
+    /// `params.options`, checked strictly, and with `params` as given if
+    /// that fails, so a setting the linked library refuses or doesn't know
+    /// costs only what it would have gained. The flag says whether the
+    /// preferred options were taken.
     pub fn open_preferring(
         name: &'static str,
         params: &OpenParams,
-        preferred: &[(&'static str, &'static str)],
+        preferred: Option<Vec<(&'static str, String)>>,
     ) -> Result<(Self, bool)> {
-        if !preferred.is_empty() {
-            let mut strict = params.clone();
-            strict
-                .options
-                .extend(preferred.iter().map(|&(k, v)| (k, v.to_owned())));
-            strict.strict_options = true;
+        if let Some(options) = preferred {
+            let strict = OpenParams {
+                options,
+                strict_options: true,
+                ..params.clone()
+            };
             match Self::open(name, &strict, None) {
                 Ok(raw) => return Ok((raw, true)),
                 Err(e) => {
-                    tracing::debug!(encoder = name, error = %e, ?preferred, "preferred settings refused")
+                    tracing::debug!(encoder = name, error = %e, "preferred settings refused")
                 }
             }
         }
@@ -583,13 +584,19 @@ mod tests {
         if !RawEncoder::exists("libsvtav1") {
             return eprintln!("skipping: no libsvtav1 in this FFmpeg build");
         }
-        let open = |preferred| RawEncoder::open_preferring("libsvtav1", &params(), preferred);
+        let open = |preferred: Vec<(&'static str, String)>| {
+            RawEncoder::open_preferring("libsvtav1", &params(), Some(preferred))
+        };
         // Low delay with variable bitrate: SVT-AV1 refuses the pair.
-        assert!(!open(&[("svtav1-params", "pred-struct=1")]).unwrap().1);
+        assert!(
+            !open(vec![("svtav1-params", "pred-struct=1".into())])
+                .unwrap()
+                .1
+        );
         // An option the wrapper doesn't have.
-        assert!(!open(&[("no-such-option", "1")]).unwrap().1);
+        assert!(!open(vec![("no-such-option", "1".into())]).unwrap().1);
         // The capture settings themselves are taken.
-        let low_delay = crate::encoder_policy::low_delay_options("libsvtav1");
+        let low_delay = crate::encoder_policy::low_delay_options("libsvtav1", 4).unwrap();
         assert!(open(low_delay).unwrap().1);
     }
 
